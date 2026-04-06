@@ -1,0 +1,80 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# .gitignore — Sky Finance
+# ─────────────────────────────────────────────────────────────────────────────
+
+# SECRETOS — NUNCA al repo
+.env
+.env.*
+!.env.example
+
+# Dependencias
+node_modules/
+jspm_packages/
+web_modules/
+bower_components/
+
+# Builds
+dist/
+out/
+build/
+.next/
+.nuxt/
+.svelte-kit/
+**/.vitepress/dist
+**/.vitepress/cache
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Cache y temporales
+.cache/
+.parcel-cache/
+.temp/
+.docusaurus/
+.serverless/
+.npm
+.eslintcache
+.stylelintcache
+.nyc_output/
+coverage/
+*.lcov
+*.tsbuildinfo
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# Runtime
+pids/
+*.pid
+*.pid.lock
+*.seed
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# Sistema operativo
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*.orig
+
+# Yarn v3
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
