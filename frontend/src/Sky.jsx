@@ -29,6 +29,7 @@ import AddSavingsModal from "./components/AddSavingsModal.jsx";
 import { ChatBubble, TypingDots, XPBar } from "./components/ChatComponents.jsx";
 import { ChallengeCard, BadgeItem }      from "./components/ChallengeComponents.jsx";
 import { MrMoneyProposals }              from "./components/MrMoneyProposal.jsx";
+import SimulationChart                   from "./components/SimulationChart.jsx";
 
 const CHAT_STARTERS = [
   "¿Cómo voy este mes?",
@@ -94,6 +95,7 @@ export default function Sky({ userId, userEmail }) {
   // ── Propuestas de Mr. Money ────────────────────────────────────────────────
   const [pendingProposals, setPendingProposals] = useState([]);
   const [proposalLoadingId, setProposalLoadingId] = useState(null);
+  const [initialSimType, setInitialSimType] = useState(null); // preload desde Mr. Money
 
   const bottomRef = useRef(null);
   const inputRef  = useRef(null);
@@ -167,6 +169,12 @@ export default function Sky({ userId, userEmail }) {
       addBotMsg(result.reply);
       if (result.proposals?.length) {
         setPendingProposals((prev) => [...prev, ...result.proposals]);
+      }
+      if (result.navigations?.length) {
+        const nav = result.navigations[0];
+        setInitialSimType(nav.simulation_type);
+        if (nav.custom_amount) setCustomAmt(String(nav.custom_amount));
+        setTab("simulate");
       }
     } catch {
       setApiErr(true);
@@ -280,6 +288,11 @@ export default function Sky({ userId, userEmail }) {
         showToast(`Desafío activado ✓`);
         setChallenges(await api.getChallenges());
         addBotMsg(`🏆 Desafío activado. A por ello.`);
+      }
+
+      if (type === "propose_delete_goal") {
+        await removeGoal(input.goal_id);
+        addBotMsg(`🗑️ Meta "${input.goal_title}" eliminada.`);
       }
 
       if (type === "propose_goal_contribution") {
@@ -653,96 +666,12 @@ export default function Sky({ userId, userEmail }) {
 
             {/* SIMULATE */}
             {tab === "simulate" && (
-              <div style={{ padding: "14px 14px 28px", display: "flex", flexDirection: "column", gap: 12 }}>
-                <div style={{ display: "flex", background: C.white, borderRadius: 14, padding: 4, border: `1px solid ${C.border}` }}>
-                  {[["quick", "⚡ Rápido"], ["custom", "✏️ Personalizado"]].map(([m, l]) => (
-                    <button key={m} onClick={() => { setSimMode(m); setSimResult(null); setActiveSim(null); }} style={{
-                      flex: 1, padding: "9px 0", borderRadius: 11, border: "none", fontSize: 12, fontWeight: 600, fontFamily: "inherit",
-                      background: simMode === m ? C.navy : "transparent",
-                      color: simMode === m ? C.white : C.textSecondary,
-                      transition: "all 0.2s",
-                    }}>
-                      {l}
-                    </button>
-                  ))}
-                </div>
-
-                {simMode === "quick" && (
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    {QUICK_SIMS.map((sim) => (
-                      <button key={sim.id} onClick={() => runSim(sim.id)} style={{
-                        padding: "14px 12px", borderRadius: 16, textAlign: "left", fontFamily: "inherit",
-                        border: `1.5px solid ${activeSim === sim.id ? C.green : C.border}`,
-                        background: activeSim === sim.id ? C.greenLight : C.white,
-                        transition: "all 0.2s",
-                      }}>
-                        <div style={{ fontSize: 22, marginBottom: 6 }}>{sim.icon}</div>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: activeSim === sim.id ? C.greenDark : C.textPrimary }}>
-                          {sim.label}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                {simMode === "custom" && (
-                  <div style={{ background: C.white, borderRadius: 18, padding: "16px 18px", border: `1px solid ${C.border}` }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: C.textPrimary, marginBottom: 4 }}>¿Cuánto quieres ahorrar extra?</div>
-                    <div style={{ fontSize: 12, color: C.textSecondary, marginBottom: 14 }}>Mr. Money analizará si es realista para ti</div>
-                    <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                      <input
-                        value={customAmt} onChange={(e) => setCustomAmt(e.target.value)}
-                        type="number" placeholder="Ej: 50000"
-                        style={{ flex: 1, padding: "11px 14px", borderRadius: 12, border: `1.5px solid ${C.border}`, background: C.bg, fontSize: 14, color: C.textPrimary, outline: "none", fontFamily: "inherit" }}
-                        onFocus={(e) => (e.target.style.borderColor = C.green)}
-                        onBlur={(e)  => (e.target.style.borderColor = C.border)}
-                        onKeyDown={(e) => e.key === "Enter" && runSim("custom", parseInt(customAmt))}
-                      />
-                      <button onClick={() => runSim("custom", parseInt(customAmt))} disabled={!customAmt} style={{
-                        padding: "11px 18px", borderRadius: 12, border: "none", fontWeight: 700, fontSize: 13, fontFamily: "inherit",
-                        background: customAmt ? `linear-gradient(135deg,${C.green},${C.greenDark})` : C.border, color: C.white,
-                      }}>Ver →</button>
-                    </div>
-                    <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-                      {[20000, 50000, 100000, 200000].map((n) => (
-                        <button key={n} onClick={() => setCustomAmt(String(n))} style={{
-                          padding: "5px 12px", borderRadius: 20, border: `1px solid ${C.border}`, fontFamily: "inherit",
-                          background: customAmt == n ? C.greenLight : C.white,
-                          color:      customAmt == n ? C.greenDark  : C.textSecondary,
-                          fontSize: 12, fontWeight: 500,
-                        }}>
-                          {fmtK(n)}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {simResult && (
-                  <div style={{ background: C.white, borderRadius: 18, border: `1.5px solid ${C.green}`, padding: "16px 18px", animation: "fadeUp 0.3s ease" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-                      <div style={{ width: 36, height: 36, borderRadius: 12, background: C.greenLight, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>💡</div>
-                      <div>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: C.textPrimary }}>{simLabel}</div>
-                      </div>
-                    </div>
-                    <div style={{ background: C.greenLight, borderRadius: 14, padding: "12px", marginBottom: 12, textAlign: "center" }}>
-                      <div style={{ fontSize: 11, color: C.greenDark, fontWeight: 600, marginBottom: 4 }}>AHORRAS AL MES</div>
-                      <div style={{ fontSize: 26, fontWeight: 800, color: C.greenDark }}>{fmtK(simResult.monthlySaving)}</div>
-                    </div>
-                    {[[3, simResult.months3], [6, simResult.months6], [12, simResult.months12]].map(([m, v]) => (
-                      <div key={m} style={{ marginBottom: 8 }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                          <span style={{ fontSize: 12, color: C.textSecondary }}>{m} meses</span>
-                          <span style={{ fontSize: 13, fontWeight: 700, color: C.green }}>{fmtK(v)}</span>
-                        </div>
-                        <div style={{ height: 7, background: C.border, borderRadius: 99, overflow: "hidden" }}>
-                          <div style={{ height: "100%", width: `${(v / simResult.months12) * 100}%`, background: C.green, borderRadius: 99 }} />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
+              <div style={{ padding: "14px 14px 28px", overflowY: "auto" }}>
+                <SimulationChart
+                  summary={summary}
+                  goals={goals}
+                  initialSimType={initialSimType}
+                />
               </div>
             )}
 

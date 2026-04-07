@@ -1,9 +1,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// services/aiService.js
+// services/aiService.js  —  Mr. Money copiloto activo
 //
-// Mr. Money — copiloto activo con Tool Use.
-// Puede leer datos, proponer acciones, y ejecutarlas con aprobación del usuario.
-// La API key nunca sale del servidor. El frontend no sabe que existe Anthropic.
+// OPTIMIZACIÓN DE TOKENS:
+// Las solicitudes "deducibles" (propuestas de desafíos, acciones que el sistema
+// puede resolver localmente) se resuelven sin llamar a Anthropic cuando es posible.
+// Claude solo se invoca cuando el mensaje requiere comprensión o razonamiento real.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -32,99 +33,148 @@ const CATEGORY_LABELS = {
 const fmt = (n) =>
   new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", maximumFractionDigits: 0 }).format(n);
 
+// ── Detección local — sin tokens ──────────────────────────────────────────────
+// Patrones que pueden resolverse sin invocar a Claude.
+// Si el mensaje del usuario coincide con alguno, se retorna la respuesta
+// directamente con la propuesta correspondiente, ahorrando tokens completos.
+
+const LOCAL_PATTERNS = [
+  // Desafíos — el usuario pide directamente uno
+  {
+    match: /desaf[ií]o|reto|challenge/i,
+    resolve: async (userId) => {
+      const state = await getUserChallengesState(userId);
+      if (!state.available?.length) {
+        return { reply: "Ya tienes todos los desafíos activos o completados. 🏆 Sigue así." };
+      }
+      // Proponer el desafío disponible más relevante (mayor pts)
+      const best = state.available.sort((a, b) => b.pts - a.pts)[0];
+      return {
+        reply: `Tengo un desafío que encaja con tu perfil 👇`,
+        proposals: [{
+          type:  "propose_challenge",
+          id:    `local_ch_${best.id}`,
+          input: { challenge_id: best.id, reasoning: `Es el desafío disponible con mejor relación esfuerzo/recompensa (${best.pts} pts, dificultad ${best.difficulty}).` },
+        }],
+      };
+    },
+  },
+  // Saludo simple
+  {
+    match: /^(hola|buenas|hey|ey|hi|hello|buen[oa]s?\s*(días|tardes|noches)?)[\s!.]*$/i,
+    resolve: async (userId) => {
+      const summary = await getSummary(userId);
+      const rate = summary.savingsRate;
+      const emoji = rate >= 20 ? "📈" : rate >= 5 ? "📊" : "👀";
+      return {
+        reply: `Hola. ${emoji} Este mes llevas ${fmt(summary.expenses)} gastados de ${fmt(summary.income)} estimados. Tasa de ahorro: ${rate}%. ¿En qué te ayudo?`,
+      };
+    },
+  },
+];
+
+// Intenta resolver el mensaje localmente. Retorna null si no puede.
+async function tryResolveLocally(message, userId) {
+  for (const pattern of LOCAL_PATTERNS) {
+    if (pattern.match.test(message.trim())) {
+      try {
+        return await pattern.resolve(userId);
+      } catch {
+        return null; // Si falla, deja que Claude lo maneje
+      }
+    }
+  }
+  return null;
+}
+
 // ── Herramientas de Mr. Money ─────────────────────────────────────────────────
 const MR_MONEY_TOOLS = [
   {
     name: "get_financial_projection",
     description:
-      "Calcula la proyección financiera del usuario: cuánto puede ahorrar por mes, " +
-      "en cuántos meses alcanza una meta específica, y cómo se compara con sus metas actuales. " +
-      "Úsala cuando el usuario pregunta por proyecciones, plazos, o 'cuándo puedo lograr X'.",
+      "Calcula proyección financiera: cuánto puede ahorrar el usuario por mes, " +
+      "en cuántos meses alcanza un objetivo, y si es realista. " +
+      "Úsala para preguntas sobre plazos, 'cuándo puedo lograr X', o 'cuánto necesito'.",
     input_schema: {
       type: "object",
       properties: {
-        target_amount: {
-          type: "number",
-          description: "Monto objetivo en CLP para calcular proyección. Puede ser 0 para mostrar solo el resumen.",
-        },
-        goal_name: {
-          type: "string",
-          description: "Nombre descriptivo del objetivo a proyectar.",
-        },
+        target_amount: { type: "number", description: "Monto objetivo en CLP. 0 para resumen general." },
+        goal_name:     { type: "string", description: "Nombre del objetivo." },
       },
       required: ["target_amount", "goal_name"],
     },
   },
   {
-    name: "run_simulation",
+    name: "navigate_to_simulation",
     description:
-      "Corre una simulación de ahorro para mostrar cuánto dinero ahorra el usuario " +
-      "si reduce un tipo de gasto. Úsala cuando el usuario pregunta qué pasa si gasto menos en X " +
-      "o cuando quieres mostrar el impacto de un cambio de hábito.",
+      "Lleva al usuario a la pestaña de simulaciones y precarga una simulación específica. " +
+      "Úsala cuando el usuario pregunta qué pasa si reduce un gasto, o quiere explorar escenarios de ahorro. " +
+      "SIEMPRE úsala en lugar de run_simulation cuando el usuario quiere 'ver' o 'explorar' simulaciones.",
     input_schema: {
       type: "object",
       properties: {
         simulation_type: {
           type: "string",
           enum: ["uber", "eating", "subs", "save5", "save10", "custom"],
-          description: "Tipo de simulación a correr.",
+          description: "Simulación a precargar en la pestaña.",
         },
         custom_amount: {
           type: "number",
-          description: "Monto mensual personalizado en CLP (solo para simulation_type=custom).",
+          description: "Monto personalizado en CLP si simulation_type es custom.",
+        },
+        reason: {
+          type: "string",
+          description: "Frase corta explicando por qué esta simulación es relevante.",
         },
       },
-      required: ["simulation_type"],
+      required: ["simulation_type", "reason"],
     },
   },
   {
     name: "propose_goal",
     description:
-      "Propone crear una nueva meta financiera al usuario. NO la crea directamente. " +
-      "Genera una propuesta que el usuario debe aprobar en la interfaz. " +
-      "Úsala cuando el usuario expresa que quiere ahorrar para algo concreto, " +
-      "o cuando detectas que una meta sería útil según sus datos.",
+      "Propone crear una nueva meta financiera. NO la crea directamente — el usuario aprueba. " +
+      "Úsala cuando el usuario expresa querer ahorrar para algo concreto.",
     input_schema: {
       type: "object",
       properties: {
-        title: {
-          type: "string",
-          description: "Nombre claro de la meta (ej: Viaje a Perú, Fondo de emergencia).",
-        },
-        target_amount: {
-          type: "number",
-          description: "Monto objetivo en CLP.",
-        },
-        deadline: {
-          type: "string",
-          description: "Fecha límite en formato YYYY-MM-DD. Opcional.",
-        },
-        reasoning: {
-          type: "string",
-          description: "Explicación breve de por qué esta meta tiene sentido para el usuario según sus datos.",
-        },
+        title:         { type: "string",  description: "Nombre de la meta." },
+        target_amount: { type: "number",  description: "Monto objetivo en CLP." },
+        deadline:      { type: "string",  description: "Fecha límite YYYY-MM-DD. Opcional." },
+        reasoning:     { type: "string",  description: "Por qué esta meta tiene sentido para el usuario." },
       },
       required: ["title", "target_amount", "reasoning"],
     },
   },
   {
+    name: "propose_delete_goal",
+    description:
+      "Propone eliminar una meta existente. NO la elimina directamente — el usuario confirma. " +
+      "Úsala cuando el usuario dice que quiere borrar, cancelar o eliminar una meta.",
+    input_schema: {
+      type: "object",
+      properties: {
+        goal_id:    { type: "string", description: "ID de la meta a eliminar." },
+        goal_title: { type: "string", description: "Nombre de la meta para mostrar al usuario." },
+        reasoning:  { type: "string", description: "Contexto breve (ej: meta alcanzada, cambio de planes)." },
+      },
+      required: ["goal_id", "goal_title", "reasoning"],
+    },
+  },
+  {
     name: "propose_challenge",
     description:
-      "Propone activar un desafío específico al usuario basándose en sus patrones de gasto. " +
-      "NO lo activa directamente. Genera una propuesta para que el usuario apruebe. " +
-      "Úsala cuando detectas un área de gasto que el usuario podría mejorar.",
+      "Propone activar un desafío basado en los patrones de gasto del usuario. " +
+      "NO lo activa directamente — el usuario aprueba.",
     input_schema: {
       type: "object",
       properties: {
         challenge_id: {
           type: "string",
           enum: ["no_uber", "food_budget", "no_entert", "save_60k", "no_subs", "daily_track"],
-          description: "ID del desafío a proponer.",
+          description: "ID del desafío.",
         },
-        reasoning: {
-          type: "string",
-          description: "Por qué este desafío es relevante para el usuario ahora.",
-        },
+        reasoning: { type: "string", description: "Por qué este desafío es relevante ahora." },
       },
       required: ["challenge_id", "reasoning"],
     },
@@ -132,35 +182,22 @@ const MR_MONEY_TOOLS = [
   {
     name: "propose_goal_contribution",
     description:
-      "Propone añadir una cantidad a una meta existente del usuario. " +
-      "Úsala cuando el usuario dice que quiere abonar a una meta o cuando detectas " +
-      "que tiene balance disponible que podría asignar a una meta en progreso.",
+      "Propone añadir una cantidad a una meta existente. NO la ejecuta — el usuario aprueba. " +
+      "Úsala cuando el usuario quiere abonar a una meta o tiene balance disponible.",
     input_schema: {
       type: "object",
       properties: {
-        goal_id: {
-          type: "string",
-          description: "ID de la meta existente.",
-        },
-        goal_title: {
-          type: "string",
-          description: "Nombre de la meta para mostrar al usuario.",
-        },
-        amount: {
-          type: "number",
-          description: "Monto a agregar en CLP.",
-        },
-        reasoning: {
-          type: "string",
-          description: "Por qué este aporte tiene sentido ahora.",
-        },
+        goal_id:    { type: "string", description: "ID de la meta." },
+        goal_title: { type: "string", description: "Nombre de la meta." },
+        amount:     { type: "number", description: "Monto a agregar en CLP." },
+        reasoning:  { type: "string", description: "Por qué este aporte tiene sentido ahora." },
       },
       required: ["goal_id", "goal_title", "amount", "reasoning"],
     },
   },
 ];
 
-// ── Construcción del contexto financiero completo ─────────────────────────────
+// ── Contexto financiero completo ──────────────────────────────────────────────
 async function buildFinancialContext(userId) {
   const [summary, challengesState, profile, goals] = await Promise.all([
     getSummary(userId),
@@ -173,217 +210,157 @@ async function buildFinancialContext(userId) {
     Object.entries(summary.categoryTotals || {})
       .sort((a, b) => b[1] - a[1])
       .map(([k, v]) => `  - ${CATEGORY_LABELS[k] || k}: ${fmt(v)}`)
-      .join("\n") || "  sin datos aún";
-
-  const activeChsText = challengesState.active?.length
-    ? challengesState.active
-        .map((c) => `  - "${c.label}" (${c.progress?.pct || 0}% completado, ${c.pts} pts)`)
-        .join("\n")
-    : "  ninguno activo";
-
-  const availableChsText = challengesState.available?.length
-    ? challengesState.available
-        .map((c) => `  - id:"${c.id}" "${c.label}" (${c.pts} pts, ${c.difficulty})`)
-        .join("\n")
-    : "  ninguno disponible";
+      .join("\n") || "  sin datos";
 
   const goalsText = goals?.length
-    ? goals
-        .map(
-          (g) =>
-            `  - id:"${g.id}" "${g.title}": ${fmt(g.saved_amount || 0)} / ${fmt(g.target_amount)} ` +
-            `(${g.projection?.pct || 0}%, ~${g.projection?.monthsToGoal ?? "?"} meses al ritmo actual)`
-        )
-        .join("\n")
-    : "  sin metas definidas";
+    ? goals.map((g) =>
+        `  - id:"${g.id}" "${g.title}": ${fmt(g.saved_amount || 0)}/${fmt(g.target_amount)} ` +
+        `(${g.projection?.pct || 0}%, ~${g.projection?.monthsToGoal ?? "?"} meses)`
+      ).join("\n")
+    : "  sin metas";
+
+  const availableChs = challengesState.available?.length
+    ? challengesState.available.map((c) => `  - id:"${c.id}" "${c.label}" (${c.pts}pts, ${c.difficulty})`).join("\n")
+    : "  ninguno disponible";
+
+  const activeChs = challengesState.active?.length
+    ? challengesState.active.map((c) => `  - "${c.label}" (${c.progress?.pct || 0}%)`).join("\n")
+    : "  ninguno";
 
   return {
     text: `=== CONTEXTO FINANCIERO DE ${profile.user.name} (${summary.period}) ===
-
-RESUMEN MENSUAL:
-- Ingreso estimado: ${fmt(summary.income)}
-- Gastado este mes: ${fmt(summary.expenses)}
-- Disponible (balance): ${fmt(summary.balance)}
-- Tasa de ahorro: ${summary.savingsRate}% | Tasa de gasto: ${summary.spendingRate}%
-- Transacciones registradas: ${summary.transactionCount}
-- Puntos: ${profile.points} | Nivel: ${profile.level}
-
-GASTOS POR CATEGORÍA:
-${breakdown}
-
-METAS ACTUALES:
-${goalsText}
-
-DESAFÍOS ACTIVOS:
-${activeChsText}
-
-DESAFÍOS DISPONIBLES (para proponer si son relevantes):
-${availableChsText}
-
-DESAFÍOS COMPLETADOS: ${challengesState.completed?.length || 0}`,
-    raw: { summary, challengesState, profile, goals },
+RESUMEN: Ingreso ${fmt(summary.income)} | Gastado ${fmt(summary.expenses)} | Balance ${fmt(summary.balance)} | Ahorro ${summary.savingsRate}%
+TXS: ${summary.transactionCount} | Puntos: ${profile.points} | Nivel: ${profile.level}
+GASTOS:\n${breakdown}
+METAS:\n${goalsText}
+DESAFÍOS ACTIVOS:\n${activeChs}
+DESAFÍOS DISPONIBLES:\n${availableChs}
+COMPLETADOS: ${challengesState.completed?.length || 0}`,
+    raw: { summary, profile, goals },
   };
 }
 
-// ── System prompt ──────────────────────────────────────────────────────────────
+// ── System prompt ─────────────────────────────────────────────────────────────
 function buildSystemPrompt(contextText) {
-  return `Eres Mr. Money, el copiloto financiero personal de Sky.
+  return `Eres Mr. Money, copiloto financiero de Sky.
 
 ${contextText}
 
-=== TU ROL COMO COPILOTO ACTIVO ===
+HERRAMIENTAS (úsalas cuando corresponda):
+READ → get_financial_projection, navigate_to_simulation
+WRITE (requieren aprobación del usuario) → propose_goal, propose_delete_goal, propose_challenge, propose_goal_contribution
 
-Tienes herramientas que te permiten actuar, no solo hablar.
+CUÁNDO USARLAS:
+- Usuario menciona meta/objetivo → propose_goal
+- Usuario quiere eliminar una meta → propose_delete_goal
+- Usuario pregunta "qué pasa si..." o simulaciones → navigate_to_simulation
+- Usuario pregunta plazos/proyecciones → get_financial_projection
+- Ves gasto alto en categoría → propose_challenge relevante
+- Usuario tiene balance y metas incompletas → propose_goal_contribution
 
-HERRAMIENTAS READ (ejecutas directamente):
-- get_financial_projection: calcula proyecciones y plazos en tiempo real
-- run_simulation: muestra el impacto de reducir un tipo de gasto
-
-HERRAMIENTAS WRITE (propones, el usuario aprueba):
-- propose_goal: propones crear una meta nueva
-- propose_challenge: propones activar un desafío
-- propose_goal_contribution: propones abonar a una meta existente
-
-CUÁNDO USAR HERRAMIENTAS:
-- Usuario menciona algo que quiere lograr → propose_goal
-- Ves gasto alto en una categoría → propose_challenge relevante
-- Usuario pregunta "¿cuándo puedo...?" o "¿cuánto necesito...?" → get_financial_projection
-- Usuario pregunta "¿qué pasa si...?" → run_simulation
-- Usuario tiene balance libre y metas incompletas → propose_goal_contribution
-
-REGLAS DE PROPUESTAS:
-- Explica siempre el razonamiento antes de proponer
-- Una propuesta por mensaje máximo
-- Si el usuario rechazó una propuesta, no la repitas
-
-PERSONALIDAD:
-Profesional, directo y cercano. Fórmula: [Observación de datos] + [micro emoción] + [dirección concreta].
-
-REGLAS ABSOLUTAS:
-- Responde en español
-- Usa SIEMPRE datos reales del contexto, nunca inventes cifras
-- Máximo 4 líneas de texto libre (más propuesta si corresponde)
-- 1-2 emojis por respuesta
-- NUNCA recomiendes activos de inversión específicos
-- NUNCA actúes como asesor financiero licenciado
-- NUNCA decidas por el usuario — orienta, propón, informa`;
+PERSONALIDAD: Profesional, directo, cercano. Fórmula: [dato real] + [emoción mínima] + [dirección].
+REGLAS: Español. Datos reales siempre. Máx 4 líneas. 1-2 emojis. Sin asesoría de inversión. Sin decisiones por el usuario.`;
 }
 
-// ── Ejecutor de herramientas READ ─────────────────────────────────────────────
+// ── Ejecutor herramientas READ ────────────────────────────────────────────────
 async function executeTool(toolName, toolInput, userId, rawContext) {
   if (toolName === "get_financial_projection") {
     const { target_amount, goal_name } = toolInput;
-    const { summary } = rawContext;
-    const monthlyBalance = Math.max(0, summary.balance);
+    const monthly = Math.max(0, rawContext.summary.balance);
 
     if (target_amount === 0) {
       return {
-        monthly_savings_capacity: monthlyBalance,
-        annual_savings_capacity: monthlyBalance * 12,
-        current_savings_rate: summary.savingsRate,
-        message: `Con el balance actual de ${fmt(monthlyBalance)}/mes, el usuario puede ahorrar ${fmt(monthlyBalance * 12)} al año.`,
+        monthly_capacity: monthly,
+        annual_capacity:  monthly * 12,
+        savings_rate:     rawContext.summary.savingsRate,
+        message: `Capacidad de ahorro: ${fmt(monthly)}/mes → ${fmt(monthly * 12)}/año.`,
       };
     }
 
-    const monthsToGoal = monthlyBalance > 0 ? Math.ceil(target_amount / monthlyBalance) : null;
-    const projectedDate = monthsToGoal
-      ? (() => {
-          const d = new Date();
-          d.setMonth(d.getMonth() + monthsToGoal);
-          return d.toLocaleDateString("es-CL", { month: "long", year: "numeric" });
-        })()
+    const months = monthly > 0 ? Math.ceil(target_amount / monthly) : null;
+    const date   = months
+      ? (() => { const d = new Date(); d.setMonth(d.getMonth() + months); return d.toLocaleDateString("es-CL", { month: "long", year: "numeric" }); })()
       : null;
 
     return {
-      goal_name,
-      target_amount,
-      monthly_savings_capacity: monthlyBalance,
-      months_to_goal: monthsToGoal,
-      projected_completion: projectedDate,
-      is_feasible: monthlyBalance > 0,
-      message: monthsToGoal
-        ? `Para "${goal_name}" (${fmt(target_amount)}): ahorrando ${fmt(monthlyBalance)}/mes, se logra en ~${monthsToGoal} meses (${projectedDate}).`
-        : `Con el balance actual no hay margen de ahorro. Primero hay que reducir gastos.`,
+      goal_name, target_amount, monthly_capacity: monthly,
+      months_to_goal: months, projected_date: date, feasible: monthly > 0,
+      message: months
+        ? `"${goal_name}" (${fmt(target_amount)}): ~${months} meses ahorrando ${fmt(monthly)}/mes → ${date}.`
+        : `Sin margen de ahorro actual. Reducir gastos primero.`,
     };
   }
 
-  if (toolName === "run_simulation") {
-    const result = await computeSimulation(userId, toolInput.simulation_type, toolInput.custom_amount || null);
-    if (!result) return { error: "Simulación no encontrada" };
+  // navigate_to_simulation se procesa en el frontend — aquí solo confirmamos
+  if (toolName === "navigate_to_simulation") {
     return {
+      action:          "navigate",
       simulation_type: toolInput.simulation_type,
-      monthly_saving: result.monthlySaving,
-      in_3_months: result.months3,
-      in_6_months: result.months6,
-      in_12_months: result.months12,
-      message: `Si aplica este cambio: ${fmt(result.monthlySaving)}/mes → ${fmt(result.months12)} en 12 meses.`,
+      custom_amount:   toolInput.custom_amount || null,
+      message:         `Navegando a simulaciones con "${toolInput.simulation_type}".`,
     };
   }
 
-  return { error: `Tool ${toolName} no es ejecutable server-side` };
+  return { error: `Tool ${toolName} no reconocida` };
 }
 
 // ── Chat principal ────────────────────────────────────────────────────────────
 export async function askMrMoney(userMessage, conversationHistory = [], userId = null) {
-  const context = await buildFinancialContext(userId);
+
+  // 1. Intentar resolver localmente (sin tokens)
+  const local = await tryResolveLocally(userMessage, userId);
+  if (local) return local;
+
+  // 2. Construir contexto y llamar a Claude
+  const context      = await buildFinancialContext(userId);
   const systemPrompt = buildSystemPrompt(context.text);
 
   const recentHistory = conversationHistory
-    .slice(-8)
+    .slice(-6) // reducido de 8 a 6 para ahorrar tokens de contexto
     .filter((m) => m.role === "user" || m.role === "bot")
-    .map((msg) => ({
-      role:    msg.role === "bot" ? "assistant" : "user",
-      content: msg.text,
-    }));
+    .map((m) => ({ role: m.role === "bot" ? "assistant" : "user", content: m.text }));
 
-  const messages = [
-    ...recentHistory,
-    { role: "user", content: userMessage },
-  ];
+  const messages = [...recentHistory, { role: "user", content: userMessage }];
 
   let response = await getClient().messages.create({
-    model:      "claude-sonnet-4-5",
-    max_tokens: 1024,
+    model:      "claude-haiku-4-5-20251001", // Haiku para respuestas conversacionales → ~10x menos costo
+    max_tokens: 800,                          // reducido de 1024
     system:     systemPrompt,
     tools:      MR_MONEY_TOOLS,
     messages,
   });
 
-  // Agentic loop: ejecutar herramientas READ, capturar propuestas WRITE
-  const proposals = [];
-  let finalText   = "";
-  let iterations  = 0;
-  const MAX_ITER  = 3;
+  // 3. Agentic loop
+  const proposals  = [];
+  const navigations = [];
+  let finalText    = "";
+  let iterations   = 0;
 
-  while (response.stop_reason === "tool_use" && iterations < MAX_ITER) {
+  while (response.stop_reason === "tool_use" && iterations < 3) {
     iterations++;
 
     const toolUseBlocks = response.content.filter((b) => b.type === "tool_use");
     const textBlocks    = response.content.filter((b) => b.type === "text");
-
-    if (textBlocks.length > 0) {
-      finalText += textBlocks.map((b) => b.text).join(" ") + " ";
-    }
+    if (textBlocks.length) finalText += textBlocks.map((b) => b.text).join(" ") + " ";
 
     const toolResults = [];
 
-    for (const toolUse of toolUseBlocks) {
-      const isProposal = toolUse.name.startsWith("propose_");
-
-      if (isProposal) {
-        proposals.push({ type: toolUse.name, input: toolUse.input, id: toolUse.id });
+    for (const tu of toolUseBlocks) {
+      if (tu.name.startsWith("propose_")) {
+        proposals.push({ type: tu.name, input: tu.input, id: tu.id });
         toolResults.push({
-          type:        "tool_result",
-          tool_use_id: toolUse.id,
-          content:     JSON.stringify({ status: "proposal_queued", message: "Propuesta lista para mostrar al usuario." }),
+          type: "tool_result", tool_use_id: tu.id,
+          content: JSON.stringify({ status: "proposal_queued" }),
+        });
+      } else if (tu.name === "navigate_to_simulation") {
+        navigations.push({ simulation_type: tu.input.simulation_type, custom_amount: tu.input.custom_amount || null });
+        toolResults.push({
+          type: "tool_result", tool_use_id: tu.id,
+          content: JSON.stringify({ action: "navigate", simulation_type: tu.input.simulation_type }),
         });
       } else {
-        const result = await executeTool(toolUse.name, toolUse.input, userId, context.raw);
-        toolResults.push({
-          type:        "tool_result",
-          tool_use_id: toolUse.id,
-          content:     JSON.stringify(result),
-        });
+        const result = await executeTool(tu.name, tu.input, userId, context.raw);
+        toolResults.push({ type: "tool_result", tool_use_id: tu.id, content: JSON.stringify(result) });
       }
     }
 
@@ -391,23 +368,20 @@ export async function askMrMoney(userMessage, conversationHistory = [], userId =
     messages.push({ role: "user",      content: toolResults });
 
     response = await getClient().messages.create({
-      model:      "claude-sonnet-4-5",
-      max_tokens: 800,
+      model:      "claude-haiku-4-5-20251001",
+      max_tokens: 600,
       system:     systemPrompt,
       tools:      MR_MONEY_TOOLS,
       messages,
     });
   }
 
-  const lastText = response.content
-    .filter((b) => b.type === "text")
-    .map((b) => b.text)
-    .join(" ");
-
+  const lastText = response.content.filter((b) => b.type === "text").map((b) => b.text).join(" ");
   finalText = (finalText + lastText).trim();
 
   return {
-    reply:     finalText || "No pude procesar eso.",
-    proposals: proposals.length > 0 ? proposals : undefined,
+    reply:       finalText || "No pude procesar eso.",
+    proposals:   proposals.length   ? proposals   : undefined,
+    navigations: navigations.length ? navigations : undefined,
   };
 }
