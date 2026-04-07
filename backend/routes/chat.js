@@ -16,14 +16,14 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "Mensaje inválido" });
     }
 
-    // Pasar userId para que Mr. Money tenga los datos reales del usuario
-    const reply = await askMrMoney(message.trim(), history, uid);
-    res.json({ reply });
+    // Mr. Money ahora devuelve { reply, proposals? }
+    const result = await askMrMoney(message.trim(), history, uid);
+    res.json(result);
 
-    // ARIA en background — no bloquea la respuesta
+    // ARIA en background
     getProfile(uid).then((profile) => {
       if (profile) {
-        trackBehavioralSignal(profile, message.trim(), reply).catch(() => {});
+        trackBehavioralSignal(profile, message.trim(), result.reply).catch(() => {});
       }
     }).catch(() => {});
 

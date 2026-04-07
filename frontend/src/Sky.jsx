@@ -28,11 +28,13 @@ import AddGoalForm     from "./components/AddGoalForm.jsx";
 import AddSavingsModal from "./components/AddSavingsModal.jsx";
 import { ChatBubble, TypingDots, XPBar } from "./components/ChatComponents.jsx";
 import { ChallengeCard, BadgeItem }      from "./components/ChallengeComponents.jsx";
+import { MrMoneyProposals }              from "./components/MrMoneyProposal.jsx";
 
 const CHAT_STARTERS = [
   "¿Cómo voy este mes?",
-  "¿Cuánto puedo gastar?",
-  "¿Qué desafío me recomienda?",
+  "Quiero ahorrar para un viaje",
+  "¿Qué desafío me recomiendas?",
+  "¿Cuánto ahorro al año si reduzco Uber?",
   "Analiza mis gastos",
 ];
 
@@ -87,7 +89,11 @@ export default function Sky({ userId, userEmail }) {
   const [goals,          setGoals]          = useState([]);
   const [showAddGoal,    setShowAddGoal]    = useState(false);
   const [goalLoading,    setGoalLoading]    = useState(false);
-  const [savingsTarget,  setSavingsTarget]  = useState(null); // goal being updated
+  const [savingsTarget,  setSavingsTarget]  = useState(null);
+
+  // ── Propuestas de Mr. Money ────────────────────────────────────────────────
+  const [pendingProposals, setPendingProposals] = useState([]);
+  const [proposalLoadingId, setProposalLoadingId] = useState(null);
 
   const bottomRef = useRef(null);
   const inputRef  = useRef(null);
@@ -157,8 +163,11 @@ export default function Sky({ userId, userEmail }) {
     setMsgs((prev) => [...prev, { id: Date.now(), role: "user", text: text.trim(), time: nowTime() }]);
     setInput(""); setTyping(true); setApiErr(false);
     try {
-      const { reply } = await api.sendChat(text, messages);
-      addBotMsg(reply);
+      const result = await api.sendChat(text, messages);
+      addBotMsg(result.reply);
+      if (result.proposals?.length) {
+        setPendingProposals((prev) => [...prev, ...result.proposals]);
+      }
     } catch {
       setApiErr(true);
       addBotMsg(`Tienes ${fmt(summary?.balance ?? 0)} disponibles. ¿En qué te ayudo?`);
@@ -248,6 +257,53 @@ export default function Sky({ userId, userEmail }) {
     } finally {
       setGoalLoading(false);
     }
+  };
+
+  // ── Handlers de propuestas de Mr. Money ────────────────────────────────────
+  const handleProposalAccept = async (proposal) => {
+    const pid = proposal.id || proposal.type;
+    setProposalLoadingId(pid);
+    try {
+      const { type, input } = proposal;
+
+      if (type === "propose_goal") {
+        await createGoal({
+          title:        input.title,
+          targetAmount: input.target_amount,
+          deadline:     input.deadline || null,
+        });
+        addBotMsg(`✅ Meta "${input.title}" creada. Buen inicio.`);
+      }
+
+      if (type === "propose_challenge") {
+        await api.activateChallenge(input.challenge_id);
+        showToast(`Desafío activado ✓`);
+        setChallenges(await api.getChallenges());
+        addBotMsg(`🏆 Desafío activado. A por ello.`);
+      }
+
+      if (type === "propose_goal_contribution") {
+        const goal = goals.find((g) => g.id === input.goal_id);
+        if (goal) {
+          const newAmount = (goal.saved_amount || 0) + input.amount;
+          await confirmAddSavings(input.goal_id, newAmount);
+          addBotMsg(`💰 Aporte de ${new Intl.NumberFormat("es-CL",{style:"currency",currency:"CLP",maximumFractionDigits:0}).format(input.amount)} registrado en "${input.goal_title}".`);
+        }
+      }
+
+      setPendingProposals((prev) => prev.filter((p) => (p.id || p.type) !== pid));
+    } catch (e) {
+      showToast("Error al ejecutar la acción", "red");
+      console.error("[proposal] accept error:", e.message);
+    } finally {
+      setProposalLoadingId(null);
+    }
+  };
+
+  const handleProposalReject = (proposal) => {
+    const pid = proposal.id || proposal.type;
+    setPendingProposals((prev) => prev.filter((p) => (p.id || p.type) !== pid));
+    addBotMsg("Entendido, lo dejo para después. ¿En qué más te ayudo?");
   };
 
   const confirmAddSavings = async (goalId, newSavedAmount) => {
@@ -711,7 +767,20 @@ export default function Sky({ userId, userEmail }) {
             {tab === "chat" && (
               <>
                 <div style={{ flex: 1, overflowY: "auto", padding: "14px 14px 8px", display: "flex", flexDirection: "column", gap: 6 }}>
-                  {messages.map((m) => <ChatBubble key={m.id} msg={m} />)}
+                  {messages.map((m) => (
+                    <div key={m.id}>
+                      <ChatBubble msg={m} />
+                      {/* Mostrar propuestas adjuntas al último mensaje del bot */}
+                      {m.role === "bot" && m.id === messages[messages.length - 1]?.id && pendingProposals.length > 0 && (
+                        <MrMoneyProposals
+                          proposals={pendingProposals}
+                          onAccept={handleProposalAccept}
+                          onReject={handleProposalReject}
+                          loadingId={proposalLoadingId}
+                        />
+                      )}
+                    </div>
+                  ))}
                   {typing && (
                     <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
                       <div style={{ width: 32, height: 32, borderRadius: "50%", background: `linear-gradient(135deg,${C.green},${C.greenDark})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>💸</div>
