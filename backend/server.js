@@ -50,3 +50,4 @@ app.listen(PORT, () => {
   console.log(`✅ Sky backend corriendo en http://localhost:${PORT}`);
   console.log(`   Rutas: /api/chat | /api/transactions | /api/summary | /api/challenges | /api/simulate`);
 });
+

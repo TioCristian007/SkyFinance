@@ -1,22 +1,16 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// services/api.js
-//
-// Único canal frontend → backend.
-// userId se pasa en el header x-user-id en TODAS las llamadas.
-// El backend lo lee desde el header — no desde el body, no desde el .env.
+// services/api.js — único canal frontend → backend
+// userId se pasa en el header x-user-id en TODAS las llamadas
 // ─────────────────────────────────────────────────────────────────────────────
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3001/api";
 
-// userId se inyecta globalmente — Sky.jsx lo establece al iniciar
 let _userId = null;
 export function setUserId(id) { _userId = id; }
 
 async function request(path, options = {}) {
   const headers = {
     "Content-Type": "application/json",
-    // El backend lee el userId desde este header en cada request
-    // así nunca necesita DEV_USER_ID ni configuración manual
     ..._userId ? { "x-user-id": _userId } : {},
     ...(options.headers || {}),
   };
@@ -41,10 +35,7 @@ export async function getTransactions() {
 }
 
 export async function addTransaction(tx) {
-  return request("/transactions", {
-    method: "POST",
-    body:   JSON.stringify(tx),
-  });
+  return request("/transactions", { method: "POST", body: JSON.stringify(tx) });
 }
 
 export async function deleteTransaction(id) {
@@ -53,10 +44,7 @@ export async function deleteTransaction(id) {
 
 // ── Chat ──────────────────────────────────────────────────────────────────────
 export async function sendChat(message, history = []) {
-  return request("/chat", {
-    method: "POST",
-    body:   JSON.stringify({ message, history }),
-  });
+  return request("/chat", { method: "POST", body: JSON.stringify({ message, history }) });
 }
 
 // ── Challenges ────────────────────────────────────────────────────────────────
@@ -86,19 +74,42 @@ export async function getGoals() {
 }
 
 export async function addGoal(goal) {
-  return request("/goals", {
-    method: "POST",
-    body:   JSON.stringify(goal),
-  });
+  return request("/goals", { method: "POST", body: JSON.stringify(goal) });
 }
 
 export async function updateGoalSaved(id, savedAmount) {
-  return request(`/goals/${id}`, {
-    method: "PATCH",
-    body:   JSON.stringify({ savedAmount }),
-  });
+  return request(`/goals/${id}`, { method: "PATCH", body: JSON.stringify({ savedAmount }) });
 }
 
 export async function deleteGoal(id) {
   return request(`/goals/${id}`, { method: "DELETE" });
+}
+
+// ── Banking ───────────────────────────────────────────────────────────────────
+
+export async function getSupportedBanks() {
+  return request("/banking/banks");
+}
+
+export async function getBankAccounts() {
+  return request("/banking/accounts");
+}
+
+export async function connectBank({ bankId, rut, password }) {
+  return request("/banking/connect", {
+    method: "POST",
+    body:   JSON.stringify({ bankId, rut, password }),
+  });
+}
+
+export async function syncBankAccount(accountId) {
+  return request(`/banking/sync/${accountId}`, { method: "POST" });
+}
+
+export async function syncAllBanks() {
+  return request("/banking/sync-all", { method: "POST" });
+}
+
+export async function disconnectBank(accountId) {
+  return request(`/banking/accounts/${accountId}`, { method: "DELETE" });
 }

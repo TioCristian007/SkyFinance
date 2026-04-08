@@ -28,6 +28,7 @@ import AddGoalForm     from "./components/AddGoalForm.jsx";
 import AddSavingsModal from "./components/AddSavingsModal.jsx";
 import { ChatBubble, TypingDots, XPBar } from "./components/ChatComponents.jsx";
 import { ChallengeCard, BadgeItem }      from "./components/ChallengeComponents.jsx";
+import BankConnect                        from "./components/BankConnect.jsx";
 import { MrMoneyProposals }              from "./components/MrMoneyProposal.jsx";
 import SimulationChart                   from "./components/SimulationChart.jsx";
 
@@ -46,6 +47,7 @@ const TABS = [
   ["simulate",   "🔮", "Simular"],
   ["expenses",   "➕", "Gastos"],
   ["chat",       "💬", "Mr. Money"],
+  ["bancos",     "🏦", "Bancos"],
 ];
 
 // ── Estado inicial del chat ───────────────────────────────────────────────────
@@ -91,6 +93,7 @@ export default function Sky({ userId, userEmail }) {
   const [showAddGoal,    setShowAddGoal]    = useState(false);
   const [goalLoading,    setGoalLoading]    = useState(false);
   const [savingsTarget,  setSavingsTarget]  = useState(null);
+  const [bankBalances,   setBankBalances]   = useState({ accounts: [], totalBalance: 0 });
 
   // ── Propuestas de Mr. Money ────────────────────────────────────────────────
   const [pendingProposals, setPendingProposals] = useState([]);
@@ -104,11 +107,12 @@ export default function Sky({ userId, userEmail }) {
   useEffect(() => {
     async function init() {
       try {
-        const [summaryRes, txRes, chRes, goalsRes] = await Promise.all([
+        const [summaryRes, txRes, chRes, goalsRes, bankAccRes] = await Promise.all([
           api.getSummary(),
           api.getTransactions(),
           api.getChallenges(),
           api.getGoals(),
+          api.getBankAccounts().catch(() => ({ accounts: [], totalBalance: 0 })),
         ]);
         setSummary(summaryRes.summary);
         setProfile(summaryRes.profile);
@@ -116,6 +120,7 @@ export default function Sky({ userId, userEmail }) {
         setTxs(txRes.transactions);
         setChallenges(chRes);
         setGoals(goalsRes.goals);
+        setBankBalances(bankAccRes);
 
         // Actualizar mensaje inicial con datos reales
         setMsgs([{
@@ -665,6 +670,20 @@ export default function Sky({ userId, userEmail }) {
             )}
 
             {/* SIMULATE */}
+            {tab === "bancos" && (
+              <BankConnect
+                onSyncComplete={async () => {
+                  const [summaryRes, bankAccRes] = await Promise.all([
+                    api.getSummary(),
+                    api.getBankAccounts().catch(() => ({ accounts: [], totalBalance: 0 })),
+                  ]);
+                  setSummary(summaryRes.summary);
+                  setProfile(summaryRes.profile);
+                  setBankBalances(bankAccRes);
+                }}
+              />
+            )}
+
             {tab === "simulate" && (
               <div style={{ padding: "14px 14px 28px", overflowY: "auto" }}>
                 <SimulationChart
