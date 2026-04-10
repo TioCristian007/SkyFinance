@@ -194,10 +194,11 @@ const KpiCard = ({ label, value, color, sub }) => (
 );
 
 /** Card de banco individual — versión compacta para grid */
-const BankCardCompact = ({ acc, total }) => {
-  const meta = getBankMeta(acc.bankName);
-  const pct  = total > 0 ? Math.round((acc.balance / total) * 100) : 0;
+const BankCardCompact = ({ acc, total, blurred = false }) => {
+  const meta  = getBankMeta(acc.bankName);
+  const pct   = total > 0 ? Math.round((acc.balance / total) * 100) : 0;
   const fmtCLP = (n) => new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", maximumFractionDigits: 0 }).format(n ?? 0);
+  const bStyle = blurred ? { filter: "blur(9px)", userSelect: "none" } : {};
 
   return (
     <div className="sky-bank-row" style={{
@@ -224,7 +225,7 @@ const BankCardCompact = ({ acc, total }) => {
         </div>
       </div>
       <div>
-        <div style={{ fontSize: 18, fontWeight: 800, color: "#fff", letterSpacing: "-0.5px", fontVariantNumeric: "tabular-nums" }}>
+        <div style={{ fontSize: 18, fontWeight: 800, color: "#fff", letterSpacing: "-0.5px", fontVariantNumeric: "tabular-nums", ...bStyle }}>
           {fmtCLP(acc.balance)}
         </div>
         <div style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", marginTop: 2 }}>
@@ -239,9 +240,10 @@ const BankCardCompact = ({ acc, total }) => {
 };
 
 /** Card de banco — versión expandida para la página Bancos */
-const BankCardFull = ({ acc }) => {
-  const meta = getBankMeta(acc.bankName);
+const BankCardFull = ({ acc, blurred = false }) => {
+  const meta   = getBankMeta(acc.bankName);
   const fmtCLP = (n) => new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", maximumFractionDigits: 0 }).format(n ?? 0);
+  const bStyle = blurred ? { filter: "blur(9px)", userSelect: "none" } : {};
 
   return (
     <div className="sky-bank-row" style={{
@@ -264,7 +266,7 @@ const BankCardFull = ({ acc }) => {
         </div>
       </div>
       <div style={{ textAlign: "right" }}>
-        <div style={{ fontSize: 17, fontWeight: 800, color: "#fff", fontVariantNumeric: "tabular-nums" }}>
+        <div style={{ fontSize: 17, fontWeight: 800, color: "#fff", fontVariantNumeric: "tabular-nums", ...bStyle }}>
           {fmtCLP(acc.balance)}
         </div>
         <div style={{ fontSize: 11, color: "rgba(255,255,255,0.3)", marginTop: 2 }}>
@@ -746,15 +748,35 @@ export default function Sky({ userId, userEmail }) {
             </div>
           </div>
 
-          {/* Balance card */}
+          {/* Balance card con botón de privacidad integrado */}
           <div style={{
             margin: "14px 14px 6px",
             background: "rgba(255,255,255,0.05)",
             border: "1px solid rgba(255,255,255,0.08)",
             borderRadius: 14, padding: "16px",
           }}>
-            <div style={{ fontSize: 9, color: "rgba(255,255,255,0.35)", fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 4 }}>
-              {hasBankAccounts ? "Saldo Real" : "Disponible · Est."}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+              <div style={{ fontSize: 9, color: "rgba(255,255,255,0.35)", fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase" }}>
+                {hasBankAccounts ? "Saldo Real" : "Disponible · Est."}
+              </div>
+              {/* Botón ocultar números — aquí junto al balance, donde tiene sentido */}
+              <button
+                onClick={() => setPrivacyMode(v => !v)}
+                title={privacyMode ? "Mostrar números" : "Ocultar números"}
+                style={{ background: "none", border: "none", cursor: "pointer", padding: "2px 4px", display: "flex", alignItems: "center", gap: 4, borderRadius: 6, transition: "opacity 0.15s", opacity: 0.6 }}
+                onMouseOver={e => e.currentTarget.style.opacity = "1"}
+                onMouseOut={e => e.currentTarget.style.opacity = "0.6"}
+              >
+                <svg viewBox="0 0 16 16" width="13" height="13" fill="none">
+                  {privacyMode
+                    ? <><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z" stroke={P.green} strokeWidth="1.4"/><circle cx="8" cy="8" r="2" stroke={P.green} strokeWidth="1.4"/><path d="M2 2l12 12" stroke={P.green} strokeWidth="1.4" strokeLinecap="round"/></>
+                    : <><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z" stroke="rgba(255,255,255,0.5)" strokeWidth="1.4"/><circle cx="8" cy="8" r="2" stroke="rgba(255,255,255,0.5)" strokeWidth="1.4"/></>
+                  }
+                </svg>
+                <span style={{ fontSize: 9, fontWeight: 700, color: privacyMode ? P.green : "rgba(255,255,255,0.4)" }}>
+                  {privacyMode ? "VISIBLE" : "OCULTAR"}
+                </span>
+              </button>
             </div>
             <div style={{ fontSize: 22, fontWeight: 800, color: balance < 0 ? "#FF6B6B" : "#fff", letterSpacing: "-0.8px", marginBottom: 12, fontVariantNumeric: "tabular-nums", ...$ }}>
               {fmtCLP(balance)}
@@ -846,30 +868,7 @@ export default function Sky({ userId, userEmail }) {
               <div style={{ fontSize: 16, fontWeight: 700, color: P.text, letterSpacing: "-0.2px" }}>{pageTitle}</div>
               <div style={{ fontSize: 12, color: P.text3, marginTop: 1 }}>{pageSub}</div>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              {/* Modo privacidad — permite mostrar la app sin exponer números */}
-              <button
-                onClick={() => setPrivacyMode(v => !v)}
-                title={privacyMode ? "Mostrar números" : "Ocultar números"}
-                style={{
-                  display: "flex", alignItems: "center", gap: 6,
-                  background: privacyMode ? P.navy : P.bg,
-                  border: `1px solid ${privacyMode ? "rgba(255,255,255,0.15)" : P.border}`,
-                  borderRadius: 20, padding: "5px 12px", cursor: "pointer", transition: "all 0.2s",
-                }}
-              >
-                <svg viewBox="0 0 16 16" width="13" height="13" fill="none">
-                  {privacyMode
-                    ? <><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z" stroke={P.green} strokeWidth="1.3"/><circle cx="8" cy="8" r="2" stroke={P.green} strokeWidth="1.3"/><path d="M2 2l12 12" stroke={P.green} strokeWidth="1.3" strokeLinecap="round"/></>
-                    : <><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z" stroke="currentColor" strokeWidth="1.3"/><circle cx="8" cy="8" r="2" stroke="currentColor" strokeWidth="1.3"/></>
-                  }
-                </svg>
-                <span style={{ fontSize: 11, fontWeight: 600, color: privacyMode ? P.green : P.text3, whiteSpace: "nowrap" }}>
-                  {privacyMode ? "Mostrando" : "Ocultar"}
-                </span>
-              </button>
-              {hasBankAccounts && <SyncBadge />}
-            </div>
+            {hasBankAccounts && <SyncBadge />}
           </div>
 
           {/* ── SCROLL AREA ── */}
@@ -886,7 +885,7 @@ export default function Sky({ userId, userEmail }) {
                   <KpiCard label="Saldo Total"      value={<span style={$}>{fmtCLP(balance)}</span>}        color={balance >= 0 ? P.green : P.red} sub={hasBankAccounts ? "· bancario real" : "· estimado"} />
                   <KpiCard label="Ingresos del mes" value={<span style={$}>{fmtCLP(income)}</span>}         color={P.text}  sub={incomeIsReal ? `${txs.filter(t=>t.category==="income").length} depósitos · real` : "· estimado del perfil"} />
                   <KpiCard label="Gastos del mes"   value={<span style={$}>{fmtCLP(expenses)}</span>}       color={P.red}   sub={`${txs.filter(t=>t.category!=="income").length} transacciones`} />
-                  <KpiCard label="Tasa de ahorro"   value={`${savingsRate}%`} color={savingsRate >= 20 ? P.green : savingsRate >= 10 ? P.amber : P.red} sub={savingsRate >= 20 ? "Excelente ritmo" : savingsRate >= 10 ? "Ritmo moderado" : "Puedes mejorar"} />
+                  <KpiCard label="Tasa de ahorro"   value={<span style={$}>{`${savingsRate}%`}</span>} color={savingsRate >= 20 ? P.green : savingsRate >= 10 ? P.amber : P.red} sub={savingsRate >= 20 ? "Excelente ritmo" : savingsRate >= 10 ? "Ritmo moderado" : "Puedes mejorar"} />
                 </div>
 
                 {/* ─── MOMENTUM + BANKS ─── */}
@@ -1117,8 +1116,8 @@ export default function Sky({ userId, userEmail }) {
                             <div style={{ fontSize: 11, color: P.text2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 120 }}>
                               {tx.description ?? tx.category}
                             </div>
-                            <div style={{ fontSize: 13, fontWeight: 700, color: isIncome ? P.green : P.text, fontVariantNumeric: "tabular-nums" }}>
-                              {isIncome ? "+" : "−"}{fmtK(tx.amount)}
+                            <div style={{ fontSize: 13, fontWeight: 700, color: isIncome ? P.green : P.text, fontVariantNumeric: "tabular-nums", ...$ }}>
+                              {isIncome ? "+" : "−"}{fmtK(Math.abs(tx.amount ?? 0))}
                             </div>
                           </div>
                         );
@@ -1222,12 +1221,12 @@ export default function Sky({ userId, userEmail }) {
                         <div style={{ padding: "20px 22px 16px", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                           <div>
                             <div style={{ fontSize: 11, color: "rgba(255,255,255,0.3)", marginBottom: 4 }}>SALDO TOTAL · TODOS LOS BANCOS</div>
-                            <div style={{ fontSize: 36, fontWeight: 800, color: "#fff", letterSpacing: "-1.5px", fontVariantNumeric: "tabular-nums" }}>
+                            <div style={{ fontSize: 36, fontWeight: 800, color: "#fff", letterSpacing: "-1.5px", fontVariantNumeric: "tabular-nums", ...$ }}>
                               {fmtCLP(bankBalances.totalBalance)}
                             </div>
                             {income > 0 && (
                               <div style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(0,200,83,0.12)", border: "1px solid rgba(0,200,83,0.2)", borderRadius: 20, padding: "4px 12px", marginTop: 8 }}>
-                                <span style={{ fontSize: 11, color: P.green, fontWeight: 600 }}>↑ {fmtK(income)} este mes</span>
+                                <span style={{ fontSize: 11, color: P.green, fontWeight: 600, ...$ }}>↑ {fmtK(income)} este mes</span>
                               </div>
                             )}
                           </div>
@@ -1240,7 +1239,7 @@ export default function Sky({ userId, userEmail }) {
                         </div>
 
                         {/* Bank rows */}
-                        {bankBalances.accounts.map(acc => <BankCardFull key={acc.id} acc={acc} />)}
+                        {bankBalances.accounts.map(acc => <BankCardFull key={acc.id} acc={acc} blurred={privacyMode} />)}
                       </div>
                     )}
 
@@ -1282,7 +1281,7 @@ export default function Sky({ userId, userEmail }) {
                       {[
                         ["Cuentas conectadas", bankBalances.accounts?.length ?? 0],
                         ["Movimientos totales", txs.length],
-                        ["Tasa de ahorro",       `${savingsRate ?? 0}%`],
+                        ["Tasa de ahorro",       <span style={$}>{`${savingsRate ?? 0}%`}</span>],
                       ].map(([l, v]) => (
                         <div key={l} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px solid ${P.border}` }}>
                           <span style={{ fontSize: 13, color: P.text2 }}>{l}</span>
@@ -1316,78 +1315,78 @@ export default function Sky({ userId, userEmail }) {
                 : "Últimos 30 días";
 
               return (
-                <div style={{ padding: "20px 28px", display: "flex", gap: 18, alignItems: "start", animation: "fadeUp 0.22s ease" }}>
+                /* Layout de altura fija — ocupa exactamente el viewport disponible */
+                <div style={{ display: "flex", gap: 16, padding: "16px 24px", height: "calc(100vh - 58px)", overflow: "hidden", animation: "fadeUp 0.22s ease" }}>
 
-                  {/* ── Panel izquierdo ── */}
-                  <div style={{ width: 260, flexShrink: 0, display: "flex", flexDirection: "column", gap: 12 }}>
+                  {/* ── Panel izquierdo: fijo, no scrollea ── */}
+                  <div style={{ width: 248, flexShrink: 0, display: "flex", flexDirection: "column", gap: 10, height: "100%", overflowY: "auto" }}>
 
-                    {/* Agregar movimiento */}
-                    <div style={{ background: P.surface, borderRadius: 14, padding: "16px 18px", border: `1px solid ${P.border}` }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: P.text, marginBottom: 12 }}>Agregar movimiento</div>
-                      <AddTxForm onAdd={addTx} disabled={txLoading} />
-                    </div>
-
-                    {/* Resumen del período */}
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                      {[
-                        ["Gastos",   <span style={$}>{fmtK(filteredExpenses)}</span>, P.red],
-                        ["Ingresos", <span style={$}>{fmtK(filteredIncome2)}</span>,  P.green],
-                        ["Total",    filteredTxs.length,   P.text],
-                        ["Período",  dateLabel,             P.text3],
-                      ].map(([l, v, col]) => (
-                        <div key={l} style={{ background: P.surface, borderRadius: 10, padding: "10px 12px", border: `1px solid ${P.border}`, textAlign: "center" }}>
-                          <div style={{ fontSize: 14, fontWeight: 800, color: col, fontVariantNumeric: "tabular-nums" }}>{v}</div>
-                          <div style={{ fontSize: 10, color: P.text3, marginTop: 2 }}>{l}</div>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Filtros */}
-                    <div style={{ background: P.surface, borderRadius: 12, padding: "12px 14px", border: `1px solid ${P.border}` }}>
+                    {/* Filtros arriba — siempre visibles al abrir */}
+                    <div style={{ background: P.surface, borderRadius: 12, padding: "12px 14px", border: `1px solid ${P.border}`, flexShrink: 0 }}>
 
                       {/* Período */}
-                      <div style={{ fontSize: 10, fontWeight: 700, color: P.text3, letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 7 }}>Período</div>
-                      <div style={{ display: "flex", gap: 5, marginBottom: 12 }}>
-                        {[["mes-actual", "Mes actual"], ["ultimos-30", "Últimos 30 días"]].map(([val, lbl]) => (
+                      <div style={{ fontSize: 10, fontWeight: 700, color: P.text3, letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 6 }}>Período</div>
+                      <div style={{ display: "flex", gap: 5, marginBottom: 10 }}>
+                        {[["mes-actual", "Mes actual"], ["ultimos-30", "Últimos 30d"]].map(([val, lbl]) => (
                           <button key={val} onClick={() => setDateFilter(val)} style={{ flex: 1, padding: "7px 0", borderRadius: 7, border: "none", fontSize: 11, fontWeight: 600, background: dateFilter === val ? P.navy : P.bg, color: dateFilter === val ? "#fff" : P.text3, cursor: "pointer", transition: "all 0.15s" }}>{lbl}</button>
                         ))}
                       </div>
 
                       {/* Tipo */}
-                      <div style={{ fontSize: 10, fontWeight: 700, color: P.text3, letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 7 }}>Tipo</div>
-                      <div style={{ display: "flex", gap: 5, marginBottom: banksInTxs.length > 1 ? 12 : 0 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: P.text3, letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 6 }}>Tipo</div>
+                      <div style={{ display: "flex", gap: 5, marginBottom: banksInTxs.length > 1 ? 10 : 0 }}>
                         {[["all", "Todos"], ["expense", "Gastos"], ["income", "Ingresos"]].map(([val, lbl]) => (
                           <button key={val} onClick={() => setTxFilter(val)} style={{ flex: 1, padding: "7px 0", borderRadius: 7, border: "none", fontSize: 11, fontWeight: 600, background: txFilter === val ? P.navy : P.bg, color: txFilter === val ? "#fff" : P.text3, cursor: "pointer", transition: "all 0.15s" }}>{lbl}</button>
                         ))}
                       </div>
 
-                      {/* Banco (si hay más de uno) */}
+                      {/* Banco */}
                       {banksInTxs.length > 1 && (
                         <>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: P.text3, letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 7 }}>Banco</div>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: P.text3, letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 6 }}>Banco</div>
                           <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
                             <button onClick={() => setBankFilter("all")} style={{ padding: "5px 9px", borderRadius: 7, border: "none", fontSize: 11, fontWeight: 600, background: bankFilter === "all" ? P.navy : P.bg, color: bankFilter === "all" ? "#fff" : P.text3, cursor: "pointer" }}>Todos</button>
                             {banksInTxs.map(b => (
-                              <button key={b.id} onClick={() => setBankFilter(b.id)} style={{ padding: "5px 9px", borderRadius: 7, border: "none", fontSize: 11, fontWeight: 600, background: bankFilter === b.id ? P.navy : P.bg, color: bankFilter === b.id ? "#fff" : P.text3, cursor: "pointer" }}>
-                                {b.abbr}
-                              </button>
+                              <button key={b.id} onClick={() => setBankFilter(b.id)} style={{ padding: "5px 9px", borderRadius: 7, border: "none", fontSize: 11, fontWeight: 600, background: bankFilter === b.id ? P.navy : P.bg, color: bankFilter === b.id ? "#fff" : P.text3, cursor: "pointer" }}>{b.abbr}</button>
                             ))}
                           </div>
                         </>
                       )}
                     </div>
+
+                    {/* Resumen del período */}
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7, flexShrink: 0 }}>
+                      {[
+                        ["Gastos",   <span style={$}>{fmtK(filteredExpenses)}</span>, P.red],
+                        ["Ingresos", <span style={$}>{fmtK(filteredIncome2)}</span>,  P.green],
+                        ["Registros", filteredTxs.length, P.text],
+                        ["Período",   dateLabel,           P.text3],
+                      ].map(([l, v, col]) => (
+                        <div key={l} style={{ background: P.surface, borderRadius: 10, padding: "9px 10px", border: `1px solid ${P.border}`, textAlign: "center" }}>
+                          <div style={{ fontSize: 13, fontWeight: 800, color: col, fontVariantNumeric: "tabular-nums" }}>{v}</div>
+                          <div style={{ fontSize: 10, color: P.text3, marginTop: 1 }}>{l}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Agregar movimiento */}
+                    <div style={{ background: P.surface, borderRadius: 12, padding: "14px 16px", border: `1px solid ${P.border}` }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: P.text, marginBottom: 10 }}>Agregar manual</div>
+                      <AddTxForm onAdd={addTx} disabled={txLoading} />
+                    </div>
                   </div>
 
-                  {/* ── Lista de movimientos ── */}
-                  <div style={{ flex: 1, background: P.surface, borderRadius: 14, border: `1px solid ${P.border}`, overflow: "hidden", minWidth: 0 }}>
-                    <div style={{ padding: "12px 18px", borderBottom: `1px solid ${P.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  {/* ── Lista de movimientos: ocupa el resto de la altura ── */}
+                  <div style={{ flex: 1, background: P.surface, borderRadius: 14, border: `1px solid ${P.border}`, overflow: "hidden", display: "flex", flexDirection: "column", minWidth: 0, height: "100%" }}>
+                    <div style={{ padding: "11px 18px", borderBottom: `1px solid ${P.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
                       <div style={{ fontSize: 14, fontWeight: 700, color: P.text }}>
                         Movimientos <span style={{ fontWeight: 400, color: P.text3, fontSize: 12 }}>· {dateLabel}</span>
                       </div>
                       <div style={{ fontSize: 12, color: P.text3 }}>{filteredTxs.length} resultado{filteredTxs.length !== 1 ? "s" : ""}</div>
                     </div>
 
-                    <div style={{ maxHeight: "calc(100vh - 230px)", overflowY: "auto" }}>
+                    {/* Lista con flex: 1 y overflowY: auto — se adapta al espacio disponible */}
+                    <div style={{ flex: 1, overflowY: "auto" }}>
                       {filteredTxs.length === 0 ? (
                         <div style={{ padding: "40px 20px", textAlign: "center", color: P.text3, fontSize: 13 }}>
                           {txs.length === 0 ? "Sin transacciones aún. ¡Agrega la primera!" : "Sin movimientos en este período"}
