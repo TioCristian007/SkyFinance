@@ -1212,39 +1212,28 @@ export default function Sky({ userId, userEmail }) {
               <div style={{ padding: "24px 28px", animation: "fadeUp 0.22s ease" }}>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 20, alignItems: "start" }}>
 
-                  {/* Izquierda */}
+                  {/* Izquierda — BankConnect es la fuente única de verdad */}
                   <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
+                    {/* Header de total — solo cuando hay cuentas conectadas */}
                     {hasBankAccounts && (
-                      <div style={{ background: P.navy, borderRadius: 16, overflow: "hidden" }}>
-                        {/* Total header */}
-                        <div style={{ padding: "20px 22px 16px", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                          <div>
-                            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.3)", marginBottom: 4 }}>SALDO TOTAL · TODOS LOS BANCOS</div>
-                            <div style={{ fontSize: 36, fontWeight: 800, color: "#fff", letterSpacing: "-1.5px", fontVariantNumeric: "tabular-nums", ...$ }}>
-                              {fmtCLP(bankBalances.totalBalance)}
-                            </div>
-                            {income > 0 && (
-                              <div style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(0,200,83,0.12)", border: "1px solid rgba(0,200,83,0.2)", borderRadius: 20, padding: "4px 12px", marginTop: 8 }}>
-                                <span style={{ fontSize: 11, color: P.green, fontWeight: 600, ...$ }}>↑ {fmtK(income)} este mes</span>
-                              </div>
-                            )}
+                      <div style={{ background: P.navy, borderRadius: 16, padding: "18px 22px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <div>
+                          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>
+                            Saldo total · {bankBalances.accounts.length} cuenta{bankBalances.accounts.length !== 1 ? "s" : ""}
                           </div>
-                          <SyncBadge />
+                          <div style={{ fontSize: 30, fontWeight: 800, color: "#fff", letterSpacing: "-1px", fontVariantNumeric: "tabular-nums", ...$ }}>
+                            {fmtCLP(bankBalances.totalBalance)}
+                          </div>
                         </div>
-
-                        {/* Label */}
-                        <div style={{ padding: "12px 22px 8px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                          <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,0.3)", letterSpacing: "0.1em", textTransform: "uppercase" }}>Mis cuentas</span>
-                        </div>
-
-                        {/* Bank rows */}
-                        {bankBalances.accounts.map(acc => <BankCardFull key={acc.id} acc={acc} blurred={privacyMode} />)}
+                        <SyncBadge />
                       </div>
                     )}
 
-                    {/* Conectar banco */}
-                    <div style={{ background: P.surface, borderRadius: 16, border: `1px solid ${P.border}`, overflow: "hidden" }}>
+                    {/* BankConnect: maneja lista de cuentas, sync, 2FA,
+                        botón "+ Conectar otro banco", formulario con
+                        Falabella + Banco de Chile + bancos próximamente */}
+                    <div style={{ background: P.surface, borderRadius: 16, border: `1px solid ${P.border}` }}>
                       <BankConnect
                         onSyncComplete={async () => {
                           const [summaryRes, bankAccRes] = await Promise.all([
@@ -1259,7 +1248,7 @@ export default function Sky({ userId, userEmail }) {
                     </div>
                   </div>
 
-                  {/* Derecha sticky */}
+                  {/* Derecha sticky — ticker + resumen */}
                   <div style={{ display: "flex", flexDirection: "column", gap: 14, position: "sticky", top: 24 }}>
                     <div style={{ background: P.navy, borderRadius: 16, overflow: "hidden" }}>
                       <div style={{ padding: "14px 18px 10px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", alignItems: "center", gap: 7 }}>
@@ -1281,7 +1270,7 @@ export default function Sky({ userId, userEmail }) {
                       {[
                         ["Cuentas conectadas", bankBalances.accounts?.length ?? 0],
                         ["Movimientos totales", txs.length],
-                        ["Tasa de ahorro",       <span style={$}>{`${savingsRate ?? 0}%`}</span>],
+                        ["Tasa de ahorro", <span style={$}>{`${savingsRate ?? 0}%`}</span>],
                       ].map(([l, v]) => (
                         <div key={l} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px solid ${P.border}` }}>
                           <span style={{ fontSize: 13, color: P.text2 }}>{l}</span>
