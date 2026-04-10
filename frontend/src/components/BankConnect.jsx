@@ -1,11 +1,15 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // components/BankConnect.jsx
 //
-// UI para conectar bancos y ver balances por banco.
-// Dos vistas: lista de bancos conectados + formulario de conexión.
+// UI de conexión bancaria con:
+//   · Lista de cuentas conectadas con balance por banco
+//   · Balance total consolidado
+//   · Polling automático post-sync para ver resultado sin recargar
+//   · Instrucciones 2FA claras para Banco de Chile
+//   · Estado visual durante sincronización y espera de 2FA
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { C } from "../data/colors.js";
 import * as api from "../services/api.js";
 
@@ -14,18 +18,26 @@ const fmt = (n) =>
 
 const fmtDate = (iso) => {
   if (!iso) return "Nunca";
-  return new Date(iso).toLocaleDateString("es-CL", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  return new Date(iso).toLocaleDateString("es-CL", {
+    day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+  });
 };
 
-// ── Vista: lista de cuentas conectadas ────────────────────────────────────────
+const is2FAWaiting = (acc) =>
+  acc.status === "error" && /Esperando aprobación/i.test(acc.lastSyncError || "");
 
-function AccountList({ accounts, totalBalance, onConnect, onSync, onDisconnect, syncing }) {
+// ── AccountList ───────────────────────────────────────────────────────────────
+
+function AccountList({ accounts, totalBalance, onConnect, onSync, onDisconnect, syncingId }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
 
       {/* Balance total */}
       {accounts.length > 0 && (
-        <div style={{ background: `linear-gradient(135deg,${C.navy},#1a3a5c)`, borderRadius: 18, padding: "18px 20px", color: C.white }}>
+        <div style={{
+          background: `linear-gradient(135deg,${C.navy},#1a3a5c)`,
+          borderRadius: 18, padding: "18px 20px", color: C.white,
+        }}>
           <div style={{ fontSize: 11, opacity: 0.6, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 6 }}>
             Balance total bancario
           </div>
@@ -37,76 +49,101 @@ function AccountList({ accounts, totalBalance, onConnect, onSync, onDisconnect, 
       )}
 
       {/* Tarjetas por banco */}
-      {accounts.map((acc) => (
-        <div key={acc.id} style={{
-          background: C.white, borderRadius: 16, padding: "14px 16px",
-          border: `1px solid ${acc.status === "error" ? C.red : C.border}`,
-        }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ fontSize: 24 }}>{acc.bankIcon}</div>
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: C.textPrimary }}>{acc.bankName}</div>
-                <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
-                  {acc.status === "error"
-                    ? "⚠ Error de sync"
-                    : `Actualizado: ${fmtDate(acc.lastSyncAt)}`}
+      {accounts.map((acc) => {
+        const waiting2FA = is2FAWaiting(acc);
+        const isSyncing  = syncingId === acc.id;
+
+        return (
+          <div key={acc.id} style={{
+            background:   C.white,
+            borderRadius: 16,
+            padding:      "14px 16px",
+            border:       `1.5px solid ${waiting2FA ? C.amber : acc.status === "error" ? C.red : C.border}`,
+            transition:   "border-color 0.3s",
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ fontSize: 24 }}>{acc.bankIcon}</div>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.textPrimary }}>{acc.bankName}</div>
+                  <div style={{ fontSize: 11, marginTop: 2, color: waiting2FA ? C.amber : acc.status === "error" ? C.red : C.textMuted }}>
+                    {waiting2FA
+                      ? "⏳ Abre tu app Banco de Chile y aprueba"
+                      : acc.status === "error"
+                        ? `⚠ ${acc.lastSyncError || "Error de sync"}`
+                        : `Actualizado: ${fmtDate(acc.lastSyncAt)}`
+                    }
+                  </div>
                 </div>
               </div>
-            </div>
-            <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 16, fontWeight: 800, color: acc.balance >= 0 ? C.textPrimary : C.red }}>
-                {fmt(acc.balance)}
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 16, fontWeight: 800, color: acc.balance >= 0 ? C.textPrimary : C.red }}>
+                  {fmt(acc.balance)}
+                </div>
+                <div style={{ fontSize: 10, color: C.textMuted }}>saldo</div>
               </div>
-              <div style={{ fontSize: 10, color: C.textMuted }}>saldo</div>
+            </div>
+
+            {/* Banner 2FA */}
+            {waiting2FA && (
+              <div style={{
+                marginTop: 10, padding: "10px 12px",
+                background: "#FFF8E6", borderRadius: 10,
+                border: `1px solid ${C.amber}`,
+                fontSize: 12, color: "#92400E", lineHeight: 1.5,
+              }}>
+                🔔 Banco de Chile está esperando que apruebes la solicitud en tu app.<br />
+                Una vez que apruebes, la sincronización continúa automáticamente.
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <button
+                onClick={() => onSync(acc.id, acc.bankId)}
+                disabled={isSyncing || waiting2FA}
+                style={{
+                  flex: 1, padding: "7px 0", borderRadius: 10,
+                  border: `1px solid ${C.border}`, background: "transparent",
+                  fontSize: 12, fontWeight: 600, color: C.textSecondary,
+                  cursor: (isSyncing || waiting2FA) ? "not-allowed" : "pointer",
+                  opacity: (isSyncing || waiting2FA) ? 0.5 : 1,
+                }}
+              >
+                {isSyncing ? "Sincronizando..." : "🔄 Sincronizar"}
+              </button>
+              <button
+                onClick={() => onDisconnect(acc.id, acc.bankName)}
+                disabled={isSyncing}
+                style={{
+                  padding: "7px 12px", borderRadius: 10,
+                  border: `1px solid ${C.border}`, background: "transparent",
+                  fontSize: 12, color: C.textMuted, cursor: "pointer",
+                }}
+              >
+                Desconectar
+              </button>
             </div>
           </div>
+        );
+      })}
 
-          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-            <button
-              onClick={() => onSync(acc.id)}
-              disabled={syncing === acc.id}
-              style={{
-                flex: 1, padding: "7px 0", borderRadius: 10,
-                border: `1px solid ${C.border}`, background: "transparent",
-                fontSize: 12, fontWeight: 600, color: C.textSecondary,
-                cursor: syncing === acc.id ? "not-allowed" : "pointer",
-                opacity: syncing === acc.id ? 0.6 : 1,
-              }}
-            >
-              {syncing === acc.id ? "Sincronizando..." : "🔄 Sincronizar"}
-            </button>
-            <button
-              onClick={() => onDisconnect(acc.id, acc.bankName)}
-              style={{
-                padding: "7px 12px", borderRadius: 10,
-                border: `1px solid ${C.border}`, background: "transparent",
-                fontSize: 12, color: C.textMuted, cursor: "pointer",
-              }}
-            >
-              Desconectar
-            </button>
-          </div>
-        </div>
-      ))}
-
-      {/* Botón agregar banco */}
+      {/* Agregar banco */}
       <button
         onClick={onConnect}
         style={{
-          padding: "14px", borderRadius: 16, border: `1.5px dashed ${C.border}`,
-          background: "transparent", fontSize: 13, fontWeight: 600,
-          color: C.textSecondary, cursor: "pointer", textAlign: "center",
+          padding: "14px", borderRadius: 16,
+          border: `1.5px dashed ${C.border}`, background: "transparent",
+          fontSize: 13, fontWeight: 600, color: C.textSecondary,
+          cursor: "pointer", textAlign: "center",
         }}
       >
         + Conectar otro banco
       </button>
-
     </div>
   );
 }
 
-// ── Vista: formulario de conexión ─────────────────────────────────────────────
+// ── ConnectForm ───────────────────────────────────────────────────────────────
 
 function ConnectForm({ banks, onSuccess, onCancel }) {
   const [selectedBank, setSelectedBank] = useState(null);
@@ -120,24 +157,20 @@ function ConnectForm({ banks, onSuccess, onCancel }) {
   const coming    = banks.filter((b) => !b.available);
 
   const formatRut = (v) => {
-    // Auto-formatear RUT mientras escribe: 12345678-9
     const clean = v.replace(/[^0-9kK]/g, "");
     if (clean.length <= 1) return clean;
-    const body     = clean.slice(0, -1);
-    const dv       = clean.slice(-1).toUpperCase();
-    const formatted = body.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-    return `${formatted}-${dv}`;
+    const body = clean.slice(0, -1).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+    const dv   = clean.slice(-1).toUpperCase();
+    return `${body}-${dv}`;
   };
 
   const handleConnect = async () => {
     if (!selectedBank || !rut || !password) return;
-    setLoading(true);
-    setError("");
-
+    setLoading(true); setError("");
     try {
       const cleanRut = rut.replace(/\./g, "");
       await api.connectBank({ bankId: selectedBank.id, rut: cleanRut, password });
-      onSuccess();
+      onSuccess(selectedBank.id);
     } catch (e) {
       setError(e.message || "Error al conectar. Verifica tus credenciales.");
     } finally {
@@ -152,195 +185,144 @@ function ConnectForm({ banks, onSuccess, onCancel }) {
           ¿Con qué banco quieres conectarte?
         </div>
 
-        {/* Bancos disponibles */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {available.map((bank) => (
-            <button
-              key={bank.id}
-              onClick={() => setSelectedBank(bank)}
-              style={{
-                display: "flex", alignItems: "center", gap: 12,
-                padding: "14px 16px", borderRadius: 14,
-                border: `1.5px solid ${C.green}`, background: "#f0fdf4",
-                cursor: "pointer", textAlign: "left",
-              }}
-            >
-              <span style={{ fontSize: 22 }}>{bank.icon}</span>
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: C.textPrimary }}>{bank.name}</div>
-                <div style={{ fontSize: 11, color: C.green, fontWeight: 600 }}>Disponible ahora</div>
-              </div>
-            </button>
-          ))}
-        </div>
+        {available.map((bank) => (
+          <button key={bank.id} onClick={() => setSelectedBank(bank)} style={{
+            display: "flex", alignItems: "center", gap: 12,
+            padding: "14px 16px", borderRadius: 14,
+            border: `1.5px solid ${C.green}`, background: "#f0fdf4",
+            cursor: "pointer", textAlign: "left",
+          }}>
+            <span style={{ fontSize: 22 }}>{bank.icon}</span>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.textPrimary }}>{bank.name}</div>
+              <div style={{ fontSize: 11, color: C.green, fontWeight: 600 }}>Disponible ahora</div>
+            </div>
+          </button>
+        ))}
 
-        {/* Próximamente */}
         {coming.length > 0 && (
           <>
             <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, marginTop: 4, letterSpacing: "0.05em", textTransform: "uppercase" }}>
               Próximamente
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {coming.map((bank) => (
-                <div
-                  key={bank.id}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 12,
-                    padding: "12px 16px", borderRadius: 14,
-                    border: `1px solid ${C.border}`, background: C.white,
-                    opacity: 0.6,
-                  }}
-                >
-                  <span style={{ fontSize: 22 }}>{bank.icon}</span>
-                  <div style={{ fontSize: 13, color: C.textSecondary }}>{bank.name}</div>
-                </div>
-              ))}
-            </div>
+            {coming.map((bank) => (
+              <div key={bank.id} style={{
+                display: "flex", alignItems: "center", gap: 12,
+                padding: "12px 16px", borderRadius: 14,
+                border: `1px solid ${C.border}`, background: C.white, opacity: 0.55,
+              }}>
+                <span style={{ fontSize: 22 }}>{bank.icon}</span>
+                <div style={{ fontSize: 13, color: C.textSecondary }}>{bank.name}</div>
+              </div>
+            ))}
           </>
         )}
 
-        <button
-          onClick={onCancel}
-          style={{
-            marginTop: 4, padding: "10px", borderRadius: 12,
-            border: `1px solid ${C.border}`, background: "transparent",
-            fontSize: 12, color: C.textSecondary, cursor: "pointer",
-          }}
-        >
+        <button onClick={onCancel} style={{
+          marginTop: 4, padding: "10px", borderRadius: 12,
+          border: `1px solid ${C.border}`, background: "transparent",
+          fontSize: 12, color: C.textSecondary, cursor: "pointer",
+        }}>
           Cancelar
         </button>
       </div>
     );
   }
 
+  // Formulario de credenciales
+  const isBchile = selectedBank.id === "bchile";
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
 
-      {/* Header banco seleccionado */}
+      {/* Header banco */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", background: "#f0fdf4", borderRadius: 12, border: `1px solid ${C.green}` }}>
         <span style={{ fontSize: 22 }}>{selectedBank.icon}</span>
         <div>
           <div style={{ fontSize: 13, fontWeight: 700, color: C.textPrimary }}>{selectedBank.name}</div>
-          <div style={{ fontSize: 11, color: C.green }}>Ingresa tus credenciales</div>
+          <div style={{ fontSize: 11, color: C.green }}>Ingresa tus credenciales de internet</div>
         </div>
       </div>
 
-      {/* Aviso de privacidad */}
+      {/* Nota 2FA para bchile */}
+      {isBchile && (
+        <div style={{ padding: "10px 12px", background: "#FFF8E6", borderRadius: 10, border: `1px solid ${C.amber}` }}>
+          <div style={{ fontSize: 12, color: "#92400E", lineHeight: 1.5 }}>
+            🔔 Si tienes <strong>Banco de Chile Pass</strong> activo, recibirás una notificación en tu app para aprobar el acceso. Tendrás 2 minutos para aprobarla.
+          </div>
+        </div>
+      )}
+
+      {/* Aviso de seguridad */}
       <div style={{ padding: "10px 12px", background: "#EFF6FF", borderRadius: 10, border: "1px solid #BFDBFE" }}>
         <div style={{ fontSize: 11.5, color: "#1E40AF", lineHeight: 1.5 }}>
-          🔒 Tus credenciales se encriptan con AES-256 antes de guardarse. Sky nunca puede leerlas.
+          🔒 Tus credenciales se encriptan con AES-256 antes de guardarse. Sky nunca puede leerlas en texto plano.
         </div>
       </div>
 
       {/* RUT */}
       <div>
-        <label style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary, display: "block", marginBottom: 6 }}>
-          RUT
-        </label>
+        <label style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary, display: "block", marginBottom: 6 }}>RUT</label>
         <input
-          type="text"
-          value={rut}
-          onChange={(e) => setRut(formatRut(e.target.value))}
-          placeholder="12.345.678-9"
-          maxLength={12}
-          style={{
-            width: "100%", padding: "11px 14px", borderRadius: 12,
-            border: `1.5px solid ${C.border}`, fontSize: 14,
-            color: C.textPrimary, outline: "none", fontFamily: "monospace",
-            boxSizing: "border-box",
-          }}
-          onFocus={(e)  => (e.target.style.borderColor = C.green)}
-          onBlur={(e)   => (e.target.style.borderColor = C.border)}
+          type="text" value={rut} onChange={(e) => setRut(formatRut(e.target.value))}
+          placeholder="12.345.678-9" maxLength={12}
+          style={{ width: "100%", padding: "11px 14px", borderRadius: 12, border: `1.5px solid ${C.border}`, fontSize: 14, color: C.textPrimary, outline: "none", fontFamily: "monospace", boxSizing: "border-box" }}
+          onFocus={(e) => (e.target.style.borderColor = C.green)}
+          onBlur={(e)  => (e.target.style.borderColor = C.border)}
         />
       </div>
 
       {/* Clave */}
       <div>
-        <label style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary, display: "block", marginBottom: 6 }}>
-          Clave de internet
-        </label>
+        <label style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary, display: "block", marginBottom: 6 }}>Clave de internet</label>
         <div style={{ position: "relative" }}>
           <input
-            type={showPass ? "text" : "password"}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            type={showPass ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)}
             placeholder="••••••••"
-            style={{
-              width: "100%", padding: "11px 42px 11px 14px", borderRadius: 12,
-              border: `1.5px solid ${C.border}`, fontSize: 14,
-              color: C.textPrimary, outline: "none",
-              boxSizing: "border-box",
-            }}
-            onFocus={(e)  => (e.target.style.borderColor = C.green)}
-            onBlur={(e)   => (e.target.style.borderColor = C.border)}
+            style={{ width: "100%", padding: "11px 42px 11px 14px", borderRadius: 12, border: `1.5px solid ${C.border}`, fontSize: 14, color: C.textPrimary, outline: "none", boxSizing: "border-box" }}
+            onFocus={(e) => (e.target.style.borderColor = C.green)}
+            onBlur={(e)  => (e.target.style.borderColor = C.border)}
             onKeyDown={(e) => e.key === "Enter" && handleConnect()}
           />
-          <button
-            type="button"
-            onClick={() => setShowPass(!showPass)}
-            style={{
-              position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)",
-              background: "none", border: "none", cursor: "pointer", fontSize: 16, padding: 0,
-            }}
-          >
+          <button type="button" onClick={() => setShowPass(!showPass)} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 16, padding: 0 }}>
             {showPass ? "🙈" : "👁️"}
           </button>
         </div>
       </div>
 
-      {/* Error */}
       {error && (
         <div style={{ padding: "10px 12px", background: "#FEF2F2", borderRadius: 10, border: "1px solid #FECACA" }}>
           <div style={{ fontSize: 12, color: C.red }}>{error}</div>
         </div>
       )}
 
-      {/* Botones */}
       <div style={{ display: "flex", gap: 8 }}>
-        <button
-          onClick={() => { setSelectedBank(null); setError(""); setRut(""); setPassword(""); }}
-          style={{
-            padding: "11px 16px", borderRadius: 12,
-            border: `1px solid ${C.border}`, background: "transparent",
-            fontSize: 13, color: C.textSecondary, cursor: "pointer",
-          }}
-        >
+        <button onClick={() => { setSelectedBank(null); setError(""); setRut(""); setPassword(""); }} style={{ padding: "11px 16px", borderRadius: 12, border: `1px solid ${C.border}`, background: "transparent", fontSize: 13, color: C.textSecondary, cursor: "pointer" }}>
           ← Volver
         </button>
-        <button
-          onClick={handleConnect}
-          disabled={!rut || !password || loading}
-          style={{
-            flex: 1, padding: "11px 0", borderRadius: 12, border: "none",
-            background: rut && password && !loading
-              ? `linear-gradient(135deg,${C.green},${C.greenDark})`
-              : C.border,
-            color: C.white, fontSize: 13, fontWeight: 700,
-            cursor: rut && password && !loading ? "pointer" : "not-allowed",
-          }}
-        >
+        <button onClick={handleConnect} disabled={!rut || !password || loading} style={{ flex: 1, padding: "11px 0", borderRadius: 12, border: "none", background: rut && password && !loading ? `linear-gradient(135deg,${C.green},${C.greenDark})` : C.border, color: C.white, fontSize: 13, fontWeight: 700, cursor: rut && password && !loading ? "pointer" : "not-allowed" }}>
           {loading ? "Conectando..." : "Conectar banco"}
         </button>
       </div>
-
     </div>
   );
 }
 
-// ── Componente principal ───────────────────────────────────────────────────────
+// ── BankConnect principal ─────────────────────────────────────────────────────
 
 export default function BankConnect({ onSyncComplete }) {
-  const [view,        setView]        = useState("list"); // "list" | "connect"
-  const [accounts,    setAccounts]    = useState([]);
-  const [totalBalance,setTotalBalance]= useState(0);
-  const [banks,       setBanks]       = useState([]);
-  const [loading,     setLoading]     = useState(true);
-  const [syncing,     setSyncing]     = useState(null);
-  const [toast,       setToast]       = useState(null);
+  const [view,         setView]         = useState("list");
+  const [accounts,     setAccounts]     = useState([]);
+  const [totalBalance, setTotalBalance] = useState(0);
+  const [banks,        setBanks]        = useState([]);
+  const [loading,      setLoading]      = useState(true);
+  const [syncingId,    setSyncingId]    = useState(null);
+  const [toast,        setToast]        = useState(null);
+  const pollingRef = useRef(null);
 
   const showToast = (msg, color = C.green) => {
     setToast({ msg, color });
-    setTimeout(() => setToast(null), 3500);
+    setTimeout(() => setToast(null), 4000);
   };
 
   const loadAccounts = async () => {
@@ -359,19 +341,68 @@ export default function BankConnect({ onSyncComplete }) {
     }
   };
 
-  useEffect(() => { loadAccounts(); }, []);
+  useEffect(() => {
+    loadAccounts();
+    return () => { if (pollingRef.current) clearInterval(pollingRef.current); };
+  }, []);
 
-  const handleSync = async (accountId) => {
-    setSyncing(accountId);
+  // Iniciar polling para ver resultado del sync asíncrono
+  const startPolling = (accountId) => {
+    if (pollingRef.current) clearInterval(pollingRef.current);
+    let attempts = 0;
+    pollingRef.current = setInterval(async () => {
+      attempts++;
+      await loadAccounts();
+
+      setAccounts((prev) => {
+        const acc = prev.find((a) => a.id === accountId);
+        if (!acc) return prev;
+
+        const is2FA    = is2FAWaiting(acc);
+        const isDone   = acc.status === "active" && acc.lastSyncAt && attempts > 1;
+        const isError  = acc.status === "error" && !is2FA;
+        const timeout  = attempts >= 50; // 50 × 4s = ~3.5 minutos
+
+        if (isDone || isError || timeout) {
+          clearInterval(pollingRef.current);
+          setSyncingId(null);
+          onSyncComplete?.();
+          if (isDone) showToast(`✓ ${acc.bankName}: sync completado`);
+          if (isError) showToast(acc.lastSyncError || "Error al sincronizar", C.red);
+        }
+        return prev;
+      });
+    }, 4000);
+  };
+
+  const handleSync = async (accountId, bankId) => {
+    setSyncingId(accountId);
     try {
       const result = await api.syncBankAccount(accountId);
-      showToast(`✓ ${result.bankName}: ${result.newTransactions} transacciones nuevas`);
+
+      if (result.started) {
+        if (bankId === "bchile") {
+          showToast("Abre tu app Banco de Chile y aprueba la notificación 🔔", C.amber);
+        } else {
+          showToast("Sincronizando...");
+        }
+        startPolling(accountId);
+        return; // El polling hace setSyncingId(null) cuando termina
+      }
+
+      // Respuesta síncrona (fallback)
       await loadAccounts();
       onSyncComplete?.();
+      showToast(`✓ ${result.bankName || "Banco"}: sync completado`);
     } catch (e) {
-      showToast(e.message || "Error al sincronizar", C.red);
+      let msg = e.message || "Error al sincronizar";
+      if (/Chrome|Chromium/i.test(msg))   msg = "Chrome no encontrado. Verifica CHROME_PATH.";
+      if (/AUTH_FAILED/i.test(msg))        msg = "RUT o clave incorrectos. Reconecta el banco.";
+      if (/2FA_TIMEOUT/i.test(msg))        msg = "No se recibió aprobación 2FA. Intenta nuevamente.";
+      showToast(msg, C.red);
     } finally {
-      setSyncing(null);
+      // Solo limpiar si no estamos en polling
+      if (!pollingRef.current) setSyncingId(null);
     }
   };
 
@@ -386,14 +417,22 @@ export default function BankConnect({ onSyncComplete }) {
     }
   };
 
-  const handleConnectSuccess = async () => {
+  const handleConnectSuccess = async (bankId) => {
     setView("list");
-    showToast("Banco conectado. Sincronizando...");
-    // Esperar un poco para que el sync inicial tenga tiempo
+    if (bankId === "bchile") {
+      showToast("Banco conectado. Aprueba la notificación en tu app 🔔", C.amber);
+    } else {
+      showToast("Banco conectado. Sincronizando...");
+    }
+    // Esperar un momento y arrancar polling
     setTimeout(async () => {
       await loadAccounts();
-      onSyncComplete?.();
-    }, 4000);
+      setAccounts((prev) => {
+        const newAcc = prev.find((a) => a.bankId === bankId);
+        if (newAcc) startPolling(newAcc.id);
+        return prev;
+      });
+    }, 2000);
   };
 
   if (loading) {
@@ -406,8 +445,6 @@ export default function BankConnect({ onSyncComplete }) {
 
   return (
     <div style={{ padding: "14px 14px 28px", position: "relative" }}>
-
-      {/* Toast */}
       {toast && (
         <div style={{
           position: "fixed", top: 18, left: "50%", transform: "translateX(-50%)", zIndex: 9999,
@@ -426,7 +463,7 @@ export default function BankConnect({ onSyncComplete }) {
           onConnect={() => setView("connect")}
           onSync={handleSync}
           onDisconnect={handleDisconnect}
-          syncing={syncing}
+          syncingId={syncingId}
         />
       ) : (
         <ConnectForm
@@ -435,7 +472,6 @@ export default function BankConnect({ onSyncComplete }) {
           onCancel={() => setView("list")}
         />
       )}
-
     </div>
   );
 }

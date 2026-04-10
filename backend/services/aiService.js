@@ -1,10 +1,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // services/aiService.js  —  Mr. Money copiloto activo
 //
-// OPTIMIZACIÓN DE TOKENS:
-// Las solicitudes "deducibles" (propuestas de desafíos, acciones que el sistema
-// puede resolver localmente) se resuelven sin llamar a Anthropic cuando es posible.
-// Claude solo se invoca cuando el mensaje requiere comprensión o razonamiento real.
+// FIXES v2:
+//   · buildFinancialContext incluye balances bancarios reales
+//   · Mr. Money conoce saldo por banco, no solo el balance estimado
+//   · LOCAL_PATTERNS (saludo) también muestra info bancaria si existe
 // ─────────────────────────────────────────────────────────────────────────────
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -27,6 +27,14 @@ const CATEGORY_LABELS = {
   subscriptions: "Suscripciones",
   entertainment: "Entretención",
   health:        "Salud",
+  utilities:     "Servicios básicos",
+  shopping:      "Compras",
+  debt_payment:  "Cuotas/Crédito",
+  savings:       "Ahorro",
+  insurance:     "Seguros",
+  transfer:      "Transferencias",
+  banking_fee:   "Comisiones",
+  income:        "Ingresos",
   other:         "Otros",
 };
 
@@ -34,12 +42,8 @@ const fmt = (n) =>
   new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", maximumFractionDigits: 0 }).format(n);
 
 // ── Detección local — sin tokens ──────────────────────────────────────────────
-// Patrones que pueden resolverse sin invocar a Claude.
-// Si el mensaje del usuario coincide con alguno, se retorna la respuesta
-// directamente con la propuesta correspondiente, ahorrando tokens completos.
 
 const LOCAL_PATTERNS = [
-  // Desafíos — el usuario pide directamente uno
   {
     match: /desaf[ií]o|reto|challenge/i,
     resolve: async (userId) => {
@@ -47,7 +51,6 @@ const LOCAL_PATTERNS = [
       if (!state.available?.length) {
         return { reply: "Ya tienes todos los desafíos activos o completados. 🏆 Sigue así." };
       }
-      // Proponer el desafío disponible más relevante (mayor pts)
       const best = state.available.sort((a, b) => b.pts - a.pts)[0];
       return {
         reply: `Tengo un desafío que encaja con tu perfil 👇`,
@@ -59,28 +62,36 @@ const LOCAL_PATTERNS = [
       };
     },
   },
-  // Saludo simple
   {
     match: /^(hola|buenas|hey|ey|hi|hello|buen[oa]s?\s*(días|tardes|noches)?)[\s!.]*$/i,
     resolve: async (userId) => {
       const summary = await getSummary(userId);
-      const rate = summary.savingsRate;
-      const emoji = rate >= 20 ? "📈" : rate >= 5 ? "📊" : "👀";
+      const rate    = summary.savingsRate;
+      const emoji   = !summary.hasBankAccounts ? "📊" : summary.totalBankBalance > 0 ? "📈" : "👀";
+
+      // FIX: mostrar balance real si hay bancos conectados
+      if (summary.hasBankAccounts) {
+        const bankLines = summary.bankAccounts
+          .map(a => `${a.bankIcon || "🏦"} ${a.bankName}: ${fmt(a.balance)}`)
+          .join(" | ");
+        return {
+          reply: `Hola. ${emoji}\n${bankLines}\nBalance total: ${fmt(summary.totalBankBalance)}. Llevas ${fmt(summary.expenses)} gastados este mes. ¿En qué te ayudo?`,
+        };
+      }
       return {
-        reply: `Hola. ${emoji} Este mes llevas ${fmt(summary.expenses)} gastados de ${fmt(summary.income)} estimados. Tasa de ahorro: ${rate}%. ¿En qué te ayudo?`,
+        reply: `Hola. ${emoji} Este mes llevas ${fmt(summary.expenses)} gastados de ${fmt(summary.income)} estimados. Tasa de ahorro: ${rate ?? "?"}%. ¿En qué te ayudo?`,
       };
     },
   },
 ];
 
-// Intenta resolver el mensaje localmente. Retorna null si no puede.
 async function tryResolveLocally(message, userId) {
   for (const pattern of LOCAL_PATTERNS) {
     if (pattern.match.test(message.trim())) {
       try {
         return await pattern.resolve(userId);
       } catch {
-        return null; // Si falla, deja que Claude lo maneje
+        return null;
       }
     }
   }
@@ -198,6 +209,8 @@ const MR_MONEY_TOOLS = [
 ];
 
 // ── Contexto financiero completo ──────────────────────────────────────────────
+// FIX: ahora incluye balances bancarios reales por cuenta
+
 async function buildFinancialContext(userId) {
   const [summary, challengesState, profile, goals] = await Promise.all([
     getSummary(userId),
@@ -227,14 +240,31 @@ async function buildFinancialContext(userId) {
     ? challengesState.active.map((c) => `  - "${c.label}" (${c.progress?.pct || 0}%)`).join("\n")
     : "  ninguno";
 
+  // FIX: sección de bancos con saldos reales
+  const banksText = summary.hasBankAccounts
+    ? summary.bankAccounts.map(a =>
+        `  - ${a.bankIcon || "🏦"} ${a.bankName}: ${fmt(a.balance)} (${a.status}${a.lastSyncAt ? ", sync: " + new Date(a.lastSyncAt).toLocaleDateString("es-CL") : ""})`
+      ).join("\n")
+    : "  sin bancos conectados — balance es estimado";
+
   return {
     text: `=== CONTEXTO FINANCIERO DE ${profile.user.name} (${summary.period}) ===
-RESUMEN: Ingreso ${fmt(summary.income)} | Gastado ${fmt(summary.expenses)} | Balance ${fmt(summary.balance)} | Ahorro ${summary.savingsRate}%
+RESUMEN: Ingreso ${fmt(summary.income)} | Gastado ${fmt(summary.expenses)} | Ahorro ${summary.savingsRate ?? "N/A"}%
 TXS: ${summary.transactionCount} | Puntos: ${profile.points} | Nivel: ${profile.level}
-GASTOS:\n${breakdown}
-METAS:\n${goalsText}
-DESAFÍOS ACTIVOS:\n${activeChs}
-DESAFÍOS DISPONIBLES:\n${availableChs}
+
+BANCOS CONECTADOS:
+${banksText}
+BALANCE TOTAL BANCARIO REAL: ${summary.hasBankAccounts ? fmt(summary.totalBankBalance) : "N/A (sin bancos)"}
+BALANCE DISPONIBLE (mostrado en app): ${fmt(summary.balance)}
+
+GASTOS POR CATEGORÍA:
+${breakdown}
+METAS:
+${goalsText}
+DESAFÍOS ACTIVOS:
+${activeChs}
+DESAFÍOS DISPONIBLES:
+${availableChs}
 COMPLETADOS: ${challengesState.completed?.length || 0}`,
     raw: { summary, profile, goals },
   };
@@ -257,6 +287,7 @@ CUÁNDO USARLAS:
 - Usuario pregunta plazos/proyecciones → get_financial_projection
 - Ves gasto alto en categoría → propose_challenge relevante
 - Usuario tiene balance y metas incompletas → propose_goal_contribution
+- Usuario pregunta por saldo/balance → responde con BALANCE TOTAL BANCARIO REAL si hay bancos
 
 PERSONALIDAD: Profesional, directo, cercano. Fórmula: [dato real] + [emoción mínima] + [dirección].
 REGLAS: Español. Datos reales siempre. Máx 4 líneas. 1-2 emojis. Sin asesoría de inversión. Sin decisiones por el usuario.`;
@@ -266,7 +297,10 @@ REGLAS: Español. Datos reales siempre. Máx 4 líneas. 1-2 emojis. Sin asesorí
 async function executeTool(toolName, toolInput, userId, rawContext) {
   if (toolName === "get_financial_projection") {
     const { target_amount, goal_name } = toolInput;
-    const monthly = Math.max(0, rawContext.summary.balance);
+    // FIX: usar balance bancario real si existe
+    const monthly = rawContext.summary.hasBankAccounts
+      ? Math.max(0, rawContext.summary.totalBankBalance)
+      : Math.max(0, rawContext.summary.balance);
 
     if (target_amount === 0) {
       return {
@@ -291,7 +325,6 @@ async function executeTool(toolName, toolInput, userId, rawContext) {
     };
   }
 
-  // navigate_to_simulation se procesa en el frontend — aquí solo confirmamos
   if (toolName === "navigate_to_simulation") {
     return {
       action:          "navigate",
@@ -307,34 +340,31 @@ async function executeTool(toolName, toolInput, userId, rawContext) {
 // ── Chat principal ────────────────────────────────────────────────────────────
 export async function askMrMoney(userMessage, conversationHistory = [], userId = null) {
 
-  // 1. Intentar resolver localmente (sin tokens)
   const local = await tryResolveLocally(userMessage, userId);
   if (local) return local;
 
-  // 2. Construir contexto y llamar a Claude
   const context      = await buildFinancialContext(userId);
   const systemPrompt = buildSystemPrompt(context.text);
 
   const recentHistory = conversationHistory
-    .slice(-6) // reducido de 8 a 6 para ahorrar tokens de contexto
+    .slice(-6)
     .filter((m) => m.role === "user" || m.role === "bot")
     .map((m) => ({ role: m.role === "bot" ? "assistant" : "user", content: m.text }));
 
   const messages = [...recentHistory, { role: "user", content: userMessage }];
 
   let response = await getClient().messages.create({
-    model:      "claude-haiku-4-5-20251001", // Haiku para respuestas conversacionales → ~10x menos costo
-    max_tokens: 800,                          // reducido de 1024
+    model:      "claude-haiku-4-5-20251001",
+    max_tokens: 800,
     system:     systemPrompt,
     tools:      MR_MONEY_TOOLS,
     messages,
   });
 
-  // 3. Agentic loop
-  const proposals  = [];
+  const proposals   = [];
   const navigations = [];
-  let finalText    = "";
-  let iterations   = 0;
+  let finalText     = "";
+  let iterations    = 0;
 
   while (response.stop_reason === "tool_use" && iterations < 3) {
     iterations++;

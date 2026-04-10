@@ -3,101 +3,122 @@
 //
 // Orquestador de sincronización bancaria.
 //
-// FLUJO POR SYNC:
-//   1. Leer bank_account de Supabase (get credentials encriptadas)
-//   2. Desencriptar RUT + pass en memoria (nunca logueados)
-//   3. Llamar al proveedor (scraper/API)
-//   4. Adaptar movimientos al modelo canónico
-//   5. Deduplicar contra transacciones existentes
-//   6. Insertar solo transacciones nuevas (sin rawDescription)
-//   7. Actualizar last_balance y last_sync_at en bank_accounts
-//   8. Destruir credenciales de memoria (GC)
-//   9. Disparar ARIA en background (solo buckets, sin UUID)
+// FLUJO:
+//   1. Cargar bank_account (credentials encriptadas)
+//   2. Resetear status → "syncing"
+//   3. Desencriptar RUT + pass en memoria
+//   4. Llamar proveedor con onProgress (reporta estado 2FA en tiempo real)
+//   5. Adaptar movimientos al modelo canónico
+//   6. Deduplicar contra transacciones existentes
+//   7. Insertar solo transacciones nuevas (sin rawDescription)
+//   8. Actualizar last_balance, last_sync_at, status → "active"
+//   9. ARIA en background (buckets anónimos, sin UUID ni montos exactos)
 //
-// PRIVACIDAD:
-//   - rawDescription nunca persiste en Supabase
-//   - El balance exacto va a bank_accounts.last_balance (tabla usuario, RLS)
-//   - ARIA recibe solo income_range bucket y category — sin montos reales
+// 2FA (bchile):
+//   - onProgress detecta el mensaje de espera 2FA
+//   - Escribe "⏳ Esperando aprobación..." en last_sync_error
+//   - Frontend lo lee via polling GET /api/banking/accounts
+//   - Cuando usuario aprueba en app → scraper continúa → last_sync_error se limpia
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { getAdminClient } from "./supabaseClient.js";
-import { decrypt }        from "./encryptionService.js";
-import { adaptMovements, getProviderForBank } from "./bankingAdapter.js";
+import { getAdminClient }   from "./supabaseClient.js";
+import { decrypt }          from "./encryptionService.js";
+import { getProviderForBank }       from "./bankingAdapter.js";
+import { categorizeMovements }       from "./categorizerService.js";
 import { trackSpendingEvent } from "./ariaService.js";
 
 const db = () => getAdminClient();
 
-// ── Sync de una cuenta bancaria ───────────────────────────────────────────────
+// ── Sync de una cuenta ────────────────────────────────────────────────────────
+
+// Lock para evitar syncs paralelos de la misma cuenta
+const _syncingAccounts = new Set();
 
 export async function syncBankAccount(bankAccountId, userId) {
+  if (_syncingAccounts.has(bankAccountId)) {
+    console.log(`[sync] ya activo para ${bankAccountId}, ignorando`);
+    return { skipped: true };
+  }
+  _syncingAccounts.add(bankAccountId);
   const startedAt = Date.now();
-  console.log(`[sync] iniciando sync account=${bankAccountId}`);
+  console.log(`[sync] iniciando account=${bankAccountId}`);
 
-  // 1. Cargar la cuenta bancaria
+  // 1. Cargar cuenta — acepta status "active" o "error" (no "disconnected")
   const { data: account, error: accErr } = await db()
     .from("bank_accounts")
     .select("*")
     .eq("id",      bankAccountId)
     .eq("user_id", userId)
-    .eq("status",  "active")
+    .neq("status", "disconnected")
     .single();
 
   if (accErr || !account) {
-    throw new Error(`[sync] cuenta no encontrada o inactiva: ${bankAccountId}`);
+    throw new Error(`[sync] cuenta no encontrada: ${bankAccountId}`);
   }
 
+  // 2. Reset status al iniciar (limpia errores anteriores)
+  await db()
+    .from("bank_accounts")
+    .update({ status: "active", last_sync_error: null, updated_at: new Date().toISOString() })
+    .eq("id", bankAccountId);
+
   try {
-    // 2. Desencriptar credenciales en memoria
+    // 3. Desencriptar credenciales en memoria (nunca se logean)
     const rut      = decrypt(account.encrypted_rut);
     const password = decrypt(account.encrypted_pass);
 
-    // 3. Obtener proveedor y hacer fetch
+    // 4. onProgress — reporta cada paso del scraper al log
+    //    Para bchile: detecta la pantalla de 2FA y avisa al frontend
+    //    vía last_sync_error (campo temporal — se limpia al completar)
+    const onProgress = (step) => {
+      console.log(`[sync][${account.bank_id}] ${step}`);
+
+      if (/2FA|aprobaci[oó]n|esperando/i.test(step)) {
+        // Escribir estado 2FA para que el frontend lo vea via polling
+        db().from("bank_accounts")
+          .update({ last_sync_error: "⏳ Esperando aprobación en tu app Banco de Chile..." })
+          .eq("id", bankAccountId)
+          .then(() => {}).catch(() => {});
+      }
+    };
+
+    // 5. Obtener proveedor y ejecutar scrape
     const provider = await getProviderForBank(account.bank_id);
-    const { balance, movements } = await provider.fetchData({ rut, password });
+    const { balance, movements } = await provider.fetchData({ rut, password, onProgress });
 
-    // Destruir referencias explícitamente
-    // (JS GC las recogerá; hacemos null para ser explícitos)
-    // eslint-disable-next-line no-unused-vars
-    const _rut = null, _password = null;
+    // 6. Categorizar con sistema de 3 capas (reglas → cache → IA)
+    const adapted = await categorizeMovements(movements, account.bank_id);
 
-    // 4. Adaptar al modelo canónico
-    const adapted = adaptMovements(movements, account.bank_id);
-
-    // 5. Deduplicar — obtener external_ids ya existentes para esta cuenta
+    // 7. Deduplicar contra transacciones existentes
     const { data: existing } = await db()
       .from("transactions")
       .select("external_id")
       .eq("bank_account_id", bankAccountId)
       .not("external_id", "is", null);
 
-    const existingIds = new Set((existing || []).map((r) => r.external_id));
+    const existingIds  = new Set((existing || []).map((r) => r.external_id));
     const newMovements = adapted.filter((m) => !existingIds.has(m.externalId));
 
-    console.log(`[sync] ${adapted.length} movimientos totales, ${newMovements.length} nuevos`);
+    console.log(`[sync] ${account.bank_id}: ${adapted.length} total, ${newMovements.length} nuevos`);
 
-    // 6. Insertar transacciones nuevas (sin rawDescription)
+    // 8. Insertar transacciones nuevas (sin rawDescription — privacidad)
     if (newMovements.length > 0) {
       const rows = newMovements.map((m) => ({
-        user_id:         userId,
-        bank_account_id: bankAccountId,
-        amount:          m.amount,
-        category:        m.category,
-        description:     m.description,  // etiqueta limpia, no texto bancario raw
-        date:            m.date,
-        external_id:     m.externalId,
+        user_id:          userId,
+        bank_account_id:  bankAccountId,
+        amount:           m.amount,
+        category:         m.category,
+        description:      m.description,  // etiqueta limpia, no texto bancario
+        date:             m.date,
+        external_id:      m.externalId,
+        movement_source:  m.movementSource,
       }));
 
-      const { error: insertErr } = await db()
-        .from("transactions")
-        .insert(rows);
-
-      if (insertErr) {
-        console.error("[sync] error insertando transacciones:", insertErr.message);
-        throw insertErr;
-      }
+      const { error: insertErr } = await db().from("transactions").insert(rows);
+      if (insertErr) throw insertErr;
     }
 
-    // 7. Actualizar estado de la cuenta
+    // 9. Actualizar estado de la cuenta
     await db()
       .from("bank_accounts")
       .update({
@@ -105,11 +126,12 @@ export async function syncBankAccount(bankAccountId, userId) {
         last_sync_error: null,
         last_balance:    balance,
         status:          "active",
+        sync_count:      (account.sync_count ?? 0) + 1,
         updated_at:      new Date().toISOString(),
       })
       .eq("id", bankAccountId);
 
-    // 8. ARIA en background — solo señales anonimizadas, sin UUID ni montos exactos
+    // 10. ARIA en background
     fireAriaSignals(userId, account, newMovements).catch(() => {});
 
     const elapsed = Date.now() - startedAt;
@@ -124,24 +146,21 @@ export async function syncBankAccount(bankAccountId, userId) {
     };
 
   } catch (error) {
-    // Registrar error sin exponer credenciales
-    const msg = sanitizeErrorMessage(error.message);
+    const msg = sanitizeError(error.message);
     console.error(`[sync] error en ${account.bank_id}:`, msg);
 
     await db()
       .from("bank_accounts")
-      .update({
-        status:          "error",
-        last_sync_error: msg,
-        updated_at:      new Date().toISOString(),
-      })
+      .update({ status: "error", last_sync_error: msg, updated_at: new Date().toISOString() })
       .eq("id", bankAccountId);
 
     throw new Error(msg);
+  } finally {
+    _syncingAccounts.delete(bankAccountId);
   }
 }
 
-// ── Sync de todas las cuentas activas de un usuario ──────────────────────────
+// ── Sync de todas las cuentas del usuario ─────────────────────────────────────
 
 export async function syncAllUserAccounts(userId) {
   const { data: accounts } = await db()
@@ -156,12 +175,9 @@ export async function syncAllUserAccounts(userId) {
     accounts.map((acc) => syncBankAccount(acc.id, userId))
   );
 
-  const synced  = results.filter((r) => r.status === "fulfilled").length;
-  const errors  = results.filter((r) => r.status === "rejected").length;
-
   return {
-    synced,
-    errors,
+    synced:  results.filter((r) => r.status === "fulfilled").length,
+    errors:  results.filter((r) => r.status === "rejected").length,
     results: results.map((r, i) => ({
       bankId:  accounts[i].bank_id,
       success: r.status === "fulfilled",
@@ -170,12 +186,12 @@ export async function syncAllUserAccounts(userId) {
   };
 }
 
-// ── Balance consolidado por banco ─────────────────────────────────────────────
+// ── Balances por banco ────────────────────────────────────────────────────────
 
 export async function getBankBalances(userId) {
   const { data: accounts } = await db()
     .from("bank_accounts")
-    .select("id, bank_id, bank_name, bank_icon, last_balance, last_sync_at, status")
+    .select("id, bank_id, bank_name, bank_icon, last_balance, last_sync_at, last_sync_error, status, sync_count")
     .eq("user_id", userId)
     .neq("status", "disconnected")
     .order("created_at", { ascending: true });
@@ -186,13 +202,15 @@ export async function getBankBalances(userId) {
 
   return {
     accounts: accounts.map((a) => ({
-      id:          a.id,
-      bankId:      a.bank_id,
-      bankName:    a.bank_name,
-      bankIcon:    a.bank_icon,
-      balance:     a.last_balance || 0,
-      lastSyncAt:  a.last_sync_at,
-      status:      a.status,
+      id:            a.id,
+      bankId:        a.bank_id,
+      bankName:      a.bank_name,
+      bankIcon:      a.bank_icon,
+      balance:       a.last_balance   || 0,
+      lastSyncAt:    a.last_sync_at,
+      lastSyncError: a.last_sync_error,
+      status:        a.status,
+      syncCount:     a.sync_count     || 0,
     })),
     totalBalance,
   };
@@ -200,45 +218,30 @@ export async function getBankBalances(userId) {
 
 // ── Helpers privados ──────────────────────────────────────────────────────────
 
-// Evitar exponer stack traces o mensajes con credenciales en errores
-function sanitizeErrorMessage(msg) {
+function sanitizeError(msg) {
   if (!msg) return "Error de sincronización";
+  // No exponer credenciales ni stack traces en errores
   if (/password|rut|clave|credential/i.test(msg)) return "Error de autenticación bancaria";
-  if (/timeout|ETIMEDOUT|ECONNREFUSED/i.test(msg)) return "El banco no respondió. Intenta más tarde.";
-  if (/2FA|clave dinámica/i.test(msg))             return "El banco requiere autenticación adicional no soportada.";
+  if (/ETIMEDOUT|ECONNREFUSED|timeout.*connect/i.test(msg)) return "El banco no respondió. Intenta más tarde.";
+  if (msg.startsWith("2FA_TIMEOUT:"))  return msg.replace("2FA_TIMEOUT: ", "");
+  if (msg.startsWith("AUTH_FAILED:"))  return msg.replace("AUTH_FAILED: ", "");
   if (msg.length > 200) return msg.substring(0, 200);
   return msg;
 }
 
-// ARIA: señales anonimizadas sin UUID ni montos exactos
 async function fireAriaSignals(userId, account, newMovements) {
   if (!newMovements.length) return;
-
-  // Obtener profile solo para age_range, region, income_range
   const { data: profile } = await db()
     .from("profiles")
     .select("age_range, region, income_range")
     .eq("id", userId)
     .single();
-
   if (!profile) return;
-
-  // Una señal de gasto por cada movimiento nuevo (sin monto real ni descripción)
   for (const m of newMovements) {
-    if (m.amount >= 0) continue; // solo gastos
-
-    const fakeProfile = {
-      age_range:    profile.age_range,
-      region:       profile.region,
-      income_range: profile.income_range,
-    };
-
-    const fakeTx = {
-      amount:   Math.abs(m.amount),
-      category: m.category,
-      date:     m.date,
-    };
-
-    await trackSpendingEvent(fakeProfile, fakeTx).catch(() => {});
+    if (m.amount >= 0) continue;
+    await trackSpendingEvent(
+      { age_range: profile.age_range, region: profile.region, income_range: profile.income_range },
+      { amount: Math.abs(m.amount), category: m.category, date: m.date }
+    ).catch(() => {});
   }
 }

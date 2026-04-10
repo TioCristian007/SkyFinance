@@ -1,10 +1,17 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // services/financeService.js
 // Lógica financiera centralizada. Lee y escribe en Supabase via dbService.
+//
+// FIXES v2:
+//   · balance real desde bank_accounts.last_balance (suma de cuentas activas)
+//   · Si no hay bancos → fallback income_range - expenses
+//   · expenses solo cuenta transacciones category !== "income"
+//   · bankAccounts expuesto en summary para que Mr. Money lo vea
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as db from "./dbService.js";
 import { trackSpendingEvent, trackGoalEvent } from "./ariaService.js";
+import { getBankBalances } from "./bankSyncService.js";
 
 const MOCK_CHALLENGES = [
   { id: "no_uber",     label: "Sin Uber 7 días",         icon: "🚗", desc: "No gastes en transporte esta semana", category: "transport",     limitAmt: 0,     days: 7,  pts: 150, difficulty: "Medio"   },
@@ -24,11 +31,7 @@ const BADGE_DEFINITIONS = [
   { id: "elite",       label: "Elite Sky",    icon: "🏆", condition: (pts, txs, done) => pts >= 500 },
 ];
 
-// userId siempre viene del header x-user-id via req.userId
-// No hay fallback a DEV_USER_ID — si no hay userId, las rutas devuelven 401
-function getUid(userId) {
-  return userId || null;
-}
+function getUid(userId) { return userId || null; }
 
 function parseIncomeRange(range) {
   const map = { "0-500k": 350000, "500k-1M": 750000, "1M-2M": 1500000, "2M+": 2500000 };
@@ -44,17 +47,29 @@ function getCurrentPeriod() {
 
 export async function getSummary(userId) {
   const uid = getUid(userId);
-  const [profile, transactions] = await Promise.all([
+
+  const [profile, transactions, bankData] = await Promise.all([
     db.getProfile(uid),
     db.getTransactions(uid),
+    getBankBalances(uid).catch(() => ({ accounts: [], totalBalance: 0 })),
   ]);
 
-  const income   = parseIncomeRange(profile?.income_range);
-  const expenses = transactions.reduce((s, t) => s + (t.amount || 0), 0);
-  const balance  = income - expenses;
+  const estimatedIncome = parseIncomeRange(profile?.income_range);
+
+  // FIX: separar gastos de ingresos bancarios
+  const expenseTxs = transactions.filter(t => t.category !== "income" && (t.amount || 0) > 0);
+  const incomeTxs  = transactions.filter(t => t.category === "income"  && (t.amount || 0) > 0);
+
+  const expenses    = expenseTxs.reduce((s, t) => s + (t.amount || 0), 0);
+  const bankIncome  = incomeTxs.reduce((s, t)  => s + (t.amount || 0), 0);
+
+  // FIX: balance = suma real de cuentas bancarias si existen
+  const hasBankAccounts = bankData.accounts.length > 0;
+  const income  = hasBankAccounts ? Math.max(estimatedIncome, bankIncome) : estimatedIncome;
+  const balance = hasBankAccounts ? bankData.totalBalance : (estimatedIncome - expenses);
 
   const categoryTotals = {};
-  transactions.forEach((t) => {
+  expenseTxs.forEach((t) => {
     categoryTotals[t.category] = (categoryTotals[t.category] || 0) + t.amount;
   });
 
@@ -64,13 +79,17 @@ export async function getSummary(userId) {
     income,
     expenses,
     balance,
-    spendingRate:     Math.max(0, Math.round((expenses / income) * 100)),
-    savingsRate:      Math.max(0, Math.round((balance  / income) * 100)),
+    spendingRate:     Math.max(0, Math.round((expenses / Math.max(income, 1)) * 100)),
+    savingsRate:      hasBankAccounts ? null : Math.max(0, Math.round((balance / Math.max(income, 1)) * 100)),
     categoryTotals,
     transactionCount: transactions.length,
     topCategory:      topCategory ? { category: topCategory[0], amount: topCategory[1] } : null,
     period:           getCurrentPeriod(),
     currency:         "CLP",
+    // Datos bancarios expuestos para Mr. Money y frontend
+    bankAccounts:     bankData.accounts,
+    totalBankBalance: bankData.totalBalance,
+    hasBankAccounts,
   };
 }
 
@@ -85,7 +104,6 @@ export async function addTransaction(userId, tx) {
   const newTx = await db.insertTransaction(uid, tx);
   if (!newTx) throw new Error("Error al guardar la transacción");
 
-  // ARIA pipeline en background — no bloquea la respuesta
   db.getProfile(uid).then((profile) => {
     if (profile) trackSpendingEvent(profile, newTx).catch(() => {});
   });
@@ -104,9 +122,13 @@ export async function getGoals(userId) {
   const goals = await db.getGoals(uid);
   const sum   = await getSummary(uid);
 
+  const monthlyCapacity = sum.hasBankAccounts
+    ? Math.max(0, sum.totalBankBalance)
+    : Math.max(0, sum.balance);
+
   return goals.map((g) => ({
     ...g,
-    projection: calcGoalProjection(g, sum.balance),
+    projection: calcGoalProjection(g, monthlyCapacity),
   }));
 }
 
@@ -115,8 +137,9 @@ export async function addGoal(userId, goalData) {
   const goal = await db.insertGoal(uid, goalData);
   if (!goal) return { error: "Error al crear la meta" };
 
-  const sum                = await getSummary(uid);
-  const goalWithProjection = { ...goal, projection: calcGoalProjection(goal, sum.balance) };
+  const sum             = await getSummary(uid);
+  const monthlyCapacity = sum.hasBankAccounts ? Math.max(0, sum.totalBankBalance) : Math.max(0, sum.balance);
+  const goalWithProjection = { ...goal, projection: calcGoalProjection(goal, monthlyCapacity) };
 
   db.getProfile(uid).then((profile) => {
     if (profile) trackGoalEvent(profile, goalWithProjection, 0).catch(() => {});
@@ -130,9 +153,10 @@ export async function updateGoal(userId, goalId, updates) {
   const goal = await db.patchGoal(uid, goalId, updates);
   if (!goal) return { error: "Meta no encontrada" };
 
-  const sum                = await getSummary(uid);
-  const pct                = Math.round(((goal.savedAmount || 0) / (goal.targetAmount || 1)) * 100);
-  const goalWithProjection = { ...goal, projection: calcGoalProjection(goal, sum.balance) };
+  const sum             = await getSummary(uid);
+  const monthlyCapacity = sum.hasBankAccounts ? Math.max(0, sum.totalBankBalance) : Math.max(0, sum.balance);
+  const pct             = Math.round(((goal.savedAmount || 0) / (goal.targetAmount || 1)) * 100);
+  const goalWithProjection = { ...goal, projection: calcGoalProjection(goal, monthlyCapacity) };
 
   db.getProfile(uid).then((profile) => {
     if (profile) trackGoalEvent(profile, goalWithProjection, pct).catch(() => {});
@@ -216,9 +240,10 @@ export async function completeChallenge(userId, challengeId) {
 }
 
 export function calcChallengeProgress(challenge, transactions) {
-  const txs = transactions || [];
+  const txs = (transactions || []).filter(t => t.category !== "income");
+
   if (challenge.id === "daily_track") {
-    const done = Math.min(txs.length, 5);
+    const done = Math.min(transactions.length, 5);
     return { pct: Math.round((done / 5) * 100), done: done >= 5 };
   }
   if (challenge.id === "save_60k") {
@@ -295,7 +320,9 @@ export async function computeSimulation(userId, simulationId, customAmount = nul
 
   const income = parseIncomeRange(profile?.income_range);
   const categoryTotals = {};
-  transactions.forEach(t => { categoryTotals[t.category] = (categoryTotals[t.category] || 0) + t.amount; });
+  transactions
+    .filter(t => t.category !== "income")
+    .forEach(t => { categoryTotals[t.category] = (categoryTotals[t.category] || 0) + t.amount; });
 
   const QUICK_SIMS = [
     { id: "uber",   category: "transport",     cutPct: 0.6 },

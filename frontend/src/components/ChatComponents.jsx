@@ -1,5 +1,31 @@
-// components/ChatBubble.jsx
+// components/ChatComponents.jsx
 import { C } from "../data/colors.js";
+
+// Mr. Money avatar — usa la imagen real si está disponible, fallback a emoji
+function MrMoneyAvatar({ size = 32 }) {
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: "50%",
+      background: `linear-gradient(135deg,${C.green},${C.greenDark})`,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      flexShrink: 0, overflow: "hidden",
+      boxShadow: "0 2px 8px rgba(0,200,83,0.3)",
+    }}>
+      <img
+        src="/mr-money.png"
+        alt="Mr. Money"
+        style={{ width: "100%", height: "100%", objectFit: "cover" }}
+        onError={(e) => {
+          e.target.style.display = "none";
+          e.target.nextSibling.style.display = "flex";
+        }}
+      />
+      <span style={{ display: "none", fontSize: size * 0.44, alignItems: "center", justifyContent: "center", width: "100%", height: "100%" }}>
+        💸
+      </span>
+    </div>
+  );
+}
 
 function renderBold(t) {
   return t.split(/\*\*(.*?)\*\*/g).map((p, i) =>
@@ -15,13 +41,8 @@ export function ChatBubble({ msg }) {
       marginBottom: 4, animation: "fadeUp 0.25s ease",
     }}>
       {!isUser && (
-        <div style={{
-          width: 32, height: 32, borderRadius: "50%",
-          background: `linear-gradient(135deg,${C.green},${C.greenDark})`,
-          display: "flex", alignItems: "center", justifyContent: "center",
-          fontSize: 14, marginRight: 8, flexShrink: 0, alignSelf: "flex-end",
-        }}>
-          💸
+        <div style={{ marginRight: 8, alignSelf: "flex-end" }}>
+          <MrMoneyAvatar size={32} />
         </div>
       )}
       <div style={{
@@ -44,29 +65,30 @@ export function ChatBubble({ msg }) {
   );
 }
 
-// components/TypingDots.jsx
 export function TypingDots() {
   return (
-    <div style={{
-      display: "flex", gap: 5, padding: "10px 14px",
-      background: C.white, borderRadius: "16px 16px 16px 4px",
-      width: "fit-content", border: `1px solid ${C.border}`,
-    }}>
-      {[0, 1, 2].map((i) => (
-        <span key={i} style={{
-          width: 7, height: 7, borderRadius: "50%", background: C.green,
-          display: "block", animation: "bounce 1.2s infinite",
-          animationDelay: `${i * 0.2}s`,
-        }} />
-      ))}
+    <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
+      <MrMoneyAvatar size={32} />
+      <div style={{
+        display: "flex", gap: 5, padding: "10px 14px",
+        background: C.white, borderRadius: "16px 16px 16px 4px",
+        width: "fit-content", border: `1px solid ${C.border}`,
+      }}>
+        {[0, 1, 2].map((i) => (
+          <span key={i} style={{
+            width: 7, height: 7, borderRadius: "50%", background: C.green,
+            display: "block", animation: "bounce 1.2s infinite",
+            animationDelay: `${i * 0.2}s`,
+          }} />
+        ))}
+      </div>
     </div>
   );
 }
 
-// components/XPBar.jsx
 export function XPBar({ points }) {
-  const level   = Math.floor(points / 100) + 1;
-  const pct     = points % 100;
+  const level = Math.floor(points / 100) + 1;
+  const pct   = points % 100;
   return (
     <div style={{
       background: "rgba(255,255,255,0.08)", borderRadius: 14,

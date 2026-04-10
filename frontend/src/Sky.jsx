@@ -94,6 +94,8 @@ export default function Sky({ userId, userEmail }) {
   const [goalLoading,    setGoalLoading]    = useState(false);
   const [savingsTarget,  setSavingsTarget]  = useState(null);
   const [bankBalances,   setBankBalances]   = useState({ accounts: [], totalBalance: 0 });
+  const [txFilter,       setTxFilter]       = useState("all");   // "all" | "expense" | "income"
+  const [bankFilter,     setBankFilter]     = useState("all");   // "all" | bankAccountId
 
   // ── Propuestas de Mr. Money ────────────────────────────────────────────────
   const [pendingProposals, setPendingProposals] = useState([]);
@@ -120,12 +122,19 @@ export default function Sky({ userId, userEmail }) {
         setTxs(txRes.transactions);
         setChallenges(chRes);
         setGoals(goalsRes.goals);
-        setBankBalances(bankAccRes);
+        // FIX: bankBalances desde la llamada directa, con fallback al summary embebido
+        const bankData = bankAccRes.accounts?.length
+          ? bankAccRes
+          : { accounts: summaryRes.summary.bankAccounts || [], totalBalance: summaryRes.summary.totalBankBalance || 0 };
+        setBankBalances(bankData);
 
-        // Actualizar mensaje inicial con datos reales
+        // FIX: mensaje inicial con balance real
+        const hasBanks    = summaryRes.summary.hasBankAccounts;
+        const displayBal  = hasBanks ? summaryRes.summary.totalBankBalance : summaryRes.summary.balance;
+        const balLabel    = hasBanks ? "saldo bancario real" : "disponibles (estimado)";
         setMsgs([{
           ...INITIAL_MESSAGE,
-          text: `Hola, ${summaryRes.profile.user.name}. Soy Mr. Money, tu asesor financiero en Sky. 💼\n\nCuentas con ${fmt(summaryRes.summary.balance)} disponibles este mes. Te recomiendo explorar los desafíos activos para optimizar tu ahorro.`,
+          text: `Hola, ${summaryRes.profile.user.name}. Soy Mr. Money, tu asesor financiero en Sky. 💼\n\nTienes ${fmt(displayBal)} ${balLabel} este mes. Te recomiendo explorar los desafíos activos para optimizar tu ahorro.`,
         }]);
       } catch (e) {
         console.error("[Sky] init error:", e.message);
@@ -355,12 +364,17 @@ export default function Sky({ userId, userEmail }) {
     );
   }
 
-  const income      = summary?.income      ?? 0;
-  const expenses    = summary?.expenses    ?? 0;
-  const balance     = summary?.balance     ?? 0;
-  const savingsRate = summary?.savingsRate ?? 0;
-  const catTotals   = summary?.categoryTotals ?? {};
-  const points      = profile?.points      ?? 0;
+  const income           = summary?.income           ?? 0;
+  const expenses         = summary?.expenses         ?? 0;
+  // FIX: usar balance bancario real si hay cuentas conectadas
+  // FIX: usar bankBalances state (fuente directa) en vez de summary.hasBankAccounts
+  // summary.hasBankAccounts puede ser false si getBankBalances() falló en el backend
+  const hasBankAccounts  = (bankBalances.accounts?.length ?? 0) > 0;
+  const totalBankBalance = hasBankAccounts ? bankBalances.totalBalance : 0;
+  const balance          = hasBankAccounts ? totalBankBalance : (summary?.balance ?? 0);
+  const savingsRate      = summary?.savingsRate      ?? 0;
+  const catTotals        = summary?.categoryTotals   ?? {};
+  const points           = profile?.points           ?? 0;
 
   return (
     <>
@@ -402,9 +416,12 @@ export default function Sky({ userId, userEmail }) {
                 <div style={{ fontSize: 11, color: C.gold, fontWeight: 700, background: "rgba(249,168,37,0.15)", padding: "4px 10px", borderRadius: 20 }}>
                   ⭐ {points} pts
                 </div>
-                <div style={{ background: C.green, color: C.white, fontWeight: 800, fontSize: 13, padding: "5px 12px", borderRadius: 20 }}>
-                  sky
-                </div>
+                <img
+                  src="/sky-logo-transparent.png"
+                  alt="Sky"
+                  style={{ height: 26, objectFit: "contain" }}
+                  onError={(e) => { e.target.style.display = "none"; }}
+                />
                 <button
                   onClick={async () => { try { await signOut(); } catch(e) { console.error(e); } }}
                   title="Cerrar sesión"
@@ -420,16 +437,36 @@ export default function Sky({ userId, userEmail }) {
             </div>
 
             <div style={{ background: "rgba(255,255,255,0.06)", borderRadius: 16, padding: "12px 16px", border: "1px solid rgba(255,255,255,0.08)", marginBottom: 10 }}>
-              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.45)", fontWeight: 600, letterSpacing: "0.06em", marginBottom: 4 }}>DISPONIBLE ESTE MES</div>
+              {/* FIX: label dinámico según fuente del balance */}
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.45)", fontWeight: 600, letterSpacing: "0.06em" }}>
+                  {hasBankAccounts ? "SALDO BANCARIO REAL" : "DISPONIBLE ESTE MES (estimado)"}
+                </div>
+                {hasBankAccounts && (
+                  <div style={{ fontSize: 9, background: "rgba(74,222,128,0.2)", color: "#4ADE80", borderRadius: 8, padding: "2px 6px", fontWeight: 700 }}>
+                    🏦 EN VIVO
+                  </div>
+                )}
+              </div>
               <div style={{ fontSize: 24, fontWeight: 800, color: balance < 0 ? "#FF6B6B" : C.white, letterSpacing: "-1px", marginBottom: 8 }}>
                 {fmt(balance)}
               </div>
+              {/* Mini desglose por banco si hay cuentas */}
+              {hasBankAccounts && bankBalances.accounts?.length > 1 && (
+                <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+                  {bankBalances.accounts.map(acc => (
+                    <div key={acc.id} style={{ fontSize: 10, color: "rgba(255,255,255,0.55)", background: "rgba(255,255,255,0.07)", borderRadius: 8, padding: "3px 8px" }}>
+                      {acc.bankIcon} {acc.bankName.replace("Banco ", "")}: {fmtK(acc.balance)}
+                    </div>
+                  ))}
+                </div>
+              )}
               <div style={{ display: "flex", gap: 16 }}>
                 {[
-                  ["INGRESOS", fmtK(income),    C.green],
-                  ["GASTADO",  fmtK(expenses),  "#FF6B6B"],
+                  ["GASTOS",  fmtK(expenses),  "#FF6B6B"],
                   ["TX",       txs.length,       "#FFD166"],
-                  ["AHORRO",   `${savingsRate}%`, savingsRate >= 20 ? C.green : C.amber],
+                  ...(savingsRate !== null ? [["AHORRO", `${savingsRate}%`, savingsRate >= 20 ? C.green : C.amber]] : []),
+                  ...(hasBankAccounts ? [["CUENTAS", bankBalances.accounts?.length ?? 0, C.green]] : [["INGRESOS", fmtK(income), C.green]]),
                 ].map(([l, v, col]) => (
                   <div key={l}>
                     <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", fontWeight: 600 }}>{l}</div>
@@ -695,21 +732,71 @@ export default function Sky({ userId, userEmail }) {
             )}
 
             {/* EXPENSES */}
-            {tab === "expenses" && (
-              <div style={{ padding: "14px 14px 24px", display: "flex", flexDirection: "column", gap: 12 }}>
-                <AddTxForm onAdd={addTx} disabled={txLoading} />
-                <div style={{ background: C.white, borderRadius: 18, padding: "14px 16px", border: `1px solid ${C.border}` }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: C.textPrimary }}>Transacciones</div>
-                    <div style={{ fontSize: 12, color: C.textMuted }}>{txs.length} registros</div>
+            {tab === "expenses" && (() => {
+              const filtered = txs.filter(tx => {
+                const typeOk = txFilter === "all" ? true : txFilter === "income" ? tx.category === "income" : tx.category !== "income";
+                const bankOk = bankFilter === "all" ? true : tx.bank_account_id === bankFilter;
+                return typeOk && bankOk;
+              });
+              const filteredExpenses = filtered.filter(t => t.category !== "income").reduce((s, t) => s + (t.amount || 0), 0);
+              const filteredIncome   = filtered.filter(t => t.category === "income").reduce((s, t) => s + (t.amount || 0), 0);
+              const banksInTxs = [...new Map(txs.filter(t => t.bank_account_id).map(t => [t.bank_account_id, { id: t.bank_account_id, name: bankBalances.accounts?.find(a => a.id === t.bank_account_id)?.bankName ?? "Banco", icon: bankBalances.accounts?.find(a => a.id === t.bank_account_id)?.bankIcon ?? "🏦" }])).values()];
+
+              return (
+                <div style={{ padding: "14px 14px 24px", display: "flex", flexDirection: "column", gap: 12 }}>
+                  <AddTxForm onAdd={addTx} disabled={txLoading} />
+
+                  {/* Resumen rápido */}
+                  <div style={{ display: "flex", gap: 10 }}>
+                    {[["Gastos", fmtK(filteredExpenses), "#FF6B6B"], ["Ingresos", fmtK(filteredIncome), "#22C55E"], ["Total", filtered.length, C.textSecondary]].map(([l, v, col]) => (
+                      <div key={l} style={{ flex: 1, background: C.white, borderRadius: 14, padding: "10px 12px", border: `1px solid ${C.border}`, textAlign: "center" }}>
+                        <div style={{ fontSize: 14, fontWeight: 800, color: col }}>{v}</div>
+                        <div style={{ fontSize: 11, color: C.textMuted }}>{l}</div>
+                      </div>
+                    ))}
                   </div>
-                  {txs.length === 0
-                    ? <div style={{ fontSize: 13, color: C.textMuted, textAlign: "center", padding: "20px 0" }}>Sin transacciones. ¡Agrega la primera!</div>
-                    : txs.map((tx) => <TxItem key={tx.id} tx={tx} onDelete={deleteTx} />)
-                  }
+
+                  {/* Filtros */}
+                  <div style={{ background: C.white, borderRadius: 14, padding: "12px 14px", border: `1px solid ${C.border}`, display: "flex", flexDirection: "column", gap: 10 }}>
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, marginBottom: 6, letterSpacing: "0.05em" }}>TIPO</div>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        {[["all", "Todos"], ["expense", "Gastos"], ["income", "Ingresos"]].map(([val, label]) => (
+                          <button key={val} onClick={() => setTxFilter(val)} style={{ flex: 1, padding: "7px 0", borderRadius: 10, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 600, background: txFilter === val ? C.green : C.bg, color: txFilter === val ? C.white : C.textSecondary, transition: "all 0.15s" }}>
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {banksInTxs.length > 1 && (
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, marginBottom: 6, letterSpacing: "0.05em" }}>BANCO</div>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          <button onClick={() => setBankFilter("all")} style={{ padding: "7px 14px", borderRadius: 10, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 600, background: bankFilter === "all" ? C.navy : C.bg, color: bankFilter === "all" ? C.white : C.textSecondary }}>Todos</button>
+                          {banksInTxs.map(b => (
+                            <button key={b.id} onClick={() => setBankFilter(b.id)} style={{ padding: "7px 14px", borderRadius: 10, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 600, background: bankFilter === b.id ? C.navy : C.bg, color: bankFilter === b.id ? C.white : C.textSecondary }}>
+                              {b.icon} {b.name.replace("Banco ", "")}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Lista */}
+                  <div style={{ background: C.white, borderRadius: 18, padding: "14px 16px", border: `1px solid ${C.border}` }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: C.textPrimary }}>Movimientos</div>
+                      <div style={{ fontSize: 12, color: C.textMuted }}>{filtered.length} de {txs.length}</div>
+                    </div>
+                    {filtered.length === 0
+                      ? <div style={{ fontSize: 13, color: C.textMuted, textAlign: "center", padding: "20px 0" }}>{txs.length === 0 ? "Sin transacciones. ¡Agrega la primera!" : "Sin resultados para este filtro"}</div>
+                      : filtered.map(tx => <TxItem key={tx.id} tx={{ ...tx, bank_name: bankBalances.accounts?.find(a => a.id === tx.bank_account_id)?.bankName }} onDelete={deleteTx} />)
+                    }
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             {/* CHAT */}
             {tab === "chat" && (
@@ -729,12 +816,7 @@ export default function Sky({ userId, userEmail }) {
                       )}
                     </div>
                   ))}
-                  {typing && (
-                    <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
-                      <div style={{ width: 32, height: 32, borderRadius: "50%", background: `linear-gradient(135deg,${C.green},${C.greenDark})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>💸</div>
-                      <TypingDots />
-                    </div>
-                  )}
+                  {typing && <TypingDots />}
                   <div ref={bottomRef} />
                 </div>
 
