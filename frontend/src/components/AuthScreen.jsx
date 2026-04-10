@@ -97,10 +97,20 @@ export default function AuthScreen({ onAuth }) {
             fontSize:       26,
             marginBottom:   14,
           }}>
-            💸
+            <img
+              src="/assets/sky-logo-transparent.png"
+              alt="Sky"
+              style={{ height: 32, objectFit: "contain" }}
+              onError={e => {
+                e.target.style.display = "none";
+                e.target.parentNode.insertAdjacentHTML("beforeend",
+                  `<svg viewBox="0 0 24 24" width="26" height="26" fill="none"><path d="M12 2L2 7v11h20V7L12 2z" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 18v-6h8v6" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>`
+                );
+              }}
+            />
           </div>
           <div style={{ fontSize: 26, fontWeight: 800, color: C.navy, letterSpacing: "-0.5px" }}>
-            Sky Finance
+            Sky
           </div>
           <div style={{ fontSize: 14, color: C.textSecondary, marginTop: 6 }}>
             {mode === "login" ? "Bienvenido de vuelta" : "Crea tu cuenta"}

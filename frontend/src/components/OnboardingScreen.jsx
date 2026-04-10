@@ -108,12 +108,19 @@ export default function OnboardingScreen({ userId, onComplete }) {
         {/* Step 0 — Bienvenida */}
         {step === 0 && (
           <div style={{ textAlign: "center" }}>
-            <div style={{ fontSize: 52, marginBottom: 16 }}>💸</div>
+            <div style={{ marginBottom: 16 }}>
+              <img
+                src="/assets/sky-logo-transparent.png"
+                alt="Sky"
+                style={{ height: 48, objectFit: "contain" }}
+                onError={e => { e.target.style.display = "none"; }}
+              />
+            </div>
             <div style={{ fontSize: 24, fontWeight: 800, color: C.navy, marginBottom: 12 }}>
               Bienvenido a Sky
             </div>
             <div style={{ fontSize: 15, color: C.textSecondary, lineHeight: 1.6, marginBottom: 32 }}>
-              Tu asesor financiero personal. En 3 preguntas rápidas personalizamos tu experiencia.
+              Tu compañero financiero. En 3 preguntas rápidas personalizamos tu experiencia.
             </div>
             <div style={{
               background:   C.bg,

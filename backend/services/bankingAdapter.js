@@ -68,26 +68,104 @@ function getChromePath() {
 
 // ── Categorizador de transacciones ───────────────────────────────────────────
 
+// ── Reglas de categorización — optimizadas para bancos chilenos ──────────────
+// Banco de Chile usa descripciones como:
+//   "COMPRA LIDER EXPRESS", "PAG CUENTA ENTEL", "TRF A CTA VIA TEF",
+//   "CARGO NETFLIX", "COMPRA FARMACIA SALCOBRAND", "PAG TAR CRED"
+// Los patrones cubren tanto texto libre como códigos de transacción internos.
+
 const CATEGORY_RULES = [
-  { pattern: /arriendo|renta|condominio|gastos\s+comunes|dividendo\s+hipotecario|administracion\s+edificio/i,   category: "housing"      },
-  { pattern: /supermercado|lider|jumbo|tottus|santa\s+isabel|unimarc|delivery|uber.?eat|pedidos.?ya|rappi|domino|mcdonalds|burger|kfc|subway|restaurant|panaderia|almacen|walmart|acuenta/i, category: "food" },
-  { pattern: /uber|cabify|didi|taxi|bip|transantiago|red\s+movilidad|copec|shell|petrobras|esso|estacion.?servicio|peaje|autopista|enex/i, category: "transport" },
-  { pattern: /netflix|spotify|amazon.?prime|hbo|disney|youtube.?premium|apple|microsoft|google.?one|adobe|dropbox|icloud|suscripcion|subscripcion/i, category: "subscriptions" },
-  { pattern: /steam|playstation|xbox|nintendo|cine|cinema|hoyts|cinemark|ticketmaster|puntoticket|concierto|teatro|evento/i, category: "entertainment" },
-  { pattern: /farmacia|salcobrand|cruz.?verde|ahumada|medico|clinica|hospital|consulta|isapre|fonasa|dental|optica/i, category: "health" },
-  { pattern: /universidad|colegio|instituto|academia|curso|escuela|educacion|matri[ck]ula/i,                    category: "education"    },
-  { pattern: /seguro|insurance|metlife|sura\s+seguros/i,                                                        category: "insurance"    },
-  { pattern: /cuota|credito|prestamo|dividendo|financiamiento/i,                                                 category: "debt_payment" },
-  { pattern: /deposito\s+plazo|fondo\s+mutuo|inversiones/i,                                                     category: "savings"      },
+  // ── Vivienda ────────────────────────────────────────────────────────────────
+  {
+    category: "housing",
+    pattern: /arriendo|renta|condominio|gastos\s*comunes|dividendo\s*hipot|adm\s*edificio|administracion\s*edif|mantenci[oó]n\s*edif/i,
+  },
+  // ── Alimentación ────────────────────────────────────────────────────────────
+  {
+    category: "food",
+    // bchile usa "Pago:NOMBRE" — cubrimos tanto nombre directo como prefijado
+    pattern: /pago:.*?(lider|jumbo|tottus|santa.*isabel|unimarc|unimark|acuenta|mayorista|super\s*10|ekono|cafeter|take.?go|restaurant|sushi|pizza|burger|mcdonalds|kfc|subway|dominos|wendys|telepizza|starbucks|cafe|coffee|fuente|rotiser|comedor|panaderi|pasteleri|carnicer|verdurer)|lider|jumbo|tottus|santa\s*isabel|unimarc|unimark|acuenta|mayorista|ekono|listo|bigbox|rappi|uber\s*eat|pedidos\s*ya|delivery|junaeb|mercadopago/i,
+  },
+  // ── Transporte ──────────────────────────────────────────────────────────────
+  {
+    category: "transport",
+    // "Pago:metro Los Leones" es el patrón real de bchile para Metro
+    pattern: /pago:.*?(metro|uber|cabify|didi|taxi|copec|shell|petrobras|esso|enex|peaje|autopista|parking|estacion|bus\s*tur|turbus|pullman|jac\s*bus)|metro(?!\s*cuadrado)|bip[!\s]|red\s*movilidad|transantiago|uber(?!\s*eat)|cabify|didi|autopass|costanera|vespucio/i,
+  },
+  // ── Suscripciones y streaming ────────────────────────────────────────────────
+  {
+    category: "subscriptions",
+    // bchile: "Cargo Netflix", "Pago:spotify", "Cargo:apple", etc.
+    pattern: /(?:cargo|pago):?\s*(?:netflix|spotify|amazon|hbo|disney|paramount|apple|youtube|google|microsoft|adobe|dropbox|icloud|canva|notion|chatgpt|openai|twitch|deezer|tidal|crunchyroll)|netflix|spotify|amazon\s*prime|prime\s*video|hbo\s*max|disney\+?|youtube\s*premium|google\s*one|microsoft\s*365|adobe|icloud|suscripci[oó]n|subscripci[oó]n|membresia|cargo\s*mensual/i,
+  },
+  // ── Entretenimiento ──────────────────────────────────────────────────────────
+  {
+    category: "entertainment",
+    pattern: /steam|playstation|xbox|nintendo|cine|hoyts|cinemark|cinemundo|ticketmaster|puntoticket|ticketek|concierto|teatro|espect[aá]culo|evento|parque\s*arauco|mall|costanera\s*center|paseo|librerias|fnac|gaming/i,
+  },
+  // ── Salud ────────────────────────────────────────────────────────────────────
+  {
+    category: "health",
+    pattern: /farmacia|salcobrand|cruz\s*verde|ahumada|dr\s*simi|knop|medico|cl[ií]nica|hospital|consultorio|isapre|fonasa|dental|odontolog|optica|laboratorio|policl[ií]nico|urgencia|maternidad|medilab|bupa|colmena|consalud|banmedica|vidaintegra/i,
+  },
+  // ── Educación ────────────────────────────────────────────────────────────────
+  {
+    category: "education",
+    pattern: /universidad|u\.\s*de|uc\s+|puc\s+|usach|uchile|udp|uai|uandes|duoc|inacap|colegio|liceo|instituto|academia|curso|escuela|matr[ií]cula|arancel|cae|credito\s*universitario|becas\s*chile/i,
+  },
+  // ── Seguros ──────────────────────────────────────────────────────────────────
+  {
+    category: "insurance",
+    pattern: /seguro|insurance|metlife|sura|mapfre|zurich|liberty\s*seg|bci\s*seg|penta\s*seg|cargo\s*seg|prima\s*seg|cia\s*seg|compania\s*seg/i,
+  },
+  // ── Deudas y créditos ────────────────────────────────────────────────────────
+  {
+    category: "debt_payment",
+    // bchile: "Pago Tarjeta Credito", "Cuota Credito Consumo", "Cargo Cred"
+    pattern: /pago?\s*tar(?:jeta)?(?:\s*cr[eé]d)?|cuota|cr[eé]dito\s*cons|pr[eé]stamo|dividendo\s*hip|financiamiento|pag\s*cred|cargo\s*cred|abono\s*cred|cred(?:ito)?\s*hip|avance\s*efect|linea\s*de\s*cr[eé]d/i,
+  },
+  // ── Ahorro e inversión ───────────────────────────────────────────────────────
+  {
+    category: "savings",
+    pattern: /dep[oó]sito\s*plazo|dap\s|fondo\s*mutuo|inversion|ahorro|cuenta\s*ahorro|cta\s*ahorro|aporte\s*afp|cotizacion\s*afp|comisi[oó]n\s*afp|retiro\s*afp|apv/i,
+  },
+  // ── Servicios básicos ────────────────────────────────────────────────────────
+  {
+    category: "utilities",
+    // bchile: "Pago:entel", "Pago:movistar cuenta", "Cargo:enel"
+    pattern: /(?:pago|cargo):?\s*(?:entel|movistar|claro|wom|vtr|gtd|enel|chilectra|cge|esval|essbio|smapa|metrogas|aguas)|enel|chilectra|cge(?:\s|$)|electricidad|esval|essbio|metrogas|entel|movistar|claro(?:\s|$)|wom(?:\s|$)|vtr(?:\s|$)|gtd(?:\s|$)|agua\s*potable|servicio\s*bas/i,
+  },
+  // ── Retail y tiendas ─────────────────────────────────────────────────────────
+  {
+    category: "shopping",
+    // bchile: "Pago:falabella", "Compra Comercio Ripley"
+    pattern: /(?:pago|compra\s*comercio):?\s*(?:falabella|ripley|paris|abcdin|hites|polar|johnson|corona|zara|adidas|nike|decathlon|easy|sodimac)|falabella|ripley|abcdin|hites|la\s*polar|johnson\s|tricot|zara|h&m|forever\s*21|adidas|nike|decathlon|easy(?:\s|$)|sodimac|homecenter|ferreter|muebles(?:\s|$)|compra\s*comercio/i,
+  },
 ];
 
 export function inferCategory(description, amount) {
   if (!description) return amount > 0 ? "income" : "other";
-  const text = description.toUpperCase();
-  if (amount > 0 && /transferencia\s+recibida|abono|remuneracion|sueldo|salario|honorario/i.test(text)) return "income";
+  const text = description.trim();
+
+  // ── Ingresos — detección prioritaria ──────────────────────────────────────
+  if (amount > 0) {
+    // bchile ingresos: "Traspaso De:NOMBRE", "Abono Remuneracion", "Deposito De:"
+    if (/traspaso\s*de:|abono|remuner|sueldo|salario|honorario|dep[oó]sito\s*de|deposito\s*de|liquidaci[oó]n|finiquito|bono\s|gratificaci[oó]n|devoluci[oó]n\s*impu|transferencia\s*recib/i.test(text)) {
+      return "income";
+    }
+  }
+
+  // ── Aplicar reglas en orden ────────────────────────────────────────────────
   for (const rule of CATEGORY_RULES) {
     if (rule.pattern.test(text)) return rule.category;
   }
+
+  // ── Transferencias salientes → "other" con subcategorización futura ───────
+  // bchile transferencias salientes: "Traspaso A:NOMBRE", "Transferencia A:"
+  if (amount < 0 && /traspaso\s*a:|transferencia\s*a:|trf|tef|env[ií]o|giro|khipu/i.test(text)) return "transfer";
+  // Comisiones bancarias
+  if (/comision|comisión|cargo\s*mantenci|mantenci[oó]n\s*cuenta|iva\s*comis/i.test(text)) return "banking_fee";
+
   return amount > 0 ? "income" : "other";
 }
 
@@ -128,10 +206,22 @@ function normalizeDate(raw) {
 
 function sanitizeDescription(raw, category) {
   const labels = {
-    housing: "Vivienda", food: "Alimentación", transport: "Transporte",
-    subscriptions: "Suscripción", entertainment: "Entretención", health: "Salud",
-    education: "Educación", insurance: "Seguro", debt_payment: "Cuota crédito",
-    savings: "Ahorro", income: "Ingreso", other: "Gasto",
+    housing:      "Vivienda",
+    food:         "Alimentación",
+    transport:    "Transporte",
+    subscriptions:"Suscripción",
+    entertainment:"Entretención",
+    health:       "Salud",
+    education:    "Educación",
+    insurance:    "Seguro",
+    debt_payment: "Cuota crédito",
+    savings:      "Ahorro",
+    utilities:    "Servicios básicos",
+    shopping:     "Compras",
+    transfer:     "Transferencia",
+    banking_fee:  "Comisión bancaria",
+    income:       "Ingreso",
+    other:        "Gasto",
   };
   return labels[category] ?? "Gasto";
 }

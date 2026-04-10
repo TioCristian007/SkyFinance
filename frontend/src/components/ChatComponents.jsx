@@ -1,7 +1,7 @@
 // components/ChatComponents.jsx
 import { C } from "../data/colors.js";
 
-// Mr. Money avatar — usa la imagen real si está disponible, fallback a emoji
+// Mr. Money avatar — usa la imagen real si está disponible, fallback a ícono SVG
 function MrMoneyAvatar({ size = 32 }) {
   return (
     <div style={{
@@ -9,10 +9,10 @@ function MrMoneyAvatar({ size = 32 }) {
       background: `linear-gradient(135deg,${C.green},${C.greenDark})`,
       display: "flex", alignItems: "center", justifyContent: "center",
       flexShrink: 0, overflow: "hidden",
-      boxShadow: "0 2px 8px rgba(0,200,83,0.3)",
+      boxShadow: "0 2px 8px rgba(0,200,83,0.2)",
     }}>
       <img
-        src="/mr-money.png"
+        src="/assets/mr-money.png"
         alt="Mr. Money"
         style={{ width: "100%", height: "100%", objectFit: "cover" }}
         onError={(e) => {
@@ -20,8 +20,11 @@ function MrMoneyAvatar({ size = 32 }) {
           e.target.nextSibling.style.display = "flex";
         }}
       />
-      <span style={{ display: "none", fontSize: size * 0.44, alignItems: "center", justifyContent: "center", width: "100%", height: "100%" }}>
-        💸
+      <span style={{ display: "none", alignItems: "center", justifyContent: "center", width: "100%", height: "100%" }}>
+        <svg viewBox="0 0 24 24" width={size * 0.5} height={size * 0.5} fill="none">
+          <circle cx="12" cy="8" r="4" stroke="#fff" strokeWidth="1.5"/>
+          <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke="#fff" strokeWidth="1.5" strokeLinecap="round"/>
+        </svg>
       </span>
     </div>
   );

@@ -191,27 +191,50 @@ export async function syncAllUserAccounts(userId) {
 export async function getBankBalances(userId) {
   const { data: accounts } = await db()
     .from("bank_accounts")
-    .select("id, bank_id, bank_name, bank_icon, last_balance, last_sync_at, last_sync_error, status, sync_count")
+    .select("id, bank_id, bank_name, bank_icon, last_balance, last_sync_at, last_sync_error, status, sync_count, account_type, account_last4")
     .eq("user_id", userId)
     .neq("status", "disconnected")
     .order("created_at", { ascending: true });
 
   if (!accounts?.length) return { accounts: [], totalBalance: 0 };
 
+  const now          = Date.now();
   const totalBalance = accounts.reduce((sum, a) => sum + (a.last_balance || 0), 0);
 
+  // Tipo de cuenta por defecto según banco — se usa si el scraper no lo guardó
+  const DEFAULT_ACCOUNT_TYPE = {
+    bancoestado: "CuentaRUT",
+    bchile:      "Cta. Corriente",
+    santander:   "Cta. Corriente",
+    bci:         "Cta. Vista",
+    falabella:   "CMR Cuenta",
+    itau:        "Cta. Corriente",
+    scotiabank:  "Cta. Corriente",
+  };
+
   return {
-    accounts: accounts.map((a) => ({
-      id:            a.id,
-      bankId:        a.bank_id,
-      bankName:      a.bank_name,
-      bankIcon:      a.bank_icon,
-      balance:       a.last_balance   || 0,
-      lastSyncAt:    a.last_sync_at,
-      lastSyncError: a.last_sync_error,
-      status:        a.status,
-      syncCount:     a.sync_count     || 0,
-    })),
+    accounts: accounts.map((a) => {
+      const lastSync   = a.last_sync_at ? new Date(a.last_sync_at).getTime() : null;
+      const minutesAgo = lastSync ? Math.max(0, Math.floor((now - lastSync) / 60000)) : null;
+
+      return {
+        id:            a.id,
+        bankId:        a.bank_id,
+        bankName:      a.bank_name,
+        bankIcon:      a.bank_icon,
+        balance:       a.last_balance    || 0,
+        lastSyncAt:    a.last_sync_at,
+        lastSyncError: a.last_sync_error,
+        status:        a.status,
+        syncCount:     a.sync_count      || 0,
+        // minutesAgo calculado aquí — el frontend no tiene que hacer aritmética de fechas
+        minutesAgo,
+        // accountType: lo que guardó el scraper, o el default por banco
+        accountType:   a.account_type   || DEFAULT_ACCOUNT_TYPE[a.bank_id] || "Cuenta",
+        // last4: últimos 4 dígitos del número de cuenta si el scraper los guardó
+        last4:         a.account_last4  || null,
+      };
+    }),
     totalBalance,
   };
 }

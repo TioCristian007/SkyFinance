@@ -26,6 +26,48 @@ const fmtDate = (iso) => {
 const is2FAWaiting = (acc) =>
   acc.status === "error" && /Esperando aprobación/i.test(acc.lastSyncError || "");
 
+// Logos reales de bancos chilenos
+const BANK_LOGOS = {
+  "Falabella":   { src: "/assets/banks/falabella.png",   bg: "#2D6B2D" },
+  "Banco Chile": { src: "/assets/banks/banco-chile.png", bg: "#1A237E" },
+  "BancoEstado": { src: "/assets/banks/bancoestado.png", bg: "#D42B2B" },
+  "Santander":   { src: "/assets/banks/santander.png",   bg: "#EC0000" },
+  "BCI":         { src: "/assets/banks/bci.png",         bg: "#F5F5F5" },
+};
+
+const getBankLogo = (name = "") => {
+  for (const [k, v] of Object.entries(BANK_LOGOS)) {
+    if (name.includes(k)) return v;
+  }
+  return null;
+};
+
+/** Renderiza logo del banco o fallback al icono original */
+const BankIcon = ({ name, icon, size = 36 }) => {
+  const logo = getBankLogo(name);
+  if (logo) {
+    return (
+      <div style={{
+        width: size, height: size, borderRadius: size * 0.25,
+        background: logo.bg, overflow: "hidden", flexShrink: 0,
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}>
+        <img
+          src={logo.src} alt=""
+          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+          onError={e => {
+            e.target.style.display = "none";
+            e.target.parentNode.insertAdjacentHTML("beforeend",
+              `<span style="font-size:${size * 0.6}px">${icon || "🏦"}</span>`
+            );
+          }}
+        />
+      </div>
+    );
+  }
+  return <span style={{ fontSize: size * 0.6 }}>{icon || "🏦"}</span>;
+};
+
 // ── AccountList ───────────────────────────────────────────────────────────────
 
 function AccountList({ accounts, totalBalance, onConnect, onSync, onDisconnect, syncingId }) {
@@ -63,14 +105,14 @@ function AccountList({ accounts, totalBalance, onConnect, onSync, onDisconnect, 
           }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <div style={{ fontSize: 24 }}>{acc.bankIcon}</div>
+                <BankIcon name={acc.bankName} icon={acc.bankIcon} size={36} />
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 700, color: C.textPrimary }}>{acc.bankName}</div>
                   <div style={{ fontSize: 11, marginTop: 2, color: waiting2FA ? C.amber : acc.status === "error" ? C.red : C.textMuted }}>
                     {waiting2FA
-                      ? "⏳ Abre tu app Banco de Chile y aprueba"
+                      ? "Abre tu app Banco de Chile y aprueba"
                       : acc.status === "error"
-                        ? `⚠ ${acc.lastSyncError || "Error de sync"}`
+                        ? `${acc.lastSyncError || "Error de conexión"}`
                         : `Actualizado: ${fmtDate(acc.lastSyncAt)}`
                     }
                   </div>
@@ -92,8 +134,8 @@ function AccountList({ accounts, totalBalance, onConnect, onSync, onDisconnect, 
                 border: `1px solid ${C.amber}`,
                 fontSize: 12, color: "#92400E", lineHeight: 1.5,
               }}>
-                🔔 Banco de Chile está esperando que apruebes la solicitud en tu app.<br />
-                Una vez que apruebes, la sincronización continúa automáticamente.
+                🔔 Banco de Chile está esperando que apruebes la solicitud en tu app.
+                Una vez que apruebes, la actualización continúa automáticamente.
               </div>
             )}
 
@@ -109,7 +151,7 @@ function AccountList({ accounts, totalBalance, onConnect, onSync, onDisconnect, 
                   opacity: (isSyncing || waiting2FA) ? 0.5 : 1,
                 }}
               >
-                {isSyncing ? "Sincronizando..." : "🔄 Sincronizar"}
+                {isSyncing ? "Actualizando..." : "Actualizar"}
               </button>
               <button
                 onClick={() => onDisconnect(acc.id, acc.bankName)}
@@ -192,10 +234,10 @@ function ConnectForm({ banks, onSuccess, onCancel }) {
             border: `1.5px solid ${C.green}`, background: "#f0fdf4",
             cursor: "pointer", textAlign: "left",
           }}>
-            <span style={{ fontSize: 22 }}>{bank.icon}</span>
+            <BankIcon name={bank.name} icon={bank.icon} size={34} />
             <div>
               <div style={{ fontSize: 13, fontWeight: 700, color: C.textPrimary }}>{bank.name}</div>
-              <div style={{ fontSize: 11, color: C.green, fontWeight: 600 }}>Disponible ahora</div>
+              <div style={{ fontSize: 11, color: C.green, fontWeight: 600 }}>Disponible</div>
             </div>
           </button>
         ))}
@@ -211,7 +253,7 @@ function ConnectForm({ banks, onSuccess, onCancel }) {
                 padding: "12px 16px", borderRadius: 14,
                 border: `1px solid ${C.border}`, background: C.white, opacity: 0.55,
               }}>
-                <span style={{ fontSize: 22 }}>{bank.icon}</span>
+                <BankIcon name={bank.name} icon={bank.icon} size={30} />
                 <div style={{ fontSize: 13, color: C.textSecondary }}>{bank.name}</div>
               </div>
             ))}
@@ -237,10 +279,10 @@ function ConnectForm({ banks, onSuccess, onCancel }) {
 
       {/* Header banco */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", background: "#f0fdf4", borderRadius: 12, border: `1px solid ${C.green}` }}>
-        <span style={{ fontSize: 22 }}>{selectedBank.icon}</span>
+        <BankIcon name={selectedBank.name} icon={selectedBank.icon} size={34} />
         <div>
           <div style={{ fontSize: 13, fontWeight: 700, color: C.textPrimary }}>{selectedBank.name}</div>
-          <div style={{ fontSize: 11, color: C.green }}>Ingresa tus credenciales de internet</div>
+          <div style={{ fontSize: 11, color: C.green }}>Ingresa tus credenciales</div>
         </div>
       </div>
 
@@ -248,7 +290,7 @@ function ConnectForm({ banks, onSuccess, onCancel }) {
       {isBchile && (
         <div style={{ padding: "10px 12px", background: "#FFF8E6", borderRadius: 10, border: `1px solid ${C.amber}` }}>
           <div style={{ fontSize: 12, color: "#92400E", lineHeight: 1.5 }}>
-            🔔 Si tienes <strong>Banco de Chile Pass</strong> activo, recibirás una notificación en tu app para aprobar el acceso. Tendrás 2 minutos para aprobarla.
+            Si tienes <strong>Banco de Chile Pass</strong> activo, recibirás una notificación en tu app para aprobar el acceso. Tendrás 2 minutos para aprobarla.
           </div>
         </div>
       )}
@@ -256,7 +298,7 @@ function ConnectForm({ banks, onSuccess, onCancel }) {
       {/* Aviso de seguridad */}
       <div style={{ padding: "10px 12px", background: "#EFF6FF", borderRadius: 10, border: "1px solid #BFDBFE" }}>
         <div style={{ fontSize: 11.5, color: "#1E40AF", lineHeight: 1.5 }}>
-          🔒 Tus credenciales se encriptan con AES-256 antes de guardarse. Sky nunca puede leerlas en texto plano.
+          Tus credenciales se cifran con AES-256 antes de guardarse. Sky no las almacena en texto plano.
         </div>
       </div>
 
@@ -284,8 +326,13 @@ function ConnectForm({ banks, onSuccess, onCancel }) {
             onBlur={(e)  => (e.target.style.borderColor = C.border)}
             onKeyDown={(e) => e.key === "Enter" && handleConnect()}
           />
-          <button type="button" onClick={() => setShowPass(!showPass)} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 16, padding: 0 }}>
-            {showPass ? "🙈" : "👁️"}
+          <button type="button" onClick={() => setShowPass(!showPass)} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", padding: 0, color: C.textMuted, display: "flex", alignItems: "center" }}>
+            <svg viewBox="0 0 20 20" width="18" height="18" fill="none">
+              {showPass
+                ? <><path d="M2 10s3-6 8-6 8 6 8 6-3 6-8 6-8-6-8-6z" stroke="currentColor" strokeWidth="1.4"/><circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.4"/><path d="M3 3l14 14" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></>
+                : <><path d="M2 10s3-6 8-6 8 6 8 6-3 6-8 6-8-6-8-6z" stroke="currentColor" strokeWidth="1.4"/><circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.4"/></>
+              }
+            </svg>
           </button>
         </div>
       </div>
@@ -367,8 +414,8 @@ export default function BankConnect({ onSyncComplete }) {
           clearInterval(pollingRef.current);
           setSyncingId(null);
           onSyncComplete?.();
-          if (isDone) showToast(`✓ ${acc.bankName}: sync completado`);
-          if (isError) showToast(acc.lastSyncError || "Error al sincronizar", C.red);
+          if (isDone) showToast(`${acc.bankName} actualizado`);
+          if (isError) showToast(acc.lastSyncError || "Error al actualizar", C.red);
         }
         return prev;
       });
@@ -382,9 +429,9 @@ export default function BankConnect({ onSyncComplete }) {
 
       if (result.started) {
         if (bankId === "bchile") {
-          showToast("Abre tu app Banco de Chile y aprueba la notificación 🔔", C.amber);
+          showToast("Aprueba la notificación en tu app Banco de Chile", C.amber);
         } else {
-          showToast("Sincronizando...");
+          showToast("Actualizando cuenta...");
         }
         startPolling(accountId);
         return; // El polling hace setSyncingId(null) cuando termina
@@ -393,10 +440,10 @@ export default function BankConnect({ onSyncComplete }) {
       // Respuesta síncrona (fallback)
       await loadAccounts();
       onSyncComplete?.();
-      showToast(`✓ ${result.bankName || "Banco"}: sync completado`);
+      showToast(`${result.bankName || "Banco"} actualizado`);
     } catch (e) {
-      let msg = e.message || "Error al sincronizar";
-      if (/Chrome|Chromium/i.test(msg))   msg = "Chrome no encontrado. Verifica CHROME_PATH.";
+      let msg = e.message || "Error al actualizar";
+      if (/Chrome|Chromium/i.test(msg))   msg = "Servicio de conexión no disponible. Intenta más tarde.";
       if (/AUTH_FAILED/i.test(msg))        msg = "RUT o clave incorrectos. Reconecta el banco.";
       if (/2FA_TIMEOUT/i.test(msg))        msg = "No se recibió aprobación 2FA. Intenta nuevamente.";
       showToast(msg, C.red);
@@ -420,9 +467,9 @@ export default function BankConnect({ onSyncComplete }) {
   const handleConnectSuccess = async (bankId) => {
     setView("list");
     if (bankId === "bchile") {
-      showToast("Banco conectado. Aprueba la notificación en tu app 🔔", C.amber);
+      showToast("Banco conectado. Aprueba la notificación en tu app", C.amber);
     } else {
-      showToast("Banco conectado. Sincronizando...");
+      showToast("Banco conectado. Actualizando...");
     }
     // Esperar un momento y arrancar polling
     setTimeout(async () => {

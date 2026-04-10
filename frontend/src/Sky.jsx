@@ -44,26 +44,26 @@ const CHAT_STARTERS = [
 
 const INITIAL_MESSAGE = {
   id: 0, role: "bot", time: nowTime(),
-  text: "Hola. Soy Mr. Money, tu asesor financiero en Sky. 💼\n\nCargando tu resumen financiero...",
+  text: "Hola. Soy Mr. Money, tu asistente en Sky.\n\nCargando tu resumen financiero...",
 };
 
-// Colores institucionales de bancos chilenos
+// Bancos chilenos — colores institucionales reales + logos
 const BANK_META = {
-  "BancoEstado": { bg: "#1565C0", abbr: "BE" },
-  "Santander":   { bg: "#C62828", abbr: "SA" },
-  "BCI":         { bg: "#0D47A1", abbr: "BC" },
-  "Itaú":        { bg: "#F57F17", abbr: "IT" },
-  "Falabella":   { bg: "#6A1B9A", abbr: "FA" },
-  "Scotiabank":  { bg: "#E65100", abbr: "SC" },
-  "BICE":        { bg: "#2E7D32", abbr: "BI" },
-  "Banco Chile": { bg: "#1A237E", abbr: "BC" },
+  "BancoEstado": { bg: "#D42B2B", abbr: "BE", logo: "/assets/banks/bancoestado.png" },
+  "Santander":   { bg: "#EC0000", abbr: "SA", logo: "/assets/banks/santander.png" },
+  "BCI":         { bg: "#F5F5F5", abbr: "BC", logo: "/assets/banks/bci.png", logoDark: true },
+  "Itaú":        { bg: "#F57F17", abbr: "IT", logo: null },
+  "Falabella":   { bg: "#2D6B2D", abbr: "FA", logo: "/assets/banks/falabella.png" },
+  "Scotiabank":  { bg: "#E65100", abbr: "SC", logo: null },
+  "BICE":        { bg: "#2E7D32", abbr: "BI", logo: null },
+  "Banco Chile": { bg: "#1A237E", abbr: "CH", logo: "/assets/banks/banco-chile.png" },
 };
 
 const getBankMeta = (name = "") => {
   for (const [k, v] of Object.entries(BANK_META)) {
     if (name.includes(k)) return v;
   }
-  return { bg: "#223650", abbr: name.slice(0, 2).toUpperCase() || "??" };
+  return { bg: "#223650", abbr: name.slice(0, 2).toUpperCase() || "??", logo: null };
 };
 
 // Paleta de diseño
@@ -155,27 +155,41 @@ const GLOBAL_STYLES = `
 // COMPONENTES PEQUEÑOS INTERNOS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Punto de sincronización animado */
-const SyncDot = ({ size = 7 }) => (
+/** Punto decorativo mínimo */
+const StatusDot = ({ size = 6, color }) => (
   <div style={{
     width: size, height: size, borderRadius: "50%",
-    background: P.green, animation: "pulse 2s infinite", flexShrink: 0,
+    background: color || P.green, flexShrink: 0,
   }} />
 );
 
-/** Badge "SINCRONIZADO" */
-const SyncBadge = ({ label = "SINCRONIZADO", small = false }) => (
+/** Logo de banco — muestra logo real si existe, fallback a abreviación */
+const BankLogo = ({ meta, size = 40, borderRadius = 10 }) => (
   <div style={{
-    display: "flex", alignItems: "center", gap: 6,
-    background: "#ECFDF5", border: "1px solid #A7F3D0",
-    borderRadius: 20, padding: small ? "3px 10px" : "5px 12px",
+    width: size, height: size, borderRadius,
+    background: meta.bg, display: "flex", alignItems: "center",
+    justifyContent: "center", flexShrink: 0, overflow: "hidden",
   }}>
-    <SyncDot size={small ? 6 : 7} />
-    <span style={{ fontSize: small ? 9 : 11, fontWeight: 700, color: P.green3, letterSpacing: "0.05em" }}>
-      {label}
-    </span>
+    {meta.logo ? (
+      <img
+        src={meta.logo}
+        alt=""
+        style={{ width: "100%", height: "100%", objectFit: "cover" }}
+        onError={e => {
+          e.target.style.display = "none";
+          e.target.parentNode.insertAdjacentHTML("beforeend",
+            `<span style="font-size:${Math.round(size * 0.28)}px;font-weight:800;color:#fff;letter-spacing:0.05em">${meta.abbr}</span>`
+          );
+        }}
+      />
+    ) : (
+      <span style={{ fontSize: Math.round(size * 0.28), fontWeight: 800, color: "#fff", letterSpacing: "0.05em" }}>
+        {meta.abbr}
+      </span>
+    )}
   </div>
 );
+
 
 /** KPI card del topbar del dashboard */
 const KpiCard = ({ label, value, color, sub }) => (
@@ -209,14 +223,7 @@ const BankCardCompact = ({ acc, total, blurred = false }) => {
       transition: "background 0.12s",
     }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <div style={{
-          width: 40, height: 40, borderRadius: 10,
-          background: meta.bg, display: "flex", alignItems: "center",
-          justifyContent: "center", fontSize: 11, fontWeight: 800, color: "#fff",
-          flexShrink: 0, letterSpacing: "0.05em",
-        }}>
-          {meta.abbr}
-        </div>
+        <BankLogo meta={meta} size={40} borderRadius={10} />
         <div>
           <div style={{ fontSize: 14, fontWeight: 700, color: "#fff" }}>{acc.bankName ?? "Banco"}</div>
           <div style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", marginTop: 1, fontFamily: "'Geist Mono', monospace" }}>
@@ -252,13 +259,7 @@ const BankCardFull = ({ acc, blurred = false }) => {
       borderBottom: "1px solid rgba(255,255,255,0.06)",
       transition: "background 0.12s",
     }}>
-      <div style={{
-        width: 48, height: 48, borderRadius: 12,
-        background: meta.bg, display: "flex", alignItems: "center",
-        justifyContent: "center", fontSize: 13, fontWeight: 800, color: "#fff", flexShrink: 0,
-      }}>
-        {meta.abbr}
-      </div>
+      <BankLogo meta={meta} size={48} borderRadius={12} />
       <div style={{ flex: 1 }}>
         <div style={{ fontSize: 15, fontWeight: 700, color: "#fff" }}>{acc.bankName ?? "Banco"}</div>
         <div style={{ fontSize: 12, color: "rgba(255,255,255,0.35)", marginTop: 1, fontFamily: "'Geist Mono', monospace" }}>
@@ -396,7 +397,7 @@ export default function Sky({ userId, userEmail }) {
 
         setMsgs([{
           ...INITIAL_MESSAGE,
-          text: `Hola, ${summaryRes.profile.user.name}. Soy Mr. Money, tu asesor financiero en Sky. 💼\n\nTienes ${fmt(displayBal)} ${balLabel}. ${incomeLabel} ¿En qué te ayudo hoy?`,
+          text: `Hola, ${summaryRes.profile.user.name}. Soy Mr. Money, tu asistente financiero.\n\nTienes ${fmt(displayBal)} ${balLabel}. ${incomeLabel} ¿En qué te ayudo hoy?`,
         }]);
       } catch (e) {
         console.error("[Sky] init error:", e.message);
@@ -607,7 +608,7 @@ export default function Sky({ userId, userEmail }) {
         }} />
         <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
         <div style={{ fontSize: 13, color: "rgba(255,255,255,0.35)", fontFamily: "'Geist', sans-serif" }}>
-          Cargando Sky...
+          Cargando...
         </div>
       </div>
     );
@@ -685,7 +686,7 @@ export default function Sky({ userId, userEmail }) {
     goals:      ["Metas",           `${goals.length} meta${goals.length !== 1 ? "s" : ""} activa${goals.length !== 1 ? "s" : ""}`],
     challenges: ["Desafíos",        `${challenges.completed.length} desafío${challenges.completed.length !== 1 ? "s" : ""} completado${challenges.completed.length !== 1 ? "s" : ""}`],
     simulate:   ["Simular",         "Proyecciones y escenarios financieros"],
-    chat:       ["Mr. Money",       "Tu asesor financiero personal con IA"],
+    chat:       ["Mr. Money",       "Tu copiloto financiero"],
   };
 
   const [pageTitle, pageSub] = PAGE_TITLES[tab] ?? ["Sky", ""];
@@ -824,18 +825,15 @@ export default function Sky({ userId, userEmail }) {
                 {badge > 0 && (
                   <span style={{ background: P.green, color: "#fff", borderRadius: 10, fontSize: 9, fontWeight: 800, padding: "2px 6px" }}>{badge}</span>
                 )}
-                {special && tab !== key && (
-                  <span style={{ background: "rgba(0,200,83,0.15)", border: "1px solid rgba(0,200,83,0.25)", color: P.green, fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 20 }}>IA</span>
-                )}
               </button>
             ))}
           </nav>
 
-          {/* Footer: nivel + usuario */}
+          {/* Footer: progreso + usuario */}
           <div style={{ padding: "14px 14px 18px", borderTop: "1px solid rgba(255,255,255,0.07)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-              <span style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", fontWeight: 600, letterSpacing: "0.08em" }}>NIVEL {profile?.level ?? 1}</span>
-              <span style={{ fontSize: 10, color: P.gold, fontWeight: 700 }}>⭐ {points} pts</span>
+              <span style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", fontWeight: 600, letterSpacing: "0.08em" }}>PROGRESO</span>
+              <span style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", fontWeight: 600 }}>{points} puntos</span>
             </div>
             <div style={{ height: 3, background: "rgba(255,255,255,0.1)", borderRadius: 99, overflow: "hidden", marginBottom: 12 }}>
               <div style={{ height: "100%", width: `${Math.min(profile?.levelProgress ?? 0, 100)}%`, background: P.green, borderRadius: 99, transition: "width 0.6s" }} />
@@ -868,7 +866,6 @@ export default function Sky({ userId, userEmail }) {
               <div style={{ fontSize: 16, fontWeight: 700, color: P.text, letterSpacing: "-0.2px" }}>{pageTitle}</div>
               <div style={{ fontSize: 12, color: P.text3, marginTop: 1 }}>{pageSub}</div>
             </div>
-            {hasBankAccounts && <SyncBadge />}
           </div>
 
           {/* ── SCROLL AREA ── */}
@@ -907,17 +904,14 @@ export default function Sky({ userId, userEmail }) {
                   }}>
                     {/* Status row */}
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 22 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                        <SyncDot size={6} />
-                        <span style={{ fontSize: 9, fontWeight: 700, color: P.green, letterSpacing: "0.12em", textTransform: "uppercase" }}>
-                          {hasBankAccounts ? "Cuentas sincronizadas" : "Sin banco conectado"}
-                        </span>
-                      </div>
+                      <span style={{ fontSize: 9, fontWeight: 700, color: "rgba(255,255,255,0.35)", letterSpacing: "0.12em", textTransform: "uppercase" }}>
+                        {hasBankAccounts ? `${bankBalances.accounts?.length ?? 0} cuenta${(bankBalances.accounts?.length ?? 0) !== 1 ? "s" : ""} conectada${(bankBalances.accounts?.length ?? 0) !== 1 ? "s" : ""}` : "Sin banco conectado"}
+                      </span>
                       <button
                         onClick={() => setTab("bancos")}
                         style={{ background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 7, color: "rgba(255,255,255,0.45)", fontSize: 11, fontWeight: 600, padding: "4px 10px", cursor: "pointer" }}
                       >
-                        {hasBankAccounts ? "Ver →" : "Conectar →"}
+                        {hasBankAccounts ? "Ver cuentas" : "Conectar"}
                       </button>
                     </div>
 
@@ -1035,14 +1029,7 @@ export default function Sky({ userId, userEmail }) {
                               padding: "13px 18px", borderBottom: `1px solid ${P.border}`,
                               display: "flex", alignItems: "center", gap: 12, transition: "background 0.1s",
                             }}>
-                              <div style={{
-                                width: 36, height: 36, borderRadius: 9,
-                                background: meta.bg, display: "flex", alignItems: "center",
-                                justifyContent: "center", fontSize: 10, fontWeight: 800,
-                                color: "#fff", flexShrink: 0, letterSpacing: "0.05em",
-                              }}>
-                                {meta.abbr}
-                              </div>
+                              <BankLogo meta={meta} size={36} borderRadius={9} />
                               <div style={{ flex: 1, overflow: "hidden", minWidth: 0 }}>
                                 <div style={{ fontSize: 13, fontWeight: 600, color: P.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                                   {acc.bankName}
@@ -1081,7 +1068,7 @@ export default function Sky({ userId, userEmail }) {
                       <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "32px 20px", gap: 10 }}>
                         <div style={{ fontSize: 28, opacity: 0.25 }}>🏦</div>
                         <div style={{ fontSize: 13, color: P.text3, textAlign: "center", lineHeight: 1.55 }}>
-                          Conecta tu banco para<br/>ver el saldo real en vivo
+                          Conecta tu banco para<br/>ver tu saldo actualizado
                         </div>
                         <button
                           onClick={() => setTab("bancos")}
@@ -1098,9 +1085,8 @@ export default function Sky({ userId, userEmail }) {
                 {/* Sacarlo del bloque negro lo hace menos pesado visualmente */}
                 {txs.length > 0 && hasBankAccounts && (
                   <div style={{ background: P.surface, borderRadius: 14, border: `1px solid ${P.border}`, overflow: "hidden" }}>
-                    <div style={{ padding: "9px 18px", borderBottom: `1px solid ${P.border}`, display: "flex", alignItems: "center", gap: 7 }}>
-                      <SyncDot size={5} />
-                      <span style={{ fontSize: 9, fontWeight: 700, color: P.green, letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                    <div style={{ padding: "9px 18px", borderBottom: `1px solid ${P.border}` }}>
+                      <span style={{ fontSize: 9, fontWeight: 700, color: P.text3, letterSpacing: "0.1em", textTransform: "uppercase" }}>
                         Movimientos recientes
                       </span>
                     </div>
@@ -1217,16 +1203,13 @@ export default function Sky({ userId, userEmail }) {
 
                     {/* Header de total — solo cuando hay cuentas conectadas */}
                     {hasBankAccounts && (
-                      <div style={{ background: P.navy, borderRadius: 16, padding: "18px 22px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <div>
-                          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>
-                            Saldo total · {bankBalances.accounts.length} cuenta{bankBalances.accounts.length !== 1 ? "s" : ""}
-                          </div>
-                          <div style={{ fontSize: 30, fontWeight: 800, color: "#fff", letterSpacing: "-1px", fontVariantNumeric: "tabular-nums", ...$ }}>
-                            {fmtCLP(bankBalances.totalBalance)}
-                          </div>
+                      <div style={{ background: P.navy, borderRadius: 16, padding: "18px 22px" }}>
+                        <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>
+                          Saldo total · {bankBalances.accounts.length} cuenta{bankBalances.accounts.length !== 1 ? "s" : ""}
                         </div>
-                        <SyncBadge />
+                        <div style={{ fontSize: 30, fontWeight: 800, color: "#fff", letterSpacing: "-1px", fontVariantNumeric: "tabular-nums", ...$ }}>
+                          {fmtCLP(bankBalances.totalBalance)}
+                        </div>
                       </div>
                     )}
 
@@ -1251,9 +1234,8 @@ export default function Sky({ userId, userEmail }) {
                   {/* Derecha sticky — ticker + resumen */}
                   <div style={{ display: "flex", flexDirection: "column", gap: 14, position: "sticky", top: 24 }}>
                     <div style={{ background: P.navy, borderRadius: 16, overflow: "hidden" }}>
-                      <div style={{ padding: "14px 18px 10px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", alignItems: "center", gap: 7 }}>
-                        <div style={{ width: 7, height: 7, borderRadius: "50%", background: P.green, animation: "pulse 1.5s infinite" }} />
-                        <span style={{ fontSize: 10, fontWeight: 700, color: P.green, letterSpacing: "0.1em", textTransform: "uppercase" }}>Movimientos · en vivo</span>
+                      <div style={{ padding: "14px 18px 10px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,0.4)", letterSpacing: "0.1em", textTransform: "uppercase" }}>Últimos movimientos</span>
                       </div>
                       <div style={{ maxHeight: 380, overflowY: "auto" }}>
                         {txs.slice(0, 20).map(tx => <TickerItem key={tx.id} tx={tx} />)}
@@ -1619,22 +1601,7 @@ export default function Sky({ userId, userEmail }) {
                   </div>
                   <div>
                     <div style={{ fontSize: 14, fontWeight: 700, color: P.text }}>Mr. Money</div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 1 }}>
-                      <div style={{ width: 6, height: 6, borderRadius: "50%", background: P.green, animation: "pulse 2s infinite" }} />
-                      <span style={{ fontSize: 11, color: P.green }}>En línea · listo para ayudarte</span>
-                    </div>
-                  </div>
-                  <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
-                    <div style={{ background: P.greenBg, border: `1px solid ${P.greenBd}`, borderRadius: 8, padding: "5px 12px", fontSize: 11, fontWeight: 700, color: P.green3 }}>
-                      Powered by Claude
-                    </div>
-                    {/* Logo Sky pequeño */}
-                    <img
-                      src="/assets/sky-logo-transparent.png"
-                      alt="Sky"
-                      style={{ height: 22, opacity: 0.6 }}
-                      onError={e => { e.target.style.display = "none"; }}
-                    />
+                    <div style={{ fontSize: 11, color: P.text3, marginTop: 1 }}>Asistente financiero</div>
                   </div>
                 </div>
 

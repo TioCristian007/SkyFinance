@@ -79,19 +79,13 @@ export default function App() {
         gap:            16,
         fontFamily:     "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
       }}>
-        <div style={{
-          width:        52,
-          height:       52,
-          borderRadius: 16,
-          background:   `linear-gradient(135deg, ${C.green}, ${C.greenDark})`,
-          display:      "flex",
-          alignItems:   "center",
-          justifyContent: "center",
-          fontSize:     24,
-        }}>
-          💸
-        </div>
-        <div style={{ fontSize: 13, color: C.textMuted }}>Cargando Sky...</div>
+        <img
+          src="/assets/sky-logo-transparent.png"
+          alt="Sky"
+          style={{ height: 40, objectFit: "contain", opacity: 0.9 }}
+          onError={e => { e.target.style.display = "none"; }}
+        />
+        <div style={{ fontSize: 13, color: C.textMuted }}>Cargando...</div>
       </div>
     );
   }
