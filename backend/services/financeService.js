@@ -55,19 +55,34 @@ export async function getSummary(userId) {
   ]);
 
   const estimatedIncome = parseIncomeRange(profile?.income_range);
-
-  // FIX: separar gastos de ingresos bancarios
-  const expenseTxs = transactions.filter(t => t.category !== "income" && (t.amount || 0) > 0);
-  const incomeTxs  = transactions.filter(t => t.category === "income"  && (t.amount || 0) > 0);
-
-  const expenses    = expenseTxs.reduce((s, t) => s + (t.amount || 0), 0);
-  const bankIncome  = incomeTxs.reduce((s, t)  => s + (t.amount || 0), 0);
-
-  // FIX: balance = suma real de cuentas bancarias si existen
   const hasBankAccounts = bankData.accounts.length > 0;
-  const income  = hasBankAccounts ? Math.max(estimatedIncome, bankIncome) : estimatedIncome;
-  const balance = hasBankAccounts ? bankData.totalBalance : (estimatedIncome - expenses);
 
+  // ── Filtrar transacciones al mes en curso ────────────────────────────────
+  // Sin este filtro, expenses e income acumulan TODO el historial bancario,
+  // inflando los números N veces según cuántos meses de movimientos existan.
+  const period     = getCurrentPeriod();
+  const monthTxs   = transactions.filter(t => t.date && t.date.startsWith(period));
+
+  // Banco sincroniza gastos como negativos (ej: -4890), entradas manuales como positivos.
+  // Usamos Math.abs para unificar ambas fuentes. Nunca filtramos por signo.
+  const expenseTxs = monthTxs.filter(t => t.category !== "income" && t.amount != null && t.amount !== 0);
+  const incomeTxs  = monthTxs.filter(t => t.category === "income"  && t.amount != null && t.amount !== 0);
+
+  const expenses   = expenseTxs.reduce((s, t) => s + Math.abs(t.amount || 0), 0);
+  const bankIncome = incomeTxs.reduce((s, t)  => s + Math.abs(t.amount || 0), 0);
+
+  // ── income: fuente única, sin mezclar estimado con real ──────────────────
+  // Math.max(estimatedIncome, bankIncome) es incorrecto: mezcla un número
+  // ficticio del perfil con ingresos reales del banco.
+  // Regla: si hay ingresos reales este mes → usarlos. Si no → estimado del perfil.
+  const income = hasBankAccounts && bankIncome > 0 ? bankIncome : estimatedIncome;
+
+  // ── balance: saldo real si hay bancos, proyección estimada si no ─────────
+  const balance = hasBankAccounts
+    ? bankData.totalBalance
+    : Math.max(0, estimatedIncome - expenses);
+
+  // ── Totales por categoría (solo mes en curso) ────────────────────────────
   const categoryTotals = {};
   expenseTxs.forEach((t) => {
     categoryTotals[t.category] = (categoryTotals[t.category] || 0) + t.amount;
@@ -75,18 +90,25 @@ export async function getSummary(userId) {
 
   const topCategory = Object.entries(categoryTotals).sort((a, b) => b[1] - a[1])[0] || null;
 
+  // ── Tasas ────────────────────────────────────────────────────────────────
+  // savingsRate nunca debe ser null — es calculable siempre que haya un income.
+  const spendingRate = income > 0 ? Math.max(0, Math.round((expenses / income) * 100)) : 0;
+  const savingsRate  = income > 0 ? Math.max(0, Math.round(((income - expenses) / income) * 100)) : 0;
+
   return {
     income,
     expenses,
     balance,
-    spendingRate:     Math.max(0, Math.round((expenses / Math.max(income, 1)) * 100)),
-    savingsRate:      hasBankAccounts ? null : Math.max(0, Math.round((balance / Math.max(income, 1)) * 100)),
+    spendingRate,
+    savingsRate,
     categoryTotals,
     transactionCount: transactions.length,
     topCategory:      topCategory ? { category: topCategory[0], amount: topCategory[1] } : null,
-    period:           getCurrentPeriod(),
+    period,
     currency:         "CLP",
-    // Datos bancarios expuestos para Mr. Money y frontend
+    // Flag para que el frontend sepa si income es dato real o estimado
+    incomeIsReal:     hasBankAccounts && bankIncome > 0,
+    // Datos bancarios expuestos para Mr. Money y el frontend
     bankAccounts:     bankData.accounts,
     totalBankBalance: bankData.totalBalance,
     hasBankAccounts,
@@ -122,9 +144,10 @@ export async function getGoals(userId) {
   const goals = await db.getGoals(uid);
   const sum   = await getSummary(uid);
 
-  const monthlyCapacity = sum.hasBankAccounts
-    ? Math.max(0, sum.totalBankBalance)
-    : Math.max(0, sum.balance);
+  // monthlyCapacity = cuánto puede ahorrar el usuario por mes.
+  // Antes usaba totalBankBalance ($3.8M de saldo) — incorrecto, inflaba todas
+  // las proyecciones. La capacidad mensual es ingreso menos gastos del mes.
+  const monthlyCapacity = Math.max(0, sum.income - sum.expenses);
 
   return goals.map((g) => ({
     ...g,
@@ -138,7 +161,7 @@ export async function addGoal(userId, goalData) {
   if (!goal) return { error: "Error al crear la meta" };
 
   const sum             = await getSummary(uid);
-  const monthlyCapacity = sum.hasBankAccounts ? Math.max(0, sum.totalBankBalance) : Math.max(0, sum.balance);
+  const monthlyCapacity = Math.max(0, sum.income - sum.expenses);
   const goalWithProjection = { ...goal, projection: calcGoalProjection(goal, monthlyCapacity) };
 
   db.getProfile(uid).then((profile) => {
@@ -154,7 +177,7 @@ export async function updateGoal(userId, goalId, updates) {
   if (!goal) return { error: "Meta no encontrada" };
 
   const sum             = await getSummary(uid);
-  const monthlyCapacity = sum.hasBankAccounts ? Math.max(0, sum.totalBankBalance) : Math.max(0, sum.balance);
+  const monthlyCapacity = Math.max(0, sum.income - sum.expenses);
   const pct             = Math.round(((goal.savedAmount || 0) / (goal.targetAmount || 1)) * 100);
   const goalWithProjection = { ...goal, projection: calcGoalProjection(goal, monthlyCapacity) };
 
@@ -240,6 +263,7 @@ export async function completeChallenge(userId, challengeId) {
 }
 
 export function calcChallengeProgress(challenge, transactions) {
+  // Gastos bancarios = negativos, manuales = positivos → Math.abs unifica ambos
   const txs = (transactions || []).filter(t => t.category !== "income");
 
   if (challenge.id === "daily_track") {
@@ -247,16 +271,16 @@ export function calcChallengeProgress(challenge, transactions) {
     return { pct: Math.round((done / 5) * 100), done: done >= 5 };
   }
   if (challenge.id === "save_60k") {
-    const spent = txs.reduce((s, t) => s + t.amount, 0);
+    const spent = txs.reduce((s, t) => s + Math.abs(t.amount || 0), 0);
     const saved = Math.max(0, 1200000 - spent);
     return { pct: Math.round((Math.min(saved, 60000) / 60000) * 100), done: saved >= 60000 };
   }
   if (challenge.category && challenge.limitAmt === 0) {
-    const spent = txs.filter(t => t.category === challenge.category).reduce((s, t) => s + t.amount, 0);
+    const spent = txs.filter(t => t.category === challenge.category).reduce((s, t) => s + Math.abs(t.amount || 0), 0);
     return { pct: spent === 0 ? 100 : 0, done: spent === 0 };
   }
   if (challenge.category && challenge.limitAmt > 0) {
-    const spent = txs.filter(t => t.category === challenge.category).reduce((s, t) => s + t.amount, 0);
+    const spent = txs.filter(t => t.category === challenge.category).reduce((s, t) => s + Math.abs(t.amount || 0), 0);
     const prog  = Math.max(0, challenge.limitAmt - spent);
     return { pct: Math.round((prog / challenge.limitAmt) * 100), done: spent > 0 && spent <= challenge.limitAmt };
   }
