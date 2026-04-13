@@ -802,7 +802,7 @@ export default function Sky({ userId, userEmail }) {
                 style={{
                   display: "flex", alignItems: "center", gap: 10,
                   width: "100%", padding: special ? "12px 12px" : "10px 12px",
-                  borderRadius: 10, border: "1px solid transparent",
+                  border: "1px solid transparent",
                   background: "transparent",
                   color: "rgba(255,255,255,0.45)",
                   fontSize: 13, fontWeight: 500,

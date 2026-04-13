@@ -413,7 +413,14 @@ export default function BankConnect({ onSyncComplete }) {
     if (pollingRef.current) clearInterval(pollingRef.current);
     let attempts      = 0;
     let lastSyncAtRef = null; // timestamp pre-sync, para detectar refresh
-    pollingRef.current = setInterval(async () => {
+
+    // bchile tarda 5min reales (login + 2FA + scrape movimientos + CC + cat).
+    // Polling cada 5s durante 20min = 240 intentos. Sobran cold-starts y
+    // latencia de Puppeteer en entornos lentos.
+    const INTERVAL_MS  = 5000;
+    const MAX_ATTEMPTS = 240;
+
+    const tick = async () => {
       attempts++;
       await loadAccounts();
 
@@ -427,16 +434,12 @@ export default function BankConnect({ onSyncComplete }) {
 
         const is2FA    = is2FAWaiting(acc);
         const inFlight = isSyncInFlight(acc);
-        // Done real: status active, lastSyncAt cambió respecto al snapshot,
-        // y NO estamos esperando 2FA. Sin el check de cambio de timestamp,
-        // el poll declara "listo" en el primer tick porque lee el estado
-        // previo (active + un lastSyncAt viejo).
         const isDone   = acc.status === "active" &&
                          acc.lastSyncAt &&
                          acc.lastSyncAt !== lastSyncAtRef &&
                          !is2FA;
         const isError  = acc.status === "error" && !is2FA;
-        const timeout  = attempts >= 50; // 50 × 4s = ~3.5 minutos
+        const timeout  = attempts >= MAX_ATTEMPTS;
 
         if (isDone || isError || timeout) {
           clearInterval(pollingRef.current);
@@ -446,15 +449,18 @@ export default function BankConnect({ onSyncComplete }) {
           if (isDone)  showToast(`${acc.bankName} actualizado`);
           if (isError) showToast(acc.lastSyncError || "Error al actualizar", C.red);
           if (timeout && !isDone && !isError) {
-            showToast("El sync está tardando demasiado. Revisa el banco.", C.amber);
+            showToast("El banco está tardando más de lo normal. Refresca en un rato.", C.amber);
           }
         } else if (inFlight) {
-          // Mantener el spinner/disable durante el vuelo
           setSyncingId(accountId);
         }
         return prev;
       });
-    }, 4000);
+    };
+
+    // Primer tick inmediato — así el spinner/estado 2FA aparece ya
+    tick();
+    pollingRef.current = setInterval(tick, INTERVAL_MS);
   };
 
   const handleSync = async (accountId, bankId) => {
