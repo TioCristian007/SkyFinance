@@ -2,18 +2,36 @@
 // services/api.js — único canal frontend → backend
 // userId se pasa en el header x-user-id en TODAS las llamadas
 //
-// Esta versión incluye console logs de diagnóstico ligeros para poder ver
-// en DevTools Console cada request, su userId al momento del disparo, y
-// la respuesta/error. Si quieres silenciarlos, setea window.__SKY_DEBUG=false
-// desde la consola o elimina los console.log antes de prod.
+// BASE_URL:
+//   - Dev local: usa "/api" y el proxy de Vite (vite.config.js) redirige
+//     al backend en http://localhost:3001. Esto evita CORS en dev.
+//   - Producción: usa VITE_API_URL (inyectada en build-time por Railway).
+//     Debe apuntar a la URL pública del backend, incluyendo /api al final.
+//     Ej: https://skyfinance-backend-production.up.railway.app/api
+//
+// Si olvidas setear VITE_API_URL en Railway al buildear el frontend,
+// el código cae a "/api" (relativo). Eso fallará visiblemente en prod
+// (404 del dominio del frontend), que es mucho mejor que golpear el
+// localhost de la máquina del usuario final.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3001/api";
+function resolveBaseUrl() {
+  const raw = import.meta.env.VITE_API_URL;
+  if (!raw || !raw.trim()) {
+    // Sin env var → ruta relativa. En dev el proxy la resuelve.
+    return "/api";
+  }
+  // Normaliza trailing slashes para evitar "//summary".
+  return raw.trim().replace(/\/+$/, "");
+}
+
+const BASE_URL = resolveBaseUrl();
 const DEBUG    = typeof window !== "undefined" ? (window.__SKY_DEBUG ?? true) : true;
+
+if (DEBUG) console.log("[api] BASE_URL:", BASE_URL);
 
 let _userId = null;
 export function setUserId(id) {
-  // Log solo si cambia — evita spam en cada render de Sky.jsx
   if (id !== _userId) {
     if (DEBUG) console.log("[api] setUserId:", id);
     _userId = id;
@@ -22,7 +40,6 @@ export function setUserId(id) {
 
 async function request(path, options = {}) {
   if (!_userId) {
-    // Aviso loud — si llegamos aquí algo en el árbol de auth está mal
     console.warn("[api] request sin userId → el backend va a devolver 401", path);
   }
 
@@ -38,7 +55,6 @@ async function request(path, options = {}) {
   try {
     res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
   } catch (netErr) {
-    // Error de red puro: backend caído, CORS, DNS, etc.
     console.error(`[api] network fail ${path}:`, netErr.message);
     throw new Error("No hay conexión con el backend. ¿Está corriendo?");
   }
