@@ -69,14 +69,20 @@ export async function syncBankAccount(bankAccountId, userId) {
 
     // 4. onProgress — reporta cada paso del scraper al log
     //    Para bchile: detecta la pantalla de 2FA y avisa al frontend
-    //    vía last_sync_error (campo temporal — se limpia al completar)
+    //    vía last_sync_error + status="waiting_2fa" (estado temporal).
+    //    Al completar el sync con éxito vuelve a "active" y limpia el error.
     const onProgress = (step) => {
       console.log(`[sync][${account.bank_id}] ${step}`);
 
       if (/2FA|aprobaci[oó]n|esperando/i.test(step)) {
-        // Escribir estado 2FA para que el frontend lo vea via polling
+        // Escribir estado 2FA para que el frontend lo vea via polling.
+        // status != "error" → la UI no lo pinta como fallo; el banner se
+        // dispara por el regex en last_sync_error.
         db().from("bank_accounts")
-          .update({ last_sync_error: "⏳ Esperando aprobación en tu app Banco de Chile..." })
+          .update({
+            status:          "waiting_2fa",
+            last_sync_error: "⏳ Esperando aprobación en tu app Banco de Chile...",
+          })
           .eq("id", bankAccountId)
           .then(() => {}).catch(() => {});
       }
@@ -163,11 +169,14 @@ export async function syncBankAccount(bankAccountId, userId) {
 // ── Sync de todas las cuentas del usuario ─────────────────────────────────────
 
 export async function syncAllUserAccounts(userId) {
+  // Sync todo lo que no esté desconectado. Incluye "error" y "waiting_2fa"
+  // para permitir reintentos después de una falla transitoria o un 2FA
+  // que el usuario no alcanzó a aprobar.
   const { data: accounts } = await db()
     .from("bank_accounts")
     .select("id, bank_id, bank_name")
     .eq("user_id", userId)
-    .eq("status",  "active");
+    .neq("status", "disconnected");
 
   if (!accounts?.length) return { synced: 0, results: [] };
 
@@ -189,19 +198,35 @@ export async function syncAllUserAccounts(userId) {
 // ── Balances por banco ────────────────────────────────────────────────────────
 
 export async function getBankBalances(userId) {
-  const { data: accounts } = await db()
+  // Importante: NO incluir account_type ni account_last4 en el SELECT.
+  // Esas columnas vienen de una migración extendida (Bank_SQLSchema.txt) que
+  // puede no estar aplicada en el schema del usuario. Si Supabase encuentra
+  // una columna que no existe, el query falla en silencio, `data` viene como
+  // null, y el endpoint devuelve {accounts:[], totalBalance:0} aunque la DB
+  // tenga registros con balance. Síntoma: "hice el sync, se guardó el
+  // balance, y la UI muestra cero cuentas conectadas".
+  // Los campos extendidos se reemplazan por defaults por-banco y se
+  // re-intentan en una segunda pasada opcional (no-bloqueante).
+  const { data: accounts, error } = await db()
     .from("bank_accounts")
-    .select("id, bank_id, bank_name, bank_icon, last_balance, last_sync_at, last_sync_error, status, sync_count, account_type, account_last4")
+    .select("id, bank_id, bank_name, bank_icon, last_balance, last_sync_at, last_sync_error, status, sync_count")
     .eq("user_id", userId)
     .neq("status", "disconnected")
     .order("created_at", { ascending: true });
 
+  if (error) {
+    console.error("[sync] getBankBalances query error:", error.message);
+    return { accounts: [], totalBalance: 0 };
+  }
   if (!accounts?.length) return { accounts: [], totalBalance: 0 };
 
   const now          = Date.now();
   const totalBalance = accounts.reduce((sum, a) => sum + (a.last_balance || 0), 0);
 
-  // Tipo de cuenta por defecto según banco — se usa si el scraper no lo guardó
+  // Tipo de cuenta por defecto según banco — se usa siempre, porque la
+  // columna account_type es parte de la migración extendida que puede no
+  // estar presente. Cuando se agregue, se puede hacer un SELECT aparte
+  // opcional con try/catch y merge sobre estos defaults.
   const DEFAULT_ACCOUNT_TYPE = {
     bancoestado: "CuentaRUT",
     bchile:      "Cta. Corriente",
@@ -229,10 +254,11 @@ export async function getBankBalances(userId) {
         syncCount:     a.sync_count      || 0,
         // minutesAgo calculado aquí — el frontend no tiene que hacer aritmética de fechas
         minutesAgo,
-        // accountType: lo que guardó el scraper, o el default por banco
-        accountType:   a.account_type   || DEFAULT_ACCOUNT_TYPE[a.bank_id] || "Cuenta",
-        // last4: últimos 4 dígitos del número de cuenta si el scraper los guardó
-        last4:         a.account_last4  || null,
+        // accountType: default por banco (columna account_type omitida en SELECT
+        // porque puede no existir en el schema del usuario)
+        accountType:   DEFAULT_ACCOUNT_TYPE[a.bank_id] || "Cuenta",
+        // last4: null hasta que exista la columna en el schema y el scraper lo popule
+        last4:         null,
       };
     }),
     totalBalance,

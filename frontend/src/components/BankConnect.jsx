@@ -23,16 +23,24 @@ const fmtDate = (iso) => {
   });
 };
 
+// Durante el 2FA el backend marca status="waiting_2fa" y escribe el
+// mensaje en last_sync_error. Aceptamos cualquiera de las dos señales:
+// la nueva (status) es autoritativa, la del error string es fallback
+// por si el servidor corre una versión anterior del schema.
 const is2FAWaiting = (acc) =>
-  acc.status === "error" && /Esperando aprobación/i.test(acc.lastSyncError || "");
+  acc.status === "waiting_2fa" ||
+  /Esperando aprobaci[oó]n/i.test(acc.lastSyncError || "");
+
+const isSyncInFlight = (acc) =>
+  acc.status === "syncing" || acc.status === "waiting_2fa";
 
 // Logos reales de bancos chilenos
 const BANK_LOGOS = {
-  "Falabella":   { src: "/assets/banks/falabella.png",   bg: "#2D6B2D" },
-  "Banco Chile": { src: "/assets/banks/banco-chile.png", bg: "#1A237E" },
-  "BancoEstado": { src: "/assets/banks/bancoestado.png", bg: "#D42B2B" },
-  "Santander":   { src: "/assets/banks/santander.png",   bg: "#EC0000" },
-  "BCI":         { src: "/assets/banks/bci.png",         bg: "#F5F5F5" },
+  "Falabella":    { src: "/assets/banks/falabella.png",   bg: "#2D6B2D" },
+  "de Chile":     { src: "/assets/banks/banco-chile.png", bg: "#1A237E" },
+  "Banco Estado": { src: "/assets/banks/bancoestado.png", bg: "#D42B2B" },
+  "Santander":    { src: "/assets/banks/santander.png",   bg: "#EC0000" },
+  "BCI":          { src: "/assets/banks/bci.png",         bg: "#F5F5F5" },
 };
 
 const getBankLogo = (name = "") => {
@@ -134,7 +142,7 @@ function AccountList({ accounts, totalBalance, onConnect, onSync, onDisconnect, 
                 border: `1px solid ${C.amber}`,
                 fontSize: 12, color: "#92400E", lineHeight: 1.5,
               }}>
-                🔔 Banco de Chile está esperando que apruebes la solicitud en tu app.
+                🔔 Banco de Chile está esperando que apruebes la solicitud en tu app.<br />
                 Una vez que apruebes, la actualización continúa automáticamente.
               </div>
             )}
@@ -207,13 +215,20 @@ function ConnectForm({ banks, onSuccess, onCancel }) {
   };
 
   const handleConnect = async () => {
-    if (!selectedBank || !rut || !password) return;
+    console.log("[ConnectForm] handleConnect click →", { bankId: selectedBank?.id, rutLen: rut.length, passLen: password.length });
+    if (!selectedBank || !rut || !password) {
+      console.warn("[ConnectForm] aborto: faltan campos");
+      return;
+    }
     setLoading(true); setError("");
     try {
       const cleanRut = rut.replace(/\./g, "");
-      await api.connectBank({ bankId: selectedBank.id, rut: cleanRut, password });
+      console.log("[ConnectForm] llamando api.connectBank...");
+      const res = await api.connectBank({ bankId: selectedBank.id, rut: cleanRut, password });
+      console.log("[ConnectForm] connectBank respondió:", res);
       onSuccess(selectedBank.id);
     } catch (e) {
+      console.error("[ConnectForm] handleConnect error:", e);
       setError(e.message || "Error al conectar. Verifica tus credenciales.");
     } finally {
       setLoading(false);
@@ -396,7 +411,8 @@ export default function BankConnect({ onSyncComplete }) {
   // Iniciar polling para ver resultado del sync asíncrono
   const startPolling = (accountId) => {
     if (pollingRef.current) clearInterval(pollingRef.current);
-    let attempts = 0;
+    let attempts      = 0;
+    let lastSyncAtRef = null; // timestamp pre-sync, para detectar refresh
     pollingRef.current = setInterval(async () => {
       attempts++;
       await loadAccounts();
@@ -405,17 +421,36 @@ export default function BankConnect({ onSyncComplete }) {
         const acc = prev.find((a) => a.id === accountId);
         if (!acc) return prev;
 
+        // Snapshot inicial del lastSyncAt — si cambia, sabemos que el
+        // backend completó un ciclo nuevo (no estamos viendo el anterior).
+        if (attempts === 1) lastSyncAtRef = acc.lastSyncAt || null;
+
         const is2FA    = is2FAWaiting(acc);
-        const isDone   = acc.status === "active" && acc.lastSyncAt && attempts > 1;
+        const inFlight = isSyncInFlight(acc);
+        // Done real: status active, lastSyncAt cambió respecto al snapshot,
+        // y NO estamos esperando 2FA. Sin el check de cambio de timestamp,
+        // el poll declara "listo" en el primer tick porque lee el estado
+        // previo (active + un lastSyncAt viejo).
+        const isDone   = acc.status === "active" &&
+                         acc.lastSyncAt &&
+                         acc.lastSyncAt !== lastSyncAtRef &&
+                         !is2FA;
         const isError  = acc.status === "error" && !is2FA;
         const timeout  = attempts >= 50; // 50 × 4s = ~3.5 minutos
 
         if (isDone || isError || timeout) {
           clearInterval(pollingRef.current);
+          pollingRef.current = null;
           setSyncingId(null);
           onSyncComplete?.();
-          if (isDone) showToast(`${acc.bankName} actualizado`);
+          if (isDone)  showToast(`${acc.bankName} actualizado`);
           if (isError) showToast(acc.lastSyncError || "Error al actualizar", C.red);
+          if (timeout && !isDone && !isError) {
+            showToast("El sync está tardando demasiado. Revisa el banco.", C.amber);
+          }
+        } else if (inFlight) {
+          // Mantener el spinner/disable durante el vuelo
+          setSyncingId(accountId);
         }
         return prev;
       });
@@ -423,62 +458,79 @@ export default function BankConnect({ onSyncComplete }) {
   };
 
   const handleSync = async (accountId, bankId) => {
+    console.log("[BankConnect] handleSync click →", { accountId, bankId });
     setSyncingId(accountId);
     try {
+      console.log("[BankConnect] llamando api.syncBankAccount...");
       const result = await api.syncBankAccount(accountId);
+      console.log("[BankConnect] syncBankAccount respondió:", result);
 
-      if (result.started) {
+      // El backend ahora SIEMPRE responde {started:true} y corre en background.
+      // Arrancamos polling para ver el resultado en GET /accounts.
+      if (result?.started || result?.success) {
         if (bankId === "bchile") {
           showToast("Aprueba la notificación en tu app Banco de Chile", C.amber);
         } else {
           showToast("Actualizando cuenta...");
         }
         startPolling(accountId);
-        return; // El polling hace setSyncingId(null) cuando termina
+        return;
       }
 
-      // Respuesta síncrona (fallback)
+      // Fallback por si el backend respondió con algo inesperado
       await loadAccounts();
       onSyncComplete?.();
-      showToast(`${result.bankName || "Banco"} actualizado`);
     } catch (e) {
+      console.error("[BankConnect] handleSync error:", e);
       let msg = e.message || "Error al actualizar";
       if (/Chrome|Chromium/i.test(msg))   msg = "Servicio de conexión no disponible. Intenta más tarde.";
       if (/AUTH_FAILED/i.test(msg))        msg = "RUT o clave incorrectos. Reconecta el banco.";
       if (/2FA_TIMEOUT/i.test(msg))        msg = "No se recibió aprobación 2FA. Intenta nuevamente.";
       showToast(msg, C.red);
-    } finally {
-      // Solo limpiar si no estamos en polling
-      if (!pollingRef.current) setSyncingId(null);
+      setSyncingId(null);
     }
   };
 
   const handleDisconnect = async (accountId, bankName) => {
+    console.log("[BankConnect] handleDisconnect click →", { accountId, bankName });
     if (!window.confirm(`¿Desconectar ${bankName}? Tu historial se conservará.`)) return;
     try {
       await api.disconnectBank(accountId);
       showToast(`${bankName} desconectado`);
       await loadAccounts();
     } catch (e) {
+      console.error("[BankConnect] handleDisconnect error:", e);
       showToast("Error al desconectar", C.red);
     }
   };
 
   const handleConnectSuccess = async (bankId) => {
+    console.log("[BankConnect] handleConnectSuccess →", bankId);
     setView("list");
     if (bankId === "bchile") {
       showToast("Banco conectado. Aprueba la notificación en tu app", C.amber);
     } else {
       showToast("Banco conectado. Actualizando...");
     }
-    // Esperar un momento y arrancar polling
+    // Esperar un momento para que el sync de /connect escriba el registro
+    // inicial, luego leer cuentas directamente y arrancar polling.
+    // Antes usábamos setAccounts(prev => {...}) para leer el ID recién
+    // creado, pero React batching hacía que prev estuviera stale y el
+    // polling nunca arrancaba.
     setTimeout(async () => {
-      await loadAccounts();
-      setAccounts((prev) => {
-        const newAcc = prev.find((a) => a.bankId === bankId);
-        if (newAcc) startPolling(newAcc.id);
-        return prev;
-      });
+      try {
+        const res = await api.getBankAccounts();
+        const fresh = res.accounts || [];
+        setAccounts(fresh);
+        setTotalBalance(res.totalBalance || 0);
+        const newAcc = fresh.find((a) => a.bankId === bankId);
+        if (newAcc) {
+          setSyncingId(newAcc.id);
+          startPolling(newAcc.id);
+        }
+      } catch (e) {
+        console.error("[BankConnect] post-connect refresh:", e.message);
+      }
     }, 2000);
   };
 

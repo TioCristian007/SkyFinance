@@ -14,7 +14,11 @@ import Anthropic          from "@anthropic-ai/sdk";
 import { getAdminClient } from "./supabaseClient.js";
 
 const db     = () => getAdminClient();
-const client = new Anthropic();
+let _client = null;
+const client = () => {
+  if (!_client) _client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  return _client;
+};
 
 export const CATEGORIES = [
   "food", "transport", "subscriptions", "entertainment",
@@ -171,7 +175,7 @@ Formato EXACTO (solo esto):
 async function categorizeWithAI(merchantKeys) {
   if (!merchantKeys.length) return {};
   try {
-    const response = await client.messages.create({
+    const response = await client().messages.create({
       model:      "claude-haiku-4-5-20251001",
       max_tokens: 1024,
       system:     CATEGORIZER_SYSTEM,
@@ -179,7 +183,9 @@ async function categorizeWithAI(merchantKeys) {
     });
 
     const raw  = response.content[0]?.text?.trim() ?? "[]";
-    const data = JSON.parse(raw);
+    // Claude a veces envuelve el JSON en markdown fences (```json ... ```)
+    const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+    const data = JSON.parse(cleaned);
     const result = {}; const toCache = [];
 
     for (const item of data) {

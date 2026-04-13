@@ -30,15 +30,23 @@ export async function getTransactions(userId) {
 
 export async function insertTransaction(userId, tx) {
   if (!userId) return null;
+  // Campos bancarios opcionales — cuando el caller viene del sync bancario
+  // o quiere reconciliar a mano una movimiento externo, preservamos la
+  // trazabilidad al bank_account_id y el external_id para dedupe futuro.
+  const row = {
+    user_id:     userId,
+    amount:      tx.amount,
+    category:    tx.category,
+    description: tx.desc || tx.description,
+    date:        tx.date || new Date().toISOString().split("T")[0],
+  };
+  if (tx.bank_account_id || tx.bankAccountId) row.bank_account_id = tx.bank_account_id || tx.bankAccountId;
+  if (tx.external_id     || tx.externalId)    row.external_id     = tx.external_id     || tx.externalId;
+  if (tx.movement_source || tx.movementSource) row.movement_source = tx.movement_source || tx.movementSource;
+
   const { data, error } = await db()
     .from("transactions")
-    .insert({
-      user_id:     userId,
-      amount:      tx.amount,
-      category:    tx.category,
-      description: tx.desc || tx.description,
-      date:        tx.date || new Date().toISOString().split("T")[0],
-    })
+    .insert(row)
     .select().single();
   if (error) { console.error("[db] insertTransaction:", error.message); return null; }
   return { ...data, desc: data.description };

@@ -49,14 +49,14 @@ const INITIAL_MESSAGE = {
 
 // Bancos chilenos — colores institucionales reales + logos
 const BANK_META = {
-  "BancoEstado": { bg: "#D42B2B", abbr: "BE", logo: "/assets/banks/bancoestado.png" },
-  "Santander":   { bg: "#EC0000", abbr: "SA", logo: "/assets/banks/santander.png" },
-  "BCI":         { bg: "#F5F5F5", abbr: "BC", logo: "/assets/banks/bci.png", logoDark: true },
-  "Itaú":        { bg: "#F57F17", abbr: "IT", logo: null },
-  "Falabella":   { bg: "#2D6B2D", abbr: "FA", logo: "/assets/banks/falabella.png" },
-  "Scotiabank":  { bg: "#E65100", abbr: "SC", logo: null },
-  "BICE":        { bg: "#2E7D32", abbr: "BI", logo: null },
-  "Banco Chile": { bg: "#1A237E", abbr: "CH", logo: "/assets/banks/banco-chile.png" },
+  "Banco Estado": { bg: "#D42B2B", abbr: "BE", logo: "/assets/banks/bancoestado.png" },
+  "Santander":    { bg: "#EC0000", abbr: "SA", logo: "/assets/banks/santander.png" },
+  "BCI":          { bg: "#F5F5F5", abbr: "BC", logo: "/assets/banks/bci.png", logoDark: true },
+  "Itaú":         { bg: "#F57F17", abbr: "IT", logo: null },
+  "Falabella":    { bg: "#2D6B2D", abbr: "FA", logo: "/assets/banks/falabella.png" },
+  "Scotiabank":   { bg: "#E65100", abbr: "SC", logo: null },
+  "BICE":         { bg: "#2E7D32", abbr: "BI", logo: null },
+  "de Chile":     { bg: "#1A237E", abbr: "CH", logo: "/assets/banks/banco-chile.png" },
 };
 
 const getBankMeta = (name = "") => {

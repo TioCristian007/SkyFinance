@@ -83,9 +83,12 @@ export async function getSummary(userId) {
     : Math.max(0, estimatedIncome - expenses);
 
   // ── Totales por categoría (solo mes en curso) ────────────────────────────
+  // Bancarios llegan negativos, manuales positivos → Math.abs unifica ambos.
+  // Sin esto topCategory termina apuntando al gasto MENOR (sort desc con
+  // valores negativos) y el donut queda al revés.
   const categoryTotals = {};
   expenseTxs.forEach((t) => {
-    categoryTotals[t.category] = (categoryTotals[t.category] || 0) + t.amount;
+    categoryTotals[t.category] = (categoryTotals[t.category] || 0) + Math.abs(t.amount || 0);
   });
 
   const topCategory = Object.entries(categoryTotals).sort((a, b) => b[1] - a[1])[0] || null;
@@ -263,11 +266,19 @@ export async function completeChallenge(userId, challengeId) {
 }
 
 export function calcChallengeProgress(challenge, transactions) {
+  // Filtrar al mes en curso. Los challenges son mensuales — sin este filtro
+  // un bchile con 6 meses de histórico rompe cualquier "menos de $X este mes".
+  const d       = new Date();
+  const period  = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  const inMonth = (transactions || []).filter(t => t.date && t.date.startsWith(period));
+
   // Gastos bancarios = negativos, manuales = positivos → Math.abs unifica ambos
-  const txs = (transactions || []).filter(t => t.category !== "income");
+  const txs = inMonth.filter(t => t.category !== "income");
 
   if (challenge.id === "daily_track") {
-    const done = Math.min(transactions.length, 5);
+    // "Registra 5 gastos" — es trackeo de uso de la app, aquí sí miramos
+    // todo el histórico porque es un onboarding de hábito, no un mensual.
+    const done = Math.min((transactions || []).length, 5);
     return { pct: Math.round((done / 5) * 100), done: done >= 5 };
   }
   if (challenge.id === "save_60k") {
@@ -343,10 +354,20 @@ export async function computeSimulation(userId, simulationId, customAmount = nul
   ]);
 
   const income = parseIncomeRange(profile?.income_range);
+
+  // Solo gastos del mes en curso — sin esto, las simulaciones se basan en
+  // TODO el historial bancario y los recortes sugeridos quedan inflados.
+  const d        = new Date();
+  const period   = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  const monthTxs = transactions.filter(t => t.date && t.date.startsWith(period));
+
   const categoryTotals = {};
-  transactions
+  monthTxs
     .filter(t => t.category !== "income")
-    .forEach(t => { categoryTotals[t.category] = (categoryTotals[t.category] || 0) + t.amount; });
+    .forEach(t => {
+      // Math.abs: gastos bancarios vienen negativos, manuales positivos
+      categoryTotals[t.category] = (categoryTotals[t.category] || 0) + Math.abs(t.amount || 0);
+    });
 
   const QUICK_SIMS = [
     { id: "uber",   category: "transport",     cutPct: 0.6 },

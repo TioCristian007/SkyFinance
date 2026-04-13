@@ -140,13 +140,45 @@ router.post("/connect", async (req, res) => {
 });
 
 // ── POST /api/banking/sync/:id — sincronizar una cuenta ──────────────────────
+// El scraper tarda (bchile con 2FA puede llegar a 120s). Si esperamos en
+// foreground, el fetch del browser timeoutea y el usuario nunca ve el
+// resultado. Respondemos inmediatamente con {started:true} y dejamos que
+// el sync corra en background — el frontend hace polling a GET /accounts
+// para ver el estado actualizado (status, last_balance, last_sync_error).
 router.post("/sync/:id", async (req, res) => {
   try {
     const uid = req.userId;
     if (!uid) return res.status(401).json({ error: "No autenticado" });
 
-    const result = await syncBankAccount(req.params.id, uid);
-    res.json(result);
+    const accountId = req.params.id;
+
+    // Validar dueño antes de disparar el sync — no queremos trabajar en
+    // cuentas ajenas ni devolver 200 cuando el id no pertenece al usuario.
+    const { data: acc, error: accErr } = await db()
+      .from("bank_accounts")
+      .select("id, bank_id, bank_name, status")
+      .eq("id", accountId)
+      .eq("user_id", uid)
+      .single();
+
+    if (accErr || !acc) {
+      return res.status(404).json({ error: "Cuenta no encontrada" });
+    }
+
+    // Responder inmediatamente — el sync corre en background
+    res.json({
+      started:  true,
+      accountId,
+      bankId:   acc.bank_id,
+      bankName: acc.bank_name,
+      message:  "Sincronización iniciada",
+    });
+
+    // Fire-and-forget. Errores se guardan en bank_accounts.last_sync_error
+    // y el frontend los lee en el próximo poll.
+    syncBankAccount(accountId, uid).catch((e) => {
+      console.error(`[banking] sync background falló:`, e.message);
+    });
   } catch (e) {
     console.error("[banking] POST sync:", e.message);
     res.status(500).json({ error: e.message || "Error al sincronizar" });
