@@ -1,2 +1,0 @@
-[phases.setup]
-aptPkgs = ["chromium", "fonts-liberation", "libnss3", "libxss1", "libasound2", "libgbm1"]
