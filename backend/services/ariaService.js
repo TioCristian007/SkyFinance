@@ -208,7 +208,7 @@ function buildAnonProfile(profile) {
 
 export async function trackSpendingEvent(profile, tx, userId = null) {
   try {
-    if (userId && !(await hasAriaConsent(userId))) return;
+    if (!userId || !(await hasAriaConsent(userId))) return;
 
     const anon   = buildAnonProfile(profile);
     const bucket = getAmountBucket(Math.abs(tx.amount));
@@ -244,7 +244,7 @@ export async function trackSpendingEvent(profile, tx, userId = null) {
 
 export async function trackGoalEvent(profile, goal, completionRate = 0, goalStatus = "active", userId = null) {
   try {
-    if (userId && !(await hasAriaConsent(userId))) return;
+    if (!userId || !(await hasAriaConsent(userId))) return;
 
     const anon = buildAnonProfile(profile);
 
@@ -281,7 +281,7 @@ export async function trackGoalEvent(profile, goal, completionRate = 0, goalStat
 
 export async function trackBehavioralSignal(profile, userMessage, mrMoneyReply = "", userId = null) {
   try {
-    if (userId && !(await hasAriaConsent(userId))) return;
+    if (!userId || !(await hasAriaConsent(userId))) return;
 
     const fullContext = `${userMessage} ${mrMoneyReply}`;
     if (!hasSignificantContent(fullContext)) return;
@@ -328,7 +328,7 @@ export async function trackBehavioralSignal(profile, userMessage, mrMoneyReply =
 
 export async function trackSessionInsight(profile, sessionData, userId = null) {
   try {
-    if (userId && !(await hasAriaConsent(userId))) return;
+    if (!userId || !(await hasAriaConsent(userId))) return;
 
     const anon = buildAnonProfile(profile);
     const {

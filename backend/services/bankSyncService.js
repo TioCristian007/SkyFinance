@@ -3,6 +3,20 @@
 //
 // Orquestador de sincronización bancaria.
 //
+// CAMBIOS ENTREGA 2:
+//   · Sync incremental: cuenta cuántas transacciones existentes ya hay para
+//     esta cuenta. Si el scraper trae los movimientos más recientes y todos
+//     ya están conocidos, evitamos categorizar de nuevo. Reduce calls a IA.
+//   · Categorización async: las transacciones se insertan con
+//     categorization_status='pending' y categoría provisional 'other'.
+//     processQueue() las resuelve en background. El usuario ve los
+//     movimientos al instante; la categoría real aparece segundos después.
+//   · Tracking de errores consecutivos: bank_accounts.consecutive_errors
+//     sube en cada error y se resetea a 0 en éxito. El scheduler lo usa
+//     para backoff exponencial.
+//   · last_scheduled_at: actualizado al inicio de cada sync, exitoso o no,
+//     para que el scheduler no insista demasiado pronto.
+//
 // FLUJO:
 //   1. Cargar bank_account (credentials encriptadas)
 //   2. Resetear status → "syncing"
@@ -10,9 +24,10 @@
 //   4. Llamar proveedor con onProgress (reporta estado 2FA en tiempo real)
 //   5. Adaptar movimientos al modelo canónico
 //   6. Deduplicar contra transacciones existentes
-//   7. Insertar solo transacciones nuevas (sin rawDescription)
+//   7. Insertar nuevas con categorization_status='pending'
 //   8. Actualizar last_balance, last_sync_at, status → "active"
-//   9. ARIA en background (buckets anónimos, sin UUID ni montos exactos)
+//   9. Disparar processQueue() en background — categoriza los pendientes
+//  10. ARIA en background (buckets anónimos, sin UUID ni montos exactos)
 //
 // 2FA (bchile):
 //   - onProgress detecta el mensaje de espera 2FA
@@ -21,18 +36,19 @@
 //   - Cuando usuario aprueba en app → scraper continúa → last_sync_error se limpia
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { getAdminClient }   from "./supabaseClient.js";
-import { decrypt }          from "./encryptionService.js";
-import { getProviderForBank }       from "./bankingAdapter.js";
-import { categorizeMovements }       from "./categorizerService.js";
-import { trackSpendingEvent } from "./ariaService.js";
+import { getAdminClient }      from "./supabaseClient.js";
+import { decrypt }             from "./encryptionService.js";
+import { getProviderForBank }  from "./bankingAdapter.js";
+import { trackSpendingEvent }  from "./ariaService.js";
+import { processQueue }        from "./categorizationQueueService.js";
 
 const db = () => getAdminClient();
 
-// ── Sync de una cuenta ────────────────────────────────────────────────────────
-
-// Lock para evitar syncs paralelos de la misma cuenta
+// Lock en memoria para evitar syncs paralelos de la MISMA cuenta.
+// No previene paralelismo entre cuentas distintas (eso es deseable).
 const _syncingAccounts = new Set();
+
+// ── Sync de una cuenta ────────────────────────────────────────────────────────
 
 export async function syncBankAccount(bankAccountId, userId) {
   if (_syncingAccounts.has(bankAccountId)) {
@@ -53,13 +69,19 @@ export async function syncBankAccount(bankAccountId, userId) {
     .single();
 
   if (accErr || !account) {
+    _syncingAccounts.delete(bankAccountId);
     throw new Error(`[sync] cuenta no encontrada: ${bankAccountId}`);
   }
 
-  // 2. Reset status al iniciar (limpia errores anteriores)
+  // 2. Reset status al iniciar (limpia errores anteriores) y marca scheduler
   await db()
     .from("bank_accounts")
-    .update({ status: "active", last_sync_error: null, updated_at: new Date().toISOString() })
+    .update({
+      status:              "active",
+      last_sync_error:     null,
+      last_scheduled_at:   new Date().toISOString(),
+      updated_at:          new Date().toISOString(),
+    })
     .eq("id", bankAccountId);
 
   try {
@@ -70,14 +92,10 @@ export async function syncBankAccount(bankAccountId, userId) {
     // 4. onProgress — reporta cada paso del scraper al log
     //    Para bchile: detecta la pantalla de 2FA y avisa al frontend
     //    vía last_sync_error + status="waiting_2fa" (estado temporal).
-    //    Al completar el sync con éxito vuelve a "active" y limpia el error.
     const onProgress = (step) => {
       console.log(`[sync][${account.bank_id}] ${step}`);
 
       if (/2FA|aprobaci[oó]n|esperando/i.test(step)) {
-        // Escribir estado 2FA para que el frontend lo vea via polling.
-        // status != "error" → la UI no lo pinta como fallo; el banner se
-        // dispara por el regex en last_sync_error.
         db().from("bank_accounts")
           .update({
             status:          "waiting_2fa",
@@ -92,52 +110,67 @@ export async function syncBankAccount(bankAccountId, userId) {
     const provider = await getProviderForBank(account.bank_id);
     const { balance, movements } = await provider.fetchData({ rut, password, onProgress });
 
-    // 6. Categorizar con sistema de 3 capas (reglas → cache → IA)
-    const adapted = await categorizeMovements(movements, account.bank_id);
-
-    // 7. Deduplicar contra transacciones existentes
+    // 6. Deduplicar ANTES de cualquier procesamiento pesado.
+    //    Sync incremental: si todos los movimientos ya existen, salimos
+    //    sin tocar nada más. Reduce calls a IA y escrituras innecesarias.
     const { data: existing } = await db()
       .from("transactions")
       .select("external_id")
       .eq("bank_account_id", bankAccountId)
       .not("external_id", "is", null);
 
-    const existingIds  = new Set((existing || []).map((r) => r.external_id));
+    const existingIds = new Set((existing || []).map((r) => r.external_id));
+
+    // El proveedor devuelve movimientos sin categorizar (raw del scraper).
+    // Construimos external_id provisional para cada uno y filtramos.
+    const adapted = movements.map((m) => buildPendingMovement(m, account.bank_id));
     const newMovements = adapted.filter((m) => !existingIds.has(m.externalId));
 
     console.log(`[sync] ${account.bank_id}: ${adapted.length} total, ${newMovements.length} nuevos`);
 
-    // 8. Insertar transacciones nuevas (sin rawDescription — privacidad)
+    // 7. Insertar transacciones nuevas con categorization_status='pending'.
+    //    El usuario ve sus movimientos al instante con etiqueta provisional.
+    //    processQueue() los categoriza en background.
     if (newMovements.length > 0) {
       const rows = newMovements.map((m) => ({
-        user_id:          userId,
-        bank_account_id:  bankAccountId,
-        amount:           m.amount,
-        category:         m.category,
-        description:      m.description,  // etiqueta limpia, no texto bancario
-        date:             m.date,
-        external_id:      m.externalId,
-        movement_source:  m.movementSource,
+        user_id:                  userId,
+        bank_account_id:          bankAccountId,
+        amount:                   m.amount,
+        category:                 "other",                 // provisional
+        description:              "Procesando...",         // provisional
+        raw_description:          m.rawDescription,
+        date:                     m.date,
+        external_id:              m.externalId,
+        movement_source:          m.movementSource,
+        categorization_status:    "pending",
       }));
 
       const { error: insertErr } = await db().from("transactions").insert(rows);
       if (insertErr) throw insertErr;
     }
 
-    // 9. Actualizar estado de la cuenta
+    // 8. Actualizar estado de la cuenta + reset error counter
     await db()
       .from("bank_accounts")
       .update({
-        last_sync_at:    new Date().toISOString(),
-        last_sync_error: null,
-        last_balance:    balance,
-        status:          "active",
-        sync_count:      (account.sync_count ?? 0) + 1,
-        updated_at:      new Date().toISOString(),
+        last_sync_at:        new Date().toISOString(),
+        last_sync_error:     null,
+        last_balance:        balance,
+        status:              "active",
+        sync_count:          (account.sync_count ?? 0) + 1,
+        consecutive_errors:  0,                            // reset on success
+        updated_at:          new Date().toISOString(),
       })
       .eq("id", bankAccountId);
 
-    // 10. ARIA en background
+    // 9. Disparar categorización en background.
+    //    fire-and-forget — no bloqueamos la respuesta al usuario.
+    if (newMovements.length > 0) {
+      processQueue().catch((e) => console.error("[sync] catQueue error:", e.message));
+    }
+
+    // 10. ARIA en background — pasamos userId para que el guard de
+    //     consentimiento funcione (P0-3 del sweep).
     fireAriaSignals(userId, account, newMovements).catch(() => {});
 
     const elapsed = Date.now() - startedAt;
@@ -155,9 +188,15 @@ export async function syncBankAccount(bankAccountId, userId) {
     const msg = sanitizeError(error.message);
     console.error(`[sync] error en ${account.bank_id}:`, msg);
 
+    // Incrementar contador de errores consecutivos para backoff del scheduler
     await db()
       .from("bank_accounts")
-      .update({ status: "error", last_sync_error: msg, updated_at: new Date().toISOString() })
+      .update({
+        status:              "error",
+        last_sync_error:     msg,
+        consecutive_errors:  (account.consecutive_errors ?? 0) + 1,
+        updated_at:          new Date().toISOString(),
+      })
       .eq("id", bankAccountId);
 
     throw new Error(msg);
@@ -169,9 +208,6 @@ export async function syncBankAccount(bankAccountId, userId) {
 // ── Sync de todas las cuentas del usuario ─────────────────────────────────────
 
 export async function syncAllUserAccounts(userId) {
-  // Sync todo lo que no esté desconectado. Incluye "error" y "waiting_2fa"
-  // para permitir reintentos después de una falla transitoria o un 2FA
-  // que el usuario no alcanzó a aprobar.
   const { data: accounts } = await db()
     .from("bank_accounts")
     .select("id, bank_id, bank_name")
@@ -180,33 +216,29 @@ export async function syncAllUserAccounts(userId) {
 
   if (!accounts?.length) return { synced: 0, results: [] };
 
-  const results = await Promise.allSettled(
-    accounts.map((acc) => syncBankAccount(acc.id, userId))
-  );
+  // Secuencial, no paralelo: cada scraper abre una instancia de Chromium
+  // que consume ~200MB. Con 6+ bancos en paralelo en Railway la memoria
+  // explota. Sequential es más lento pero estable.
+  const results = [];
+  for (const acc of accounts) {
+    try {
+      const r = await syncBankAccount(acc.id, userId);
+      results.push({ bankId: acc.bank_id, success: true, ...r });
+    } catch (e) {
+      results.push({ bankId: acc.bank_id, success: false, error: e.message });
+    }
+  }
 
   return {
-    synced:  results.filter((r) => r.status === "fulfilled").length,
-    errors:  results.filter((r) => r.status === "rejected").length,
-    results: results.map((r, i) => ({
-      bankId:  accounts[i].bank_id,
-      success: r.status === "fulfilled",
-      error:   r.status === "rejected" ? r.reason?.message : null,
-    })),
+    synced: results.filter((r) => r.success).length,
+    errors: results.filter((r) => !r.success).length,
+    results,
   };
 }
 
 // ── Balances por banco ────────────────────────────────────────────────────────
 
 export async function getBankBalances(userId) {
-  // Importante: NO incluir account_type ni account_last4 en el SELECT.
-  // Esas columnas vienen de una migración extendida (Bank_SQLSchema.txt) que
-  // puede no estar aplicada en el schema del usuario. Si Supabase encuentra
-  // una columna que no existe, el query falla en silencio, `data` viene como
-  // null, y el endpoint devuelve {accounts:[], totalBalance:0} aunque la DB
-  // tenga registros con balance. Síntoma: "hice el sync, se guardó el
-  // balance, y la UI muestra cero cuentas conectadas".
-  // Los campos extendidos se reemplazan por defaults por-banco y se
-  // re-intentan en una segunda pasada opcional (no-bloqueante).
   const { data: accounts, error } = await db()
     .from("bank_accounts")
     .select("id, bank_id, bank_name, bank_icon, last_balance, last_sync_at, last_sync_error, status, sync_count")
@@ -223,10 +255,6 @@ export async function getBankBalances(userId) {
   const now          = Date.now();
   const totalBalance = accounts.reduce((sum, a) => sum + (a.last_balance || 0), 0);
 
-  // Tipo de cuenta por defecto según banco — se usa siempre, porque la
-  // columna account_type es parte de la migración extendida que puede no
-  // estar presente. Cuando se agregue, se puede hacer un SELECT aparte
-  // opcional con try/catch y merge sobre estos defaults.
   const DEFAULT_ACCOUNT_TYPE = {
     bancoestado: "CuentaRUT",
     bchile:      "Cta. Corriente",
@@ -252,12 +280,8 @@ export async function getBankBalances(userId) {
         lastSyncError: a.last_sync_error,
         status:        a.status,
         syncCount:     a.sync_count      || 0,
-        // minutesAgo calculado aquí — el frontend no tiene que hacer aritmética de fechas
         minutesAgo,
-        // accountType: default por banco (columna account_type omitida en SELECT
-        // porque puede no existir en el schema del usuario)
         accountType:   DEFAULT_ACCOUNT_TYPE[a.bank_id] || "Cuenta",
-        // last4: null hasta que exista la columna en el schema y el scraper lo popule
         last4:         null,
       };
     }),
@@ -267,9 +291,45 @@ export async function getBankBalances(userId) {
 
 // ── Helpers privados ──────────────────────────────────────────────────────────
 
+// Construye el shape mínimo necesario para insertar una transacción
+// pendiente. NO categoriza — eso es trabajo de processQueue() después.
+// external_id se construye igual que en el categorizer original para
+// que la deduplicación funcione consistentemente.
+function buildPendingMovement(m, bankId) {
+  const amount    = parseInt(m.amount ?? 0);
+  const rawDesc   = (m.description ?? "").trim();
+  const date      = normalizeDate(m.date);
+  const source    = m.source ?? "account";
+  const externalId = m.id ?? buildExternalId(bankId, date, amount, rawDesc, source);
+
+  return {
+    amount,
+    rawDescription: rawDesc,
+    date,
+    movementSource: source,
+    externalId,
+  };
+}
+
+function normalizeDate(raw) {
+  if (!raw) return new Date().toISOString().split("T")[0];
+  if (/^\d{2}-\d{2}-\d{4}$/.test(raw)) {
+    const [d, mo, y] = raw.split("-");
+    return `${y}-${mo}-${d}`;
+  }
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.substring(0, 10);
+  return new Date().toISOString().split("T")[0];
+}
+
+function buildExternalId(bankId, date, amount, desc, source) {
+  const raw = `${bankId}:${source}:${date}:${amount}:${desc.substring(0, 30)}`;
+  let h = 0;
+  for (let i = 0; i < raw.length; i++) { h = ((h << 5) - h) + raw.charCodeAt(i); h |= 0; }
+  return `${bankId}_${Math.abs(h).toString(36)}`;
+}
+
 function sanitizeError(msg) {
   if (!msg) return "Error de sincronización";
-  // No exponer credenciales ni stack traces en errores
   if (/password|rut|clave|credential/i.test(msg)) return "Error de autenticación bancaria";
   if (/ETIMEDOUT|ECONNREFUSED|timeout.*connect/i.test(msg)) return "El banco no respondió. Intenta más tarde.";
   if (msg.startsWith("2FA_TIMEOUT:"))  return msg.replace("2FA_TIMEOUT: ", "");
@@ -288,9 +348,12 @@ async function fireAriaSignals(userId, account, newMovements) {
   if (!profile) return;
   for (const m of newMovements) {
     if (m.amount >= 0) continue;
+    // Pasamos userId — el guard de consentimiento de ARIA lo necesita.
+    // Sin userId el guard se saltaba (P0-3 del sweep).
     await trackSpendingEvent(
       { age_range: profile.age_range, region: profile.region, income_range: profile.income_range },
-      { amount: Math.abs(m.amount), category: m.category, date: m.date }
+      { amount: Math.abs(m.amount), category: "other", date: m.date }, // categoría real vendrá en el futuro
+      userId
     ).catch(() => {});
   }
 }

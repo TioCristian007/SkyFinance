@@ -16,14 +16,14 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "Mensaje inválido" });
     }
 
-    // Mr. Money ahora devuelve { reply, proposals? }
     const result = await askMrMoney(message.trim(), history, uid);
     res.json(result);
 
-    // ARIA en background
+    // ARIA en background. Pasamos uid — el guard de consentimiento
+    // de ariaService lo necesita para no escribir sin consent (P0-3).
     getProfile(uid).then((profile) => {
       if (profile) {
-        trackBehavioralSignal(profile, message.trim(), result.reply).catch(() => {});
+        trackBehavioralSignal(profile, message.trim(), result.reply, uid).catch(() => {});
       }
     }).catch(() => {});
 
