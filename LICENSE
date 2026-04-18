@@ -1,0 +1,90 @@
+SkyFinance License
+Version 1.0 — April 2026
+
+Copyright (c) 2026 Cristian Cristobal Amaru Vásquez Guevara
+All rights reserved.
+
+This repository and its contents (the “Software”) are the exclusive
+property of the copyright holder.
+
+────────────────────────────────────────
+GRANT OF RIGHTS
+────────────────────────────────────────
+
+Permission is hereby granted to view, study, and evaluate the Software
+for personal, educational, or non-commercial review purposes only.
+
+This includes:
+• Reading the source code
+• Running the Software locally for evaluation
+• Reviewing architectural, security, and design decisions
+
+────────────────────────────────────────
+RESTRICTIONS
+────────────────────────────────────────
+
+You may NOT, without prior written permission from the copyright holder:
+
+1. Copy, clone, fork, mirror, or redistribute the Software or any
+   substantial portion of it, in source or binary form.
+
+2. Use the Software, or derivatives of it, for any commercial purpose,
+   including but not limited to:
+   • Fintech products
+   • Personal finance applications
+   • Banking integrations
+   • AI financial assistants
+   • Analytics or behavioral finance platforms
+
+3. Modify, adapt, reverse engineer, decompile, or create derivative
+   works based on the Software.
+
+4. Use any part of the Software to train, fine-tune, benchmark, or
+   evaluate machine learning or AI models.
+
+5. Deploy the Software (or parts of it) in production environments,
+   whether public or private.
+
+6. Use the Software’s scraping, banking, categorization, encryption,
+   or data-processing logic in any other project.
+
+────────────────────────────────────────
+DATA & INTELLECTUAL PROPERTY
+────────────────────────────────────────
+
+All algorithms, system designs, workflows, data models, and behavioral
+insights embodied in the Software are protected intellectual property.
+
+No rights are granted over:
+• Financial data pipelines
+• Anonymized analytics architectures (e.g. ARIA)
+• AI prompting strategies or agent behavior
+• Banking adapters or scraping mechanisms
+
+────────────────────────────────────────
+NO WARRANTY
+────────────────────────────────────────
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
+
+IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES,
+OR OTHER LIABILITY ARISING FROM THE USE OF THE SOFTWARE.
+
+────────────────────────────────────────
+COMMERCIAL LICENSING
+────────────────────────────────────────
+
+Commercial licenses, partnerships, or usage rights may be granted
+separately.
+
+For inquiries, contact:
+📧 info@skyfinanzas.com
+
+────────────────────────────────────────
+GOVERNING LAW
+────────────────────────────────────────
+
+This License shall be governed by and construed in accordance with the
+laws of the Republic of Chile.

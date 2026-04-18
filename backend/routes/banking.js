@@ -191,8 +191,16 @@ router.post("/sync-all", async (req, res) => {
     const uid = req.userId;
     if (!uid) return res.status(401).json({ error: "No autenticado" });
 
-    const result = await syncAllUserAccounts(uid);
-    res.json(result);
+    // Responder inmediatamente — sync corre en background
+    res.json({
+      started: true,
+      message: "Sincronización de todas las cuentas iniciada",
+    });
+
+    // Fire-and-forget
+    syncAllUserAccounts(uid).catch((e) => {
+      console.error("[banking] sync-all background:", e.message);
+    });
   } catch (e) {
     console.error("[banking] POST sync-all:", e.message);
     res.status(500).json({ error: "Error al sincronizar cuentas" });

@@ -145,8 +145,16 @@ export async function syncBankAccount(bankAccountId, userId) {
         categorization_status:    "pending",
       }));
 
-      const { error: insertErr } = await db().from("transactions").insert(rows);
-      if (insertErr) throw insertErr;
+      const { error: insertErr } = await db()
+        .from("transactions")
+        .upsert(rows, {
+          onConflict: "user_id,bank_account_id,date,amount,raw_description"
+        });
+
+      if (insertErr) {
+        console.error("Insert error:", insertErr);
+        throw insertErr;
+      }
     }
 
     // 8. Actualizar estado de la cuenta + reset error counter

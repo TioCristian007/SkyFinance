@@ -1,3 +1,20 @@
+## License
+
+This project is **source-available, proprietary software**.
+
+You are allowed to **view and evaluate the source code for personal or educational purposes only**.
+
+❌ Commercial use  
+❌ Redistribution or mirroring  
+❌ Derivative works  
+❌ Production deployment  
+❌ Use of this code or architecture to train AI models  
+
+All rights reserved © 2026 Cristian Cristobal Amaru Vásquez Guevara.
+
+See the [LICENSE](./LICENSE) file for full terms.
+
+
 # Sky Finance
 
 Plataforma de finanzas personales con IA, conexión bancaria automática, analytics anonimizados (ARIA) y autenticación persistente.
