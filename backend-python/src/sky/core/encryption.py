@@ -28,18 +28,14 @@ _IV_LENGTH = 16   # 128 bits
 _TAG_LENGTH = 16  # 128 bits — GCM default
 
 # Cache de la clave derivada (se calcula una sola vez por proceso)
-_derived_key: bytes | None = None
+# Cache de claves derivadas (una por raw_key distinta)
+_derived_keys: dict[str, bytes] = {}
 
 
 def _get_master_key(raw_key: str) -> bytes:
-    """
-    Deriva 32 bytes (256 bits) del raw key vía SHA-256.
-    Replica exactamente: crypto.createHash("sha256").update(raw).digest()
-    """
-    global _derived_key
-    if _derived_key is None:
-        _derived_key = hashlib.sha256(raw_key.encode("utf-8")).digest()
-    return _derived_key
+    if raw_key not in _derived_keys:
+        _derived_keys[raw_key] = hashlib.sha256(raw_key.encode("utf-8")).digest()
+    return _derived_keys[raw_key]
 
 
 def encrypt(plaintext: str, raw_key: str) -> str:
