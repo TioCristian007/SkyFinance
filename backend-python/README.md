@@ -103,3 +103,76 @@ Una vez verificada la encryption, el equipo puede empezar Fase 2-3 en paralelo:
 
 El backend Node sigue en producción sirviendo a usuarios.
 Python no toca producción hasta Fase 13 (parity tests OK + cutover gradual).
+
+
+# Fase 4 — Scraper BChile en Playwright Python
+
+## Archivos entregados
+
+Copialos en tu repo `backend-python/` respetando la estructura:
+
+| Archivo de este ZIP | Va a |
+|---|---|
+| `bchile_scraper.py` | `src/sky/ingestion/sources/bchile_scraper.py` |
+| `falabella_scraper.py` | `src/sky/ingestion/sources/falabella_scraper.py` (skeleton) |
+| `bchile_parser.py` | `src/sky/ingestion/parsers/bchile_parser.py` |
+| `browser_pool.py` | `src/sky/ingestion/browser_pool.py` (reemplaza el existente) |
+| `test_bchile_parser.py` | `tests/unit/test_bchile_parser.py` |
+| `test_bchile_scraper.py` | `scripts/test_bchile_scraper.py` |
+
+## Cómo probar BChile end-to-end
+
+```bash
+cd backend-python
+.venv\Scripts\activate
+
+# 1. Instalar Playwright y bajar Chromium
+pip install playwright
+playwright install chromium
+
+# 2. Correr tests unitarios primero (sin browser)
+pytest tests/unit/ -v
+# Debe dar 25 passed, 2 skipped
+
+# 3. Test manual con tu cuenta real
+python scripts/test_bchile_scraper.py TU_RUT TU_PASSWORD
+
+# Te abre Chromium, hace login, te pide aprobar 2FA en tu app,
+# y te imprime tus movimientos.
+
+# Con filtro por fecha (sync incremental):
+python scripts/test_bchile_scraper.py TU_RUT TU_PASSWORD --since 2026-04-01
+
+# Sin GUI (más rápido, pero no ves qué pasa):
+python scripts/test_bchile_scraper.py TU_RUT TU_PASSWORD --headless
+```
+
+## Qué arregla vs el scraper Node actual
+
+| Problema Node | Fix Python |
+|---|---|
+| duplicate key on ON CONFLICT | `build_external_id` determinístico sin `idx` — mismo movimiento siempre produce mismo id |
+| "chequea tu app" sin push | Detección por keywords multiidioma, incluye "bchile pass", "digital pass" |
+| Sync trae 90 días siempre | Parámetro `since` corta paginación cuando ve fecha < since |
+| Progreso 2FA silencioso | Reporta remaining cada 15s mientras espera aprobación |
+| Timeout fijo en código | `two_fa_timeout_sec` parametrizable |
+
+## Qué NO está hecho (para el equipo)
+
+- **Falabella**: skeleton con interfaz correcta, lógica de scraping pendiente. Ver docstring de `falabella_scraper.py` para los pasos.
+- **Registry + IngestionRouter**: Fase 5. Los scrapers existen pero aún no se exponen a la API.
+- **ARQ job que llame al scraper**: Fase 6. Hoy solo corre vía `test_bchile_scraper.py`.
+- **Endpoint FastAPI que dispare el sync**: Fase 7.
+
+## Verificación gate de Fase 4
+
+Para dar Fase 4 por completa:
+- [ ] `pytest tests/unit/test_bchile_parser.py` pasa
+- [ ] `python scripts/test_bchile_scraper.py` con tu cuenta real:
+  - [ ] Hace login correctamente
+  - [ ] 2FA se muestra y se aprueba
+  - [ ] Trae al menos 1 movimiento
+  - [ ] Balance coincide con lo que ves en la web de BChile
+- [ ] Correrlo dos veces con `--since` de ayer devuelve solo movimientos de hoy (sync incremental funciona)
+
+Cuando esos 4 checks pasen, Fase 4 está cerrada para BChile. Falabella se puede completar en paralelo a Fase 5.

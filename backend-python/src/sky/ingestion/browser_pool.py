@@ -14,6 +14,7 @@ Beneficios vs abrir/cerrar Chromium en cada sync:
 from __future__ import annotations
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -26,8 +27,9 @@ logger = get_logger("browser_pool")
 
 
 class BrowserPool:
-    def __init__(self, pool_size: int | None = None):
+    def __init__(self, pool_size: int | None = None, headless: bool = True):
         self._pool_size = pool_size or settings.browser_pool_size
+        self._headless = headless
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
         self._semaphore = asyncio.Semaphore(self._pool_size)
@@ -37,18 +39,24 @@ class BrowserPool:
         if self._started:
             return
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(
-            headless=True,
-            executable_path=settings.chrome_path,
-            args=[
+
+        launch_kwargs: dict = {
+            "headless": self._headless,
+            "args": [
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-gpu",
                 "--disable-extensions",
             ],
-        )
+        }
+        # Solo pasar executable_path si está configurado Y el archivo existe.
+        # Si no, Playwright usa su propio Chromium (instalado con `playwright install`).
+        if settings.chrome_path and os.path.exists(settings.chrome_path):
+            launch_kwargs["executable_path"] = settings.chrome_path
+
+        self._browser = await self._playwright.chromium.launch(**launch_kwargs)
         self._started = True
-        logger.info("browser_pool_started", pool_size=self._pool_size)
+        logger.info("browser_pool_started", pool_size=self._pool_size, headless=self._headless)
 
     async def stop(self) -> None:
         if self._browser:
@@ -89,3 +97,8 @@ def get_browser_pool() -> BrowserPool:
     if _pool is None:
         _pool = BrowserPool()
     return _pool
+
+def set_browser_pool(pool: BrowserPool) -> None:
+    """Permite inyectar un pool personalizado (útil para tests)."""
+    global _pool
+    _pool = pool

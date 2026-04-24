@@ -145,16 +145,24 @@ export async function syncBankAccount(bankAccountId, userId) {
         categorization_status:    "pending",
       }));
 
-      const { error: insertErr } = await db()
-        .from("transactions")
-        .upsert(rows, {
-          onConflict: "user_id,bank_account_id,date,amount,raw_description"
-        });
-
-      if (insertErr) {
-        console.error("Insert error:", insertErr);
-        throw insertErr;
+      // Node tiene BUG-1 (external_id no determinístico entre corridas).
+      // Se resuelve en la migración a Python. Mientras tanto, insertar
+      // una a una e ignorar duplicados silenciosamente.
+      let insertedCount = 0;
+      for (const row of rows) {
+        const { error: singleErr } = await db()
+          .from("transactions")
+          .insert(row);
+        if (singleErr) {
+          if (singleErr.code === "23505") {
+            // Duplicado — saltar silenciosamente
+            continue;
+          }
+          throw singleErr;
+        }
+        insertedCount++;
       }
+      console.log(`[sync] ${account.bank_id}: ${insertedCount} insertadas, ${rows.length - insertedCount} duplicados saltados`);
     }
 
     // 8. Actualizar estado de la cuenta + reset error counter
