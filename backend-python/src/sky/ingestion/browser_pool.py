@@ -47,6 +47,8 @@ class BrowserPool:
                 "--disable-dev-shm-usage",
                 "--disable-gpu",
                 "--disable-extensions",
+                # Evita que el banco detecte Playwright como bot automatizado
+                "--disable-blink-features=AutomationControlled",
             ],
         }
         # Solo pasar executable_path si está configurado Y el archivo existe.
@@ -81,6 +83,14 @@ class BrowserPool:
                 viewport={"width": 1280, "height": 720},
                 locale="es-CL",
                 timezone_id="America/Santiago",
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                ),
+            )
+            # Ocultar navigator.webdriver que delata Playwright al banco
+            await context.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
             )
             try:
                 yield context
