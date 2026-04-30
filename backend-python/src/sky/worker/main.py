@@ -8,34 +8,40 @@ Arranque:
     arq sky.worker.main.WorkerSettings
 """
 
-from arq import cron
 from arq.connections import RedisSettings
 
 from sky.core.config import settings
 from sky.core.logging import setup_logging, get_logger
+from sky.ingestion.bootstrap import build_router
 from sky.ingestion.browser_pool import get_browser_pool
 
 logger = get_logger("worker")
 
 
-async def startup(ctx: dict) -> None:
+async def startup(ctx: dict) -> None:  # type: ignore[type-arg]
     """Inicializar recursos compartidos del worker."""
     setup_logging(json_output=settings.is_production)
     logger.info("worker_starting")
 
-    # Iniciar browser pool (Playwright)
     pool = get_browser_pool()
     await pool.start()
     ctx["browser_pool"] = pool
 
+    router, redis = await build_router(include_browser_sources=True)
+    ctx["router"] = router
+    ctx["redis"] = redis
+
     logger.info("worker_ready", pool_size=settings.browser_pool_size)
 
 
-async def shutdown(ctx: dict) -> None:
+async def shutdown(ctx: dict) -> None:  # type: ignore[type-arg]
     """Liberar recursos al apagar."""
     pool = ctx.get("browser_pool")
     if pool:
         await pool.stop()
+    redis = ctx.get("redis")
+    if redis:
+        await redis.aclose()
     logger.info("worker_stopped")
 
 

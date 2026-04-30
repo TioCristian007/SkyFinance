@@ -300,31 +300,41 @@ asyncio.run(test())
 
 **Objetivo:** el router de ingesta con failover automático está operativo.
 
-### Qué se hace
-1. Verificar que `routing/router.py` funciona con los sources de Fase 4.
-2. Implementar `routing/rules.py` que lee reglas desde la tabla `ingestion_routing_rules`.
-3. Verificar circuit breaker contra Redis real.
-4. Implementar rate limiter por proveedor (evitar exceder cuotas del banco).
-5. Correr la migración SQL `001_routing_rules.sql` en Supabase.
+### Estado: ✅ Cerrada (2026-04-29)
 
-### Archivos
+### Archivos finales
 ```
-src/sky/ingestion/routing/router.py        ← ya listo (scaffold)
-src/sky/ingestion/routing/rules.py         ← NUEVO (lee de DB)
-src/sky/ingestion/circuit_breaker.py       ← ya listo (scaffold)
-src/sky/ingestion/rate_limiter.py          ← NUEVO
-tests/unit/test_router.py                  ← NUEVO
-tests/unit/test_circuit_breaker.py         ← NUEVO
-migrations/001_routing_rules.sql           ← ya listo (scaffold)
-```
-
-### Gate de verificación
-```bash
-pytest tests/unit/test_router.py tests/unit/test_circuit_breaker.py -v
-# Todos pasan. Router recorre cadena, respeta circuit breaker, hace failover.
+src/sky/ingestion/rate_limiter.py              (sliding window log Redis — reescrito)
+src/sky/ingestion/routing/rules.py             (lectura DB + cache TTL — reescrito)
+src/sky/ingestion/routing/router.py            (con rate limiter inyectado)
+src/sky/ingestion/sources/__init__.py          (factory build_all_sources)
+src/sky/ingestion/bootstrap.py                 (ensamble único — NUEVO)
+src/sky/core/config.py                         (settings rate_limit_* y routing_rules_*)
+src/sky/api/main.py                            (wiring bootstrap en lifespan)
+src/sky/worker/main.py                         (wiring bootstrap en startup/shutdown)
+tests/unit/test_rate_limiter.py                (7 casos)
+tests/unit/test_circuit_breaker.py             (7 casos)
+tests/unit/test_routing_rules.py               (7 casos)
+tests/unit/test_router.py                      (10 casos + 1 extra = 11)
+tests/conftest.py                              (fixtures fake_redis, rate_limiter, cb_config)
+scripts/smoke_router.py                        (gate humano contra Redis real — NUEVO)
+migrations/001_routing_rules.sql               (sin cambios — ya listo)
 ```
 
-Test manual: configurar cadena `["source_que_falla", "scraper.bchile"]` y verificar que el router salta al scraper automáticamente cuando el primero falla.
+### Gates verificados
+- [x] `pytest tests/unit/ -v` → todos pasan (≥ 31 casos nuevos)
+- [x] `pytest --cov=src/sky/ingestion --cov-report=term-missing` ≥ 85%
+- [x] `mypy src/sky/ingestion/` → 0 errores
+- [x] `ruff check src/sky/ingestion/ tests/` → 0 errores
+- [x] `scripts/smoke_router.py` corrió contra Redis local con éxito
+- [x] `uvicorn sky.api.main:app` arranca con bootstrap wired
+- [x] `api/main.py` y `worker/main.py` usan `build_router()` de `ingestion.bootstrap`
+
+### Doctrina confirmada
+- `AuthenticationError` no dispara failover (implementado en router.py)
+- `rate_limit` es "skip" (acumula en `errors`), no "fail"
+- API nunca importa Playwright (`include_browser_sources=False`)
+- Credenciales nunca se logean
 
 ### Estimación: 3-5 días
 

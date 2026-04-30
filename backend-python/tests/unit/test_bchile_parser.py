@@ -3,6 +3,7 @@ Tests de parsers BChile — sin browser, puros de lógica.
 """
 
 from datetime import date
+
 from sky.ingestion.parsers.bchile_parser import normalize_date, parse_amount
 
 

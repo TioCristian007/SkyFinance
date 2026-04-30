@@ -52,6 +52,36 @@ class Settings(BaseSettings):
     # ── Fintoc (futuro — deshabilitado por default) ───────────────────────
     fintoc_secret_key: str = ""
 
+    # ── Rate limiting (Fase 5) ────────────────────────────────────────────
+    rate_limit_default_max: int = 10
+    rate_limit_default_window_sec: int = 60
+    # Override por source: "scraper.bchile=2/60,fintoc=30/60"
+    rate_limit_overrides: str = ""
+
+    # ── Routing rules (Fase 5) ────────────────────────────────────────────
+    routing_rules_cache_ttl_sec: int = 60   # cache en memoria del router
+    routing_rules_db_required: bool = False  # si True, falla al arrancar si DB no responde
+
+    @property
+    def rate_limit_overrides_map(self) -> dict[str, tuple[int, int]]:
+        """Parsea 'scraper.bchile=2/60,fintoc=30/60' → {'scraper.bchile': (2, 60), ...}"""
+        out: dict[str, tuple[int, int]] = {}
+        if not self.rate_limit_overrides:
+            return out
+        for entry in self.rate_limit_overrides.split(","):
+            entry = entry.strip()
+            if not entry or "=" not in entry:
+                continue
+            key, val = entry.split("=", 1)
+            if "/" not in val:
+                continue
+            max_s, win_s = val.split("/", 1)
+            try:
+                out[key.strip()] = (int(max_s), int(win_s))
+            except ValueError:
+                continue
+        return out
+
     @property
     def is_production(self) -> bool:
         return self.node_env == "production"

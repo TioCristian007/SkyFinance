@@ -19,6 +19,8 @@ from dataclasses import dataclass
 
 from redis.asyncio import Redis
 
+from sky.core.errors import RateLimitError
+from sky.core.logging import get_logger
 from sky.ingestion.circuit_breaker import CircuitBreaker
 from sky.ingestion.contracts import (
     AllSourcesFailedError,
@@ -30,7 +32,7 @@ from sky.ingestion.contracts import (
     ProgressCallback,
     RecoverableIngestionError,
 )
-from sky.core.logging import get_logger
+from sky.ingestion.rate_limiter import RateLimiter
 
 logger = get_logger("ingestion_router")
 
@@ -58,10 +60,12 @@ class IngestionRouter:
         sources: dict[str, DataSource],
         redis: Redis,
         rules: list[RoutingRule],
-    ):
+        rate_limiter: RateLimiter | None = None,
+    ) -> None:
         self._sources = sources
         self._redis = redis
         self._rules = {r.bank_id: r for r in rules}
+        self._rate_limiter = rate_limiter
 
     def _get_chain(self, bank_id: str, user_id: str) -> list[str]:
         """Obtiene la cadena de providers para este banco y usuario."""
@@ -98,6 +102,7 @@ class IngestionRouter:
             - AuthenticationError → NO failover (la credencial es el problema)
             - RecoverableIngestionError → registrar fallo, intentar siguiente
             - Circuit abierto → saltar al siguiente sin intentar
+            - Rate limited → skip (acumular en errors), intentar siguiente
 
         Raises:
             AuthenticationError: credenciales rechazadas
@@ -117,6 +122,20 @@ class IngestionRouter:
             if not await cb.is_available():
                 logger.info("circuit_open_skipping", source_id=source_id)
                 continue
+
+            # Check rate limiter (skip, no fail)
+            if self._rate_limiter is not None:
+                rl = await self._rate_limiter.acquire(source_id)
+                if not rl.allowed:
+                    logger.warning(
+                        "rate_limited_skipping",
+                        source_id=source_id,
+                        retry_after_ms=rl.retry_after_ms,
+                    )
+                    errors.append((source_id, RateLimitError(
+                        f"{source_id} rate limited; retry in {rl.retry_after_ms}ms"
+                    )))
+                    continue
 
             try:
                 logger.info("trying_source", source_id=source_id, bank_id=bank_id)

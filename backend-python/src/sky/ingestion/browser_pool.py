@@ -15,10 +15,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
-from playwright.async_api import async_playwright, Browser, BrowserContext, Playwright
+from playwright.async_api import Browser, BrowserContext, Playwright, async_playwright
 
 from sky.core.config import settings
 from sky.core.logging import get_logger

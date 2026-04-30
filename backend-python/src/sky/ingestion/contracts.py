@@ -18,15 +18,15 @@ from __future__ import annotations
 
 import hashlib
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from enum import Enum
-from typing import Any, Callable
-
+from enum import StrEnum
+from typing import Any
 
 # ── Enums ─────────────────────────────────────────────────────────────────────
 
-class SourceKind(str, Enum):
+class SourceKind(StrEnum):
     """Tipo de fuente de datos."""
     SCRAPER = "scraper"
     AGGREGATOR = "aggregator"       # Fintoc, Belvo
@@ -35,7 +35,7 @@ class SourceKind(str, Enum):
     MANUAL_UPLOAD = "manual"        # CSV subido por usuario
 
 
-class AuthMode(str, Enum):
+class AuthMode(StrEnum):
     """Método de autenticación requerido."""
     PASSWORD = "password"           # RUT + clave (scraping)
     OAUTH = "oauth"                 # Tokens access/refresh (Fintoc, bancos)
@@ -43,7 +43,7 @@ class AuthMode(str, Enum):
     CONSENT_TOKEN = "consent"       # Token SFA
 
 
-class MovementSource(str, Enum):
+class MovementSource(StrEnum):
     """De qué producto bancario viene el movimiento."""
     ACCOUNT = "account"             # Cuenta corriente / vista / RUT
     CREDIT_CARD = "credit_card"     # Tarjeta de crédito

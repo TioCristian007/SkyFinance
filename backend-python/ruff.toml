@@ -4,3 +4,8 @@ line-length = 100
 [lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 ignore = ["S101"]
+
+[lint.per-file-ignores]
+# Scrapers contienen strings JS multilínea y patrones try/except/pass intencionales
+"src/sky/ingestion/sources/bchile_scraper.py" = ["E501", "SIM105"]
+"src/sky/ingestion/sources/bci_direct.py" = ["E501", "SIM105"]

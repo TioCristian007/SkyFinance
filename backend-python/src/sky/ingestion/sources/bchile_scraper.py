@@ -616,7 +616,9 @@ class BChileScraperSource(DataSource):
         desc = (mov.get("glosaTransaccion") or "").strip()
         occurred = normalize_date(mov.get("fechaTransaccionString"))
         return CanonicalMovement(
-            external_id=build_external_id(bank_id, occurred, amount, desc, MovementSource.CREDIT_CARD),
+            external_id=build_external_id(
+                bank_id, occurred, amount, desc, MovementSource.CREDIT_CARD
+            ),
             amount_clp=amount,
             raw_description=desc,
             occurred_at=occurred,

@@ -53,6 +53,7 @@ dev = [
     "ruff>=0.8.0",
     "mypy>=1.13.0",
     "httpx",  # TestClient uses httpx
+    "fakeredis[lua]>=2.26.0",
 ]
 
 [build-system]
@@ -70,11 +71,27 @@ line-length = 100
 select = ["E", "F", "W", "I", "UP", "S", "B", "SIM", "RUF"]
 ignore = ["S101"]  # allow assert in tests
 
+[tool.ruff.lint.per-file-ignores]
+# Los scrapers contienen strings JavaScript multilínea con líneas largas
+# que no se pueden romper sin alterar la lógica del JS embebido.
+"src/sky/ingestion/sources/bchile_scraper.py" = ["E501"]
+"src/sky/ingestion/sources/bci_direct.py" = ["E501", "SIM105"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+# Scrapers pre-existentes con código Playwright sin anotar completamente
+module = [
+    "sky.ingestion.sources.bchile_scraper",
+    "sky.ingestion.sources.bci_direct",
+    "sky.ingestion.sources.falabella_scraper",
+    "sky.ingestion.browser_pool",
+]
+ignore_errors = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

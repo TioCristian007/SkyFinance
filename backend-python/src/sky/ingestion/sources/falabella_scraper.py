@@ -31,11 +31,9 @@ from sky.core.logging import get_logger
 from sky.ingestion.browser_pool import get_browser_pool
 from sky.ingestion.contracts import (
     BankCredentials,
-    CanonicalMovement,
     DataSource,
     IngestionCapabilities,
     IngestionResult,
-    MovementSource,
     OAuthTokens,
     ProgressCallback,
     RecoverableIngestionError,
@@ -85,7 +83,7 @@ class FalabellaScraperSource(DataSource):
             raise ValueError("Falabella requiere BankCredentials")
 
         progress = on_progress or (lambda s: None)
-        started_at = datetime.now()
+        _started_at = datetime.now()
         pool = get_browser_pool()
 
         async with pool.acquire() as context:

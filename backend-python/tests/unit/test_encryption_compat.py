@@ -14,7 +14,8 @@ Para generar fixtures:
 """
 
 import pytest
-from sky.core.encryption import encrypt, decrypt, verify_encryption_ready
+
+from sky.core.encryption import decrypt, encrypt, verify_encryption_ready
 
 # Clave de test — NUNCA usar en producción
 TEST_KEY = "test_key_for_unit_tests_only_32chars!"

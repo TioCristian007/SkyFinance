@@ -22,6 +22,7 @@ from sky.core.errors import (
     ValidationError,
 )
 from sky.core.logging import setup_logging, get_logger
+from sky.ingestion.bootstrap import build_router
 
 logger = get_logger("api")
 
@@ -31,7 +32,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Startup y shutdown hooks."""
     setup_logging(json_output=settings.is_production)
     logger.info("api_starting", port=settings.port)
+
+    router, redis = await build_router(include_browser_sources=False)
+    app.state.router = router
+    app.state.redis = redis
+
     yield
+
+    await redis.aclose()
     await close_engine()
     logger.info("api_stopped")
 
@@ -96,7 +104,7 @@ def create_app() -> FastAPI:
     # ...
 
     @app.get("/")
-    async def root():
+    async def root() -> dict[str, str]:
         return {
             "status": "ok",
             "app": "sky-backend-python",
@@ -104,7 +112,7 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/api/health")
-    async def health():
+    async def health() -> dict[str, str]:
         return {"status": "ok", "app": "sky-backend-python"}
 
     return app

@@ -6,11 +6,12 @@ La misma transacción real SIEMPRE debe producir el mismo id.
 """
 
 from datetime import date
+
 from sky.ingestion.contracts import (
-    build_external_id,
     CanonicalMovement,
     MovementSource,
     SourceKind,
+    build_external_id,
 )
 
 
@@ -61,6 +62,6 @@ class TestCanonicalMovement:
         assert m.amount_clp == -4890
         try:
             m.amount_clp = 0  # type: ignore
-            assert False, "Should be frozen"
+            raise AssertionError("Should be frozen")
         except AttributeError:
             pass
