@@ -7,6 +7,9 @@
 .env.*
 !.env.example
 
+# Claude Code (worktrees y estado local — nunca al repo)
+.claude/
+
 # Dependencias
 node_modules/
 jspm_packages/
