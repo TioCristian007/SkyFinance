@@ -1,178 +1,203 @@
-# Sky Backend Python — Scaffold Fase 0-1
+# Sky Backend Python
 
-## Qué es esto
+Migración del backend de Sky Finance de Node.js a Python siguiendo el plan de 13 fases.
 
-Este es el scaffolding completo para la migración del backend de Sky de Node.js a Python.
-Contiene las fundaciones (Fases 0 y 1 del plan de 13 fases) listas para que el equipo
-empiece a construir sobre ellas.
+> **Estado:** Fases 0-5 cerradas. Migración en curso. **No toca producción** hasta Fase 13.
+> **Stack:** Python 3.12 · FastAPI · ARQ · SQLAlchemy 2.0 async · Playwright · Redis · Supabase
 
-## Qué está incluido (listo para usar)
+---
 
-### Core (`src/sky/core/`)
-- `config.py` — Settings con pydantic-settings, fail-fast si faltan variables
-- `db.py` — SQLAlchemy async engine (misma DB Supabase, cero migración de datos)
-- `encryption.py` — AES-256-GCM **compatible binario con Node.js** ← CRÍTICO
-- `errors.py` — Jerarquía de excepciones tipadas → HTTP status codes
-- `locks.py` — Advisory locks de Postgres (reemplazo de Set() en memoria)
-- `logging.py` — structlog JSON con filtro automático de PII
+## Qué está cerrado
 
-### Ingestion (`src/sky/ingestion/`)
-- `contracts.py` — **DataSource**, **CanonicalMovement**, **build_external_id** ← EL CONTRATO
-- `browser_pool.py` — Pool reutilizable de Playwright browsers
-- `circuit_breaker.py` — Circuit breaker distribuido en Redis
-- `routing/router.py` — IngestionRouter con failover por cadena de providers
+### ✅ Fase 0 — Scaffolding
+Estructura del repo, `pyproject.toml` con deps, dockerfiles placeholder, CI mínimo (lint + mypy + tests en cada PR).
 
-### API (`src/sky/api/`)
-- `main.py` — FastAPI app con CORS estricto en prod
-- `middleware/jwt_auth.py` — Verificación JWT (resuelve P0-1)
-- `deps.py` — `require_user_id` dependency
+### ✅ Fase 1 — Contrato `DataSource` y modelo canónico
+Archivos: `src/sky/ingestion/contracts.py`
+- `DataSource` ABC con `source_identifier`, `source_kind`, `supported_banks`, `capabilities()`, `fetch()`.
+- `CanonicalMovement` (frozen dataclass) — el shape único que el dominio consume, sin saber de qué provider vino.
+- `IngestionResult`, `BankCredentials`, `OAuthTokens`, `IngestionCapabilities`.
+- `build_external_id(bank_id, date, amount, description)` — id determinístico SHA-256, mismo movimiento real → mismo id.
 
-### Worker (`src/sky/worker/`)
-- `main.py` — ARQ worker settings con browser pool lifecycle
+### ✅ Fase 2 — Core infrastructure
+Archivos en `src/sky/core/`:
+- `config.py` — `Settings` con pydantic-settings, fail-fast si falta env var crítica.
+- `db.py` — SQLAlchemy 2.0 async engine sobre la misma DB Supabase del Node.
+- `locks.py` — Postgres advisory locks (reemplaza `Set()` en memoria del Node).
+- `logging.py` — `structlog` JSON con filtro automático de PII.
+- `errors.py` — jerarquía tipada → HTTP status codes.
+- `metrics.py` — registry Prometheus mínimo (Fase 10 lo expande).
+
+### ✅ Fase 3 — Encryption compatible binario con Node
+Archivo: `src/sky/core/encryption.py`
+- AES-256-GCM con el mismo formato binario que `backend/services/encryptionService.js`.
+- Verificado con fixtures generadas desde Node — Python descifra credenciales bancarias existentes sin migración de datos.
+- `verify_encryption_ready()` corre al arranque (gate fail-fast).
+
+### ✅ Fase 4 — Scrapers Playwright
+Archivos en `src/sky/ingestion/sources/` y `src/sky/ingestion/parsers/`:
+- `bchile_scraper.py` — login + 2FA app + extracción de cuentas y tarjetas. **Validado contra cuenta real**.
+- `bchile_parser.py` — `normalize_date`, `parse_amount`, idempotente. 17 unit tests verde.
+- `falabella_scraper.py` — **skeleton**: estructura e interfaz correcta, lógica de scraping pendiente. Lanza `RecoverableIngestionError` por ahora; el router hace skip.
+- `bci_direct.py` — implementación parcial; gate end-to-end contra cuenta real **pendiente**.
+- `browser_pool.py` — pool reutilizable de Playwright contexts compartido por todo el worker.
+
+### ✅ Fase 5 — IngestionRouter, rate limiter, circuit breaker, rules en DB (cerrada 2026-04-30)
+Archivos:
+- `src/sky/ingestion/routing/router.py` — failover por cadena de providers, rollout %, integración con rate limiter y circuit breaker.
+- `src/sky/ingestion/routing/rules.py` — lectura de `public.ingestion_routing_rules` con cache TTL en memoria. Fallback a `DEFAULT_RULES` si DB no responde y `ROUTING_RULES_DB_REQUIRED=false`.
+- `src/sky/ingestion/rate_limiter.py` — sliding window log atómico (Redis sorted set + Lua script). UUID por request para evitar colisiones en mismo ms.
+- `src/sky/ingestion/circuit_breaker.py` — CLOSED/OPEN/HALF_OPEN distribuido en Redis.
+- `src/sky/ingestion/bootstrap.py` — `build_router(include_browser_sources)` único punto de ensamblaje. API → `False`, Worker → `True`.
+- `src/sky/api/main.py` y `src/sky/worker/main.py` — wiring del router en lifespan/startup.
+
+**Gates §3 verificados** (todos exit code 0):
+- `ruff check` — 0 errores
+- `mypy --strict` — 0 errores
+- `pytest tests/unit/` — 64 pass + 2 skip
+- Cobertura ≥85% en `routing/`, `circuit_breaker.py`, `rate_limiter.py`
+- `scripts/smoke_router.py` contra Redis real — failover OK, circuit breaker abierto tras 5 fallos, rate limit (11º request bloqueado, retry_after≈60s)
+- `uvicorn` arranca + `/api/health` responde `200 {"status":"ok","app":"sky-backend-python"}`
+- Migración `001_routing_rules.sql` aplicada en staging y producción (8 filas)
+
+---
+
+## Qué falta
+
+### 🔴 Fase 6 — Queue ARQ (siguiente)
+Estado actual: `worker/jobs/sync.py`, `categorize.py`, `webhook.py`, `scheduled.py` y `worker/banking_sync.py` son archivos placeholders de 4-10 LOC.
+
+A construir: `sync_bank_account_job` que llama al `IngestionRouter` ya listo, persiste movimientos con `INSERT ... ON CONFLICT (external_id)`, encola job de categorización. Advisory lock por cuenta para evitar syncs duplicados. Colas separadas en Redis.
+
+### 🔴 Fase 7 — FastAPI paridad 1:1 con Node
+Estado actual: 11 routers en `api/routers/*.py` son stubs de 8 LOC; 6 schemas en `api/schemas/*.py` son stubs de 4 LOC. **El JWT auth ya está implementado** (`api/middleware/jwt_auth.py`, 70 LOC) — P0-1 cerrado desde día 1.
+
+A construir: 17 endpoints con paridad de shapes vs Node, schemas Pydantic, rate limiting, tests de paridad.
+
+### 🔴 Fase 8 — Domain
+`domain/finance.py`, `mr_money.py`, `aria.py`, `categorizer.py`, `goals.py`, `challenges.py`, `simulations.py` — todos placeholders de 6 LOC. Portar lógica del Node manteniendo paridad.
+
+### 🔴 Fases 9-13
+Scheduler ARQ cron · Observabilidad (Prometheus + tracing) · Docker prod · Migraciones SQL faltantes + índices · Parity tests + cutover gradual a Python.
+
+Detalle completo en [`docs/MIGRATION_13_PHASES.md`](docs/MIGRATION_13_PHASES.md).
+
+---
+
+## Setup
+
+### Requisitos
+- Python 3.12+
+- Redis (Docker recomendado: `docker run -d --rm -p 6379:6379 redis:7-alpine`)
+- Cuenta Supabase con la misma DB del backend Node
+- Acceso al `.env` del Node para `BANK_ENCRYPTION_KEY` (debe ser idéntica o no se podrán descifrar credenciales existentes)
+
+### Instalación
+
+```powershell
+cd backend-python
+python -m venv .venv
+.venv\Scripts\activate            # Windows; Linux/Mac: source .venv/bin/activate
+pip install -e ".[dev]"
+playwright install chromium       # solo si vas a tocar scrapers
+
+cp .env.example .env
+# Llenar .env con valores reales (mismos que el Node)
+```
 
 ### Tests
-- `test_encryption_compat.py` — Roundtrip + fixtures para compatibilidad Node
-- `test_contracts.py` — build_external_id determinístico
 
-### Infra
-- `docker/` — Dockerfiles para API y worker + docker-compose para dev
-- `.github/workflows/ci.yml` — Lint + mypy + tests en cada PR
-- `migrations/001_routing_rules.sql` — Tabla de reglas de routing
+```powershell
+pytest tests/unit/ -v --cov=src/sky/ingestion --cov-report=term-missing
+ruff check src/sky/ingestion/ tests/
+mypy src/sky/ingestion/
+```
 
-## Qué NO está incluido (fases siguientes)
+Esperado: 64 pass + 2 skip · 0 errores ruff · 0 errores mypy.
 
-- Scrapers concretos (Fase 4: `sources/bchile_scraper.py`, etc.)
-- Routers FastAPI con paridad de endpoints (Fase 7)
-- Dominio: Mr. Money, ARIA, finance service (Fase 8)
-- ARQ jobs concretos (Fase 6)
-- Observabilidad: métricas Prometheus (Fase 10)
+### Smoke test del IngestionRouter (requiere Redis vivo)
 
-## Primeros pasos para el equipo
+```powershell
+docker run -d --rm -p 6379:6379 --name sky-redis-smoke redis:7-alpine
+$env:REDIS_URL = "redis://localhost:6379"
+python scripts/smoke_router.py
+# Esperado:
+#   [ok] Redis vivo
+#   [ok] Failover: always_fail skipped, always_ok respondió con 1 mv(s)
+#   [ok] Circuit breaker OPEN tras 5 fallos consecutivos
+#   [ok] Rate limit: 10 OK, 11º bloqueado (retry_after≈60s)
+#   [ok] Smoke completado
+docker stop sky-redis-smoke
+```
 
-```bash
-# 1. Clonar y setup
-git clone <nuevo-repo>
-cd sky-backend-python
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
+### Levantar API + Worker local
 
-# 2. Copiar env
-cp .env.example .env
-# Llenar con valores reales (MISMOS que el backend Node)
-
-# 3. Instalar Playwright browsers
-playwright install chromium
-
-# 4. Correr tests
-pytest tests/unit/ -v
-
-# 5. Levantar API (sin worker todavía)
+```powershell
+# Terminal 1 — API
+$env:REDIS_URL = "redis://localhost:6379"
 uvicorn sky.api.main:app --reload --port 8000
-
-# 6. Verificar
 curl http://localhost:8000/api/health
-# → {"status":"ok","app":"sky-backend-python"}
+# {"status":"ok","app":"sky-backend-python"}
+
+# Terminal 2 — Worker (Fase 6 lo activará; hoy arranca pero sin jobs registrados)
+$env:REDIS_URL = "redis://localhost:6379"
+arq sky.worker.main.WorkerSettings
 ```
 
-## Gate bloqueante: compatibilidad de encryption
+---
 
-Antes de CUALQUIER otra cosa, generar fixtures de Node y verificar:
+## Convenciones técnicas
 
-```bash
-# En el backend Node actual:
-node -e "
-  process.env.BANK_ENCRYPTION_KEY = 'tu_clave_real';
-  import('./services/encryptionService.js').then(m => {
-    console.log('RUT:', m.encrypt('12345678-9'));
-    console.log('PASS:', m.encrypt('test_password'));
-  });
-"
+### Source identifiers
+| Identifier | Capa | Estado |
+|---|---|---|
+| `scraper.bchile` | Playwright | ✅ Validado contra cuenta real |
+| `scraper.falabella` | Playwright | 🟡 Skeleton |
+| `scraper.bci` | Playwright | 🟡 Parcial |
+| `mercadopago.api` | OAuth2 API | 🔴 Futuro |
+| `fintoc` | Open banking aggregator | 🔴 Futuro |
+| `manual` | Upload manual de archivos | 🔴 Futuro |
+| `sfa` | API regulada SFA | 🔴 Futuro |
+
+### Determinismo del `external_id`
+```python
+external_id = f"{bank_id}_{sha256(f'{date}|{amount}|{desc.lower()}').hexdigest()[:16]}"
 ```
+Mismo movimiento real → mismo id → idempotencia natural en `INSERT ... ON CONFLICT`.
 
-Pegar los outputs en `tests/unit/test_encryption_compat.py`, descomentar los tests,
-y correr. Si pasan, Python puede descifrar credenciales existentes.
-Si fallan, NO avanzar hasta resolver.
+### Settings críticos del `.env`
+- `BANK_ENCRYPTION_KEY` — DEBE ser idéntica a la del Node. Si no, no descifra credenciales existentes.
+- `REDIS_URL` — Fase 5+ requiere Redis vivo en startup (`bootstrap.py` hace `redis.ping()` fail-fast).
+- `ROUTING_RULES_DB_REQUIRED` — `false` por default; en prod `true` para fallar si la tabla no responde.
+- `RATE_LIMIT_DEFAULT_MAX` / `RATE_LIMIT_DEFAULT_WINDOW_SEC` — defaults 10/60.
+- `RATE_LIMIT_OVERRIDES` — string formato `"scraper.bchile=2/60,fintoc=30/60"`.
 
-## Siguiente fase del equipo
+### Reglas de oro de la migración
+- API **nunca** importa Playwright. El worker es el único con browser pool arrancado.
+- `AuthenticationError` **no** dispara failover (regla del router — bloqueante).
+- Rate limit es "skip", no "fail" — el siguiente provider de la cadena se intenta.
+- ARIA solo escribe `aria.*` con `service_role`. Cliente nunca lee/escribe ahí.
 
-Una vez verificada la encryption, el equipo puede empezar Fase 2-3 en paralelo:
-- **Dev A**: implementar `BChileScraperSource` usando Playwright (Fase 4)
-- **Dev B**: portar `categorizerService` a `src/sky/domain/categorizer.py` (Fase 8)
-- **Ambos**: usar `pytest` para cada módulo nuevo
+---
 
-El backend Node sigue en producción sirviendo a usuarios.
-Python no toca producción hasta Fase 13 (parity tests OK + cutover gradual).
+## Migraciones SQL aplicadas
 
+Ubicación: `migrations/`. Aplicadas vía Supabase SQL Editor en staging y producción.
 
-# Fase 4 — Scraper BChile en Playwright Python
+| Migración | Aplicada | Verificación |
+|---|---|---|
+| `000_immediate_fixes.sql` | ✅ | Pre-Fase 5, fixes varios |
+| `001_routing_rules.sql` | ✅ | `SELECT count(*) FROM public.ingestion_routing_rules` → 8 |
 
-## Archivos entregados
+---
 
-Copialos en tu repo `backend-python/` respetando la estructura:
+## Documentación interna
 
-| Archivo de este ZIP | Va a |
-|---|---|
-| `bchile_scraper.py` | `src/sky/ingestion/sources/bchile_scraper.py` |
-| `falabella_scraper.py` | `src/sky/ingestion/sources/falabella_scraper.py` (skeleton) |
-| `bchile_parser.py` | `src/sky/ingestion/parsers/bchile_parser.py` |
-| `browser_pool.py` | `src/sky/ingestion/browser_pool.py` (reemplaza el existente) |
-| `test_bchile_parser.py` | `tests/unit/test_bchile_parser.py` |
-| `test_bchile_scraper.py` | `scripts/test_bchile_scraper.py` |
+- [`docs/MIGRATION_13_PHASES.md`](docs/MIGRATION_13_PHASES.md) — plan maestro completo, archivos y gates por fase. **Fuente de verdad del estado.**
+- [`docs/REMEDIATION_P0_P3.md`](docs/REMEDIATION_P0_P3.md) — deuda técnica P0-P3 mapeada a su fase de cierre.
+- [`docs/FASE5_CLOSURE_PLAN.md`](docs/FASE5_CLOSURE_PLAN.md) — template del proceso de cierre por fase. Base para FASE6, FASE7, etc.
+- [`../CLAUDE.md`](../CLAUDE.md) — contexto persistente para sesiones de Claude Code (root del repo).
 
-## Cómo probar BChile end-to-end
+---
 
-```bash
-cd backend-python
-.venv\Scripts\activate
-
-# 1. Instalar Playwright y bajar Chromium
-pip install playwright
-playwright install chromium
-
-# 2. Correr tests unitarios primero (sin browser)
-pytest tests/unit/ -v
-# Debe dar 25 passed, 2 skipped
-
-# 3. Test manual con tu cuenta real
-python scripts/test_bchile_scraper.py TU_RUT TU_PASSWORD
-
-# Te abre Chromium, hace login, te pide aprobar 2FA en tu app,
-# y te imprime tus movimientos.
-
-# Con filtro por fecha (sync incremental):
-python scripts/test_bchile_scraper.py TU_RUT TU_PASSWORD --since 2026-04-01
-
-# Sin GUI (más rápido, pero no ves qué pasa):
-python scripts/test_bchile_scraper.py TU_RUT TU_PASSWORD --headless
-```
-
-## Qué arregla vs el scraper Node actual
-
-| Problema Node | Fix Python |
-|---|---|
-| duplicate key on ON CONFLICT | `build_external_id` determinístico sin `idx` — mismo movimiento siempre produce mismo id |
-| "chequea tu app" sin push | Detección por keywords multiidioma, incluye "bchile pass", "digital pass" |
-| Sync trae 90 días siempre | Parámetro `since` corta paginación cuando ve fecha < since |
-| Progreso 2FA silencioso | Reporta remaining cada 15s mientras espera aprobación |
-| Timeout fijo en código | `two_fa_timeout_sec` parametrizable |
-
-## Qué NO está hecho (para el equipo)
-
-- **Falabella**: skeleton con interfaz correcta, lógica de scraping pendiente. Ver docstring de `falabella_scraper.py` para los pasos.
-- **Registry + IngestionRouter**: Fase 5. Los scrapers existen pero aún no se exponen a la API.
-- **ARQ job que llame al scraper**: Fase 6. Hoy solo corre vía `test_bchile_scraper.py`.
-- **Endpoint FastAPI que dispare el sync**: Fase 7.
-
-## Verificación gate de Fase 4
-
-Para dar Fase 4 por completa:
-- [ ] `pytest tests/unit/test_bchile_parser.py` pasa
-- [ ] `python scripts/test_bchile_scraper.py` con tu cuenta real:
-  - [ ] Hace login correctamente
-  - [ ] 2FA se muestra y se aprueba
-  - [ ] Trae al menos 1 movimiento
-  - [ ] Balance coincide con lo que ves en la web de BChile
-- [ ] Correrlo dos veces con `--since` de ayer devuelve solo movimientos de hoy (sync incremental funciona)
-
-Cuando esos 4 checks pasen, Fase 4 está cerrada para BChile. Falabella se puede completar en paralelo a Fase 5.
+*Sky Finance · backend-python · 2026-04-30*
