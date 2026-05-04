@@ -4,10 +4,12 @@ sky.core.logging — structlog JSON con filtro de PII.
 Nunca logea: passwords, rut, claves, tokens de acceso.
 Siempre logea: bank_id, user_id (para debug), duración, errores sanitizados.
 """
+from __future__ import annotations
 
 import re
-import structlog
+from typing import Any
 
+import structlog
 
 _PII_PATTERNS = re.compile(
     r"(password|clave|rut|secret|token|api_key|authorization)",
@@ -15,7 +17,7 @@ _PII_PATTERNS = re.compile(
 )
 
 
-def _filter_pii(_: object, __: str, event_dict: dict) -> dict:
+def _filter_pii(_: object, __: str, event_dict: dict[str, Any]) -> dict[str, Any]:
     """Reemplaza valores sensibles en los logs."""
     for key in list(event_dict.keys()):
         if _PII_PATTERNS.search(key):
@@ -38,7 +40,7 @@ def setup_logging(json_output: bool = True) -> None:
         processors.append(structlog.dev.ConsoleRenderer())
 
     structlog.configure(
-        processors=processors,
+        processors=processors,  # type: ignore[arg-type]
         wrapper_class=structlog.make_filtering_bound_logger(0),
         context_class=dict,
         logger_factory=structlog.PrintLoggerFactory(),
@@ -48,4 +50,4 @@ def setup_logging(json_output: bool = True) -> None:
 
 def get_logger(name: str = "") -> structlog.BoundLogger:
     """Obtener un logger con nombre."""
-    return structlog.get_logger(component=name)
+    return structlog.get_logger(component=name)  # type: ignore[no-any-return]

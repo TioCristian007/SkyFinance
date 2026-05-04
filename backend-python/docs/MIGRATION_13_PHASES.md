@@ -403,7 +403,34 @@ asyncio.run(test())
 # Worker debe procesar el job y logearlo.
 ```
 
-### Estimación: 1 semana
+### Estado: ✅ Cerrada (2026-05-04)
+
+Archivos finales:
+- `src/sky/domain/categorizer.py`             (3 capas: regex + cache + Claude Haiku)
+- `src/sky/worker/banking_sync.py`            (orquestador con advisory lock)
+- `src/sky/worker/jobs/sync.py`               (sync_bank_account_job, sync_all_user_accounts_job)
+- `src/sky/worker/jobs/categorize.py`         (categorize_pending_job)
+- `src/sky/worker/main.py`                    (registra functions + arq_pool en ctx)
+- `src/sky/api/main.py`                       (arq_pool en app.state)
+- `src/sky/api/routers/banking.py`            (POST /api/banking/sync/:id, /sync-all)
+- `src/sky/api/schemas/banking.py`
+- `src/sky/core/locks.py`                     (try_advisory_lock async)
+- `migrations/002_indexes_and_constraints.sql`
+- `tests/unit/test_categorizer.py`            (golden cases)
+- `tests/unit/test_advisory_lock.py`
+- `tests/unit/test_sync_job.py`
+- `tests/integration/test_sync_job.py`        (gate manual con cuenta real)
+
+Bugs cerrados: BUG-1 (external_id determinístico), BUG-2 (UNIQUE INDEX),
+BUG-3 (advisory lock), BUG-4 (browser pool paralelo).
+
+Gates verificados:
+- [x] `pytest tests/unit/ -v`               → 95 passed, 2 skipped
+- [x] `mypy src/sky/`                       → 0 errores (70 archivos)
+- [x] `ruff check src/sky/ tests/`          → 0 errores
+- [ ] migración 002 aplicada en staging y prod (gate manual)
+- [ ] arq sky.worker.main.WorkerSettings  → arranca limpio (gate manual)
+- [ ] sync end-to-end con cuenta real (gate manual)
 
 ---
 

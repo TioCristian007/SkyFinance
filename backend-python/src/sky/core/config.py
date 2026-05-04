@@ -10,6 +10,7 @@ Uso:
 """
 
 from functools import lru_cache
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -61,6 +62,17 @@ class Settings(BaseSettings):
     # ── Routing rules (Fase 5) ────────────────────────────────────────────
     routing_rules_cache_ttl_sec: int = 60   # cache en memoria del router
     routing_rules_db_required: bool = False  # si True, falla al arrancar si DB no responde
+
+    # ── Categorización (Fase 6) ───────────────────────────────────────────
+    categorize_batch_size: int = 50
+    categorize_max_keys_per_ai_call: int = 20
+    categorize_anthropic_model: str = "claude-haiku-4-5-20251001"
+    categorize_confidence_threshold: float = 0.75
+
+    # ── Sync banking job (Fase 6) ─────────────────────────────────────────
+    sync_advisory_lock_timeout_sec: int = 600   # 10 min — máximo razonable
+    sync_max_concurrent_per_user: int = 4       # alineado con browser_pool_size
+    sync_aria_enabled: bool = True              # respeta aria_consent del user
 
     @property
     def rate_limit_overrides_map(self) -> dict[str, tuple[int, int]]:

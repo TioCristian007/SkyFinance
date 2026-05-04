@@ -11,12 +11,11 @@ Uso en routers:
     async def my_endpoint(user_id: str = Depends(require_user_id)):
         ...
 """
-
 from __future__ import annotations
 
 import jwt
 from fastapi import Request
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from sky.core.config import settings
 from sky.core.errors import AuthenticationError
@@ -45,11 +44,7 @@ async def extract_and_verify_user_id(request: Request) -> str:
     token = credentials.credentials
 
     try:
-        # Supabase firma JWTs con el JWT secret (que es la misma SUPABASE_ANON_KEY
-        # usada como HMAC secret, o la SUPABASE_JWT_SECRET si está configurada).
-        # En producción se recomienda usar SUPABASE_JWT_SECRET directamente.
         jwt_secret = settings.supabase_anon_key
-
         payload = jwt.decode(
             token,
             jwt_secret,
@@ -61,10 +56,10 @@ async def extract_and_verify_user_id(request: Request) -> str:
         if not user_id:
             raise AuthenticationError("Token no contiene user ID")
 
-        return user_id
+        return str(user_id)
 
-    except jwt.ExpiredSignatureError:
-        raise AuthenticationError("Token expirado")
-    except jwt.InvalidTokenError as e:
-        logger.warning("jwt_invalid", error=str(e))
-        raise AuthenticationError("Token inválido")
+    except jwt.ExpiredSignatureError as exc:
+        raise AuthenticationError("Token expirado") from exc
+    except jwt.InvalidTokenError as exc:
+        logger.warning("jwt_invalid", error=str(exc))
+        raise AuthenticationError("Token inválido") from exc

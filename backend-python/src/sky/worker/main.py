@@ -7,18 +7,24 @@ El browser pool se inicia aquí y se comparte entre jobs.
 Arranque:
     arq sky.worker.main.WorkerSettings
 """
+from __future__ import annotations
 
+from typing import Any
+
+from arq import create_pool
 from arq.connections import RedisSettings
 
 from sky.core.config import settings
-from sky.core.logging import setup_logging, get_logger
+from sky.core.logging import get_logger, setup_logging
 from sky.ingestion.bootstrap import build_router
 from sky.ingestion.browser_pool import get_browser_pool
+from sky.worker.jobs.categorize import categorize_pending_job
+from sky.worker.jobs.sync import sync_all_user_accounts_job, sync_bank_account_job
 
 logger = get_logger("worker")
 
 
-async def startup(ctx: dict) -> None:  # type: ignore[type-arg]
+async def startup(ctx: dict[str, Any]) -> None:
     """Inicializar recursos compartidos del worker."""
     setup_logging(json_output=settings.is_production)
     logger.info("worker_starting")
@@ -31,14 +37,20 @@ async def startup(ctx: dict) -> None:  # type: ignore[type-arg]
     ctx["router"] = router
     ctx["redis"] = redis
 
+    # Pool de ARQ para encolar jobs desde dentro de otros jobs
+    ctx["arq_pool"] = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+
     logger.info("worker_ready", pool_size=settings.browser_pool_size)
 
 
-async def shutdown(ctx: dict) -> None:  # type: ignore[type-arg]
+async def shutdown(ctx: dict[str, Any]) -> None:
     """Liberar recursos al apagar."""
     pool = ctx.get("browser_pool")
     if pool:
         await pool.stop()
+    arq_pool = ctx.get("arq_pool")
+    if arq_pool:
+        await arq_pool.aclose()
     redis = ctx.get("redis")
     if redis:
         await redis.aclose()
@@ -53,20 +65,17 @@ class WorkerSettings:
     on_startup = startup
     on_shutdown = shutdown
 
-    # Funciones de jobs — se importan al implementar cada fase
-    functions: list = [
-        # TODO (Fase 6): importar jobs
-        # sync_bank_account_job,
-        # categorize_pending_job,
+    functions = [
+        sync_bank_account_job,
+        sync_all_user_accounts_job,
+        categorize_pending_job,
     ]
 
-    # Cron jobs
-    cron_jobs = [
+    cron_jobs: list[Any] = [
         # TODO (Fase 9): scheduler como cron ARQ
-        # cron(scheduled_sync_job, hour=None, minute={0}),  # cada hora
     ]
 
-    # Configuración
-    max_jobs = 10
-    job_timeout = 600  # 10 min max por job (syncs pueden tardar)
+    queue_name = "sky:default"
+    max_jobs = settings.browser_pool_size * 2
+    job_timeout = 600   # 10 min max por job (syncs pueden tardar)
     keep_result = 3600  # resultados en Redis por 1h

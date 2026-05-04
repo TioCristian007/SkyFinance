@@ -4,14 +4,18 @@ sky.api.main — Entry point de la API FastAPI.
 Principio: la API NUNCA ejecuta Playwright ni scraping.
 Solo encola jobs para el worker vía ARQ.
 """
+from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
+from arq import create_pool
+from arq.connections import RedisSettings
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from sky.api.routers import banking
 from sky.core.config import settings
 from sky.core.db import close_engine
 from sky.core.errors import (
@@ -21,7 +25,7 @@ from sky.core.errors import (
     RateLimitError,
     ValidationError,
 )
-from sky.core.logging import setup_logging, get_logger
+from sky.core.logging import get_logger, setup_logging
 from sky.ingestion.bootstrap import build_router
 
 logger = get_logger("api")
@@ -37,8 +41,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.router = router
     app.state.redis = redis
 
+    # Pool de ARQ para encolar jobs desde routers
+    app.state.arq_pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+
     yield
 
+    await app.state.arq_pool.aclose()
     await redis.aclose()
     await close_engine()
     logger.info("api_stopped")
@@ -97,11 +105,7 @@ def create_app() -> FastAPI:
         return JSONResponse(status_code=429, content={"error": str(exc)})
 
     # ── Routes ────────────────────────────────────────────────────────────
-    # TODO (Fase 7): importar y montar routers con paridad 1:1 de endpoints Node
-    # from sky.api.routers import banking, chat, challenges, goals, health, ...
-    # app.include_router(health.router, prefix="/api")
-    # app.include_router(banking.router, prefix="/api/banking")
-    # ...
+    app.include_router(banking.router)
 
     @app.get("/")
     async def root() -> dict[str, str]:

@@ -9,3 +9,5 @@ ignore = ["S101"]
 # Scrapers contienen strings JS multilínea y patrones try/except/pass intencionales
 "src/sky/ingestion/sources/bchile_scraper.py" = ["E501", "SIM105"]
 "src/sky/ingestion/sources/bci_direct.py" = ["E501", "SIM105"]
+# Categorizador tiene reglas regex y system prompt que no se pueden romper sin alterar lógica
+"src/sky/domain/categorizer.py" = ["E501"]

@@ -4,44 +4,39 @@ sky.core.db — SQLAlchemy async engine + session factory.
 Usa las mismas tablas de Supabase. Cero migración de datos.
 El engine se crea una vez al inicio del proceso y se reutiliza.
 """
+from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
-from sky.core.config import settings
-
-# Construir URL asyncpg desde la URL de Supabase
-# Supabase expone: https://xxx.supabase.co → la DB está en: postgresql://postgres:xxx@db.xxx.supabase.co:5432/postgres
-# Para asyncpg necesitamos: postgresql+asyncpg://...
 # En producción esto viene de una variable DATABASE_URL directa.
-_engine = None
-_session_factory = None
+_engine: AsyncEngine | None = None
+_session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
 def _get_database_url() -> str:
     """
     Construye la URL de conexión.
     En producción: usar DATABASE_URL directa (más limpio).
-    En dev: construir desde SUPABASE_URL si DATABASE_URL no existe.
     """
     import os
     db_url = os.getenv("DATABASE_URL")
     if db_url:
-        # Reemplazar postgresql:// por postgresql+asyncpg://
         return db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-
-    # Fallback: construir desde Supabase URL
-    # NOTA: esto requiere que el dev configure DATABASE_URL explícitamente.
     raise RuntimeError(
         "DATABASE_URL no está configurada. "
-        "Configura la URL de conexión directa a Postgres. "
         "Formato: postgresql+asyncpg://user:pass@host:port/dbname"
     )
 
 
-def get_engine():
+def get_engine() -> AsyncEngine:
     global _engine
     if _engine is None:
         _engine = create_async_engine(
@@ -51,10 +46,11 @@ def get_engine():
             pool_pre_ping=True,
             echo=False,
         )
+    assert _engine is not None
     return _engine
 
 
-def get_session_factory():
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
     global _session_factory
     if _session_factory is None:
         _session_factory = async_sessionmaker(
@@ -62,6 +58,7 @@ def get_session_factory():
             class_=AsyncSession,
             expire_on_commit=False,
         )
+    assert _session_factory is not None
     return _session_factory
 
 
