@@ -4,6 +4,19 @@
 > Diseñado para que un agente Sonnet pueda construirlo sin ambigüedad.
 > Doctrinas inviolables vienen de `CLAUDE.md` y v5 PDF; aquí solo se referencian.
 
+## Changelog del plan
+
+- **2026-05-05** (Opus): 4 ajustes aprobados, NO renegociar:
+  1. Modelo Mr. Money: `claude-sonnet-4-7-20250930`, `max_tokens=4096`. Ver §2.8.
+  2. `POST /api/banking/accounts` IN scope (no Fase 8). Ver §2.3 banking.py.
+  3. Schemas faltantes especificados explícitos: `BankAccount{Out,ListResponse,
+     ConnectRequest,ConnectedResponse}` + `Projection{Request,Response}`. Ver §2.2.
+  4. ARIA: paridad estricta con `backend/services/ariaService.js` — buckets,
+     clasificadores y nombres de campo replicados 1:1. Ver §2.5.
+- Pre-requisito: `get_aria_client()` no existe aún en `sky.core.db`. Crear como
+  parte de Fase 7 — usa `SUPABASE_SERVICE_KEY` + `schema('aria')`. NO usar el
+  cliente admin genérico para escribir en `aria.*`.
+
 ## 0. Contexto — qué hay y qué falta
 
 ### Qué trae Fase 6 listo para usar
@@ -27,7 +40,7 @@
 | `api/routers/webhooks.py` | 4 | NUEVO — POST fintoc (stub) |
 | `api/routers/internal.py` | 4 | NUEVO — POST cron/sync-due |
 | `api/routers/health.py` | 4 | NUEVO — GET (ya existe, verificar) |
-| `api/routers/banking.py` | ~50 | EXTENDER — GET /accounts + DELETE /accounts/:id |
+| `api/routers/banking.py` | ~50 | EXTENDER — GET /accounts + POST /accounts + DELETE /accounts/:id |
 | `api/schemas/transactions.py` | 0 | NUEVO |
 | `api/schemas/summary.py` | 0 | NUEVO |
 | `api/schemas/goals.py` | 0 | NUEVO |
@@ -231,6 +244,60 @@ class NavigationResponse(BaseModel):
 ChatResponse = ChatTextResponse | ProposeChallenge | NavigationResponse
 ```
 
+#### `schemas/banking.py` — extender (los 2 actuales se mantienen)
+
+```python
+class BankAccountOut(BaseModel):
+    id: str
+    bank_id: str                       # "bchile", "santander", "bci", ...
+    bank_name: str
+    bank_icon: str | None = None
+    last_balance: int = 0
+    last_sync_at: datetime | None = None
+    last_sync_error: str | None = None
+    status: str                        # "active" | "syncing" | "error" | "waiting_2fa" | "disconnected"
+    sync_count: int = 0
+    minutes_ago: int | None = None
+    account_type: str = "Cuenta"
+
+class BankAccountListResponse(BaseModel):
+    accounts: list[BankAccountOut]
+    total_balance: int
+
+class BankAccountConnectRequest(BaseModel):
+    bank_id: str = Field(..., min_length=2, max_length=32)   # ej. "bchile"
+    rut: str = Field(..., min_length=8, max_length=12)       # 12345678-9
+    password: str = Field(..., min_length=4, max_length=128)
+    bank_name: str | None = None                              # default desde SUPPORTED_BANKS
+
+class BankAccountConnectedResponse(BaseModel):
+    id: str
+    bank_id: str
+    status: str = "active"
+    sync_job_id: str                   # job_id ARQ para poll opcional
+```
+
+#### `schemas/simulate.py` — NUEVO archivo
+
+```python
+class ProjectionRequest(BaseModel):
+    target_amount: int = Field(..., gt=0)
+    monthly_savings: int = Field(..., ge=0)
+    current_savings: int = Field(0, ge=0)
+    annual_return_pct: float = Field(0.0, ge=0.0, le=30.0)   # 0 = sin invertir; 5 = fondo conservador
+
+class ProjectionPoint(BaseModel):
+    month: int                         # 0, 1, 2, ...
+    accumulated: int                   # CLP
+
+class ProjectionResponse(BaseModel):
+    months_to_goal: int | None         # None si nunca llega con esos parámetros
+    final_amount: int                  # tras 60 meses si no llega
+    points: list[ProjectionPoint]      # max 60 puntos para gráfico
+    feasible: bool
+    rationale: str                     # texto corto explicando realismo
+```
+
 ### 2.3 `src/sky/api/routers/` — implementar uno por uno
 
 Cada router sigue el mismo patrón:
@@ -275,16 +342,41 @@ async def summary_by_category(user_id: str = Depends(require_user_id), days: int
 
 #### `routers/banking.py` — extender
 
-Agregar:
+Agregar 3 endpoints:
+
 ```python
 @router.get("/accounts", response_model=BankAccountListResponse)
 async def list_accounts(user_id: str = Depends(require_user_id)):
+    """Lista cuentas activas del user con last_balance, last_sync_at, status, error."""
+    ...
+
+@router.post("/accounts", response_model=BankAccountConnectedResponse, status_code=201)
+async def connect_account(
+    body: BankAccountConnectRequest,
+    request: Request,
+    user_id: str = Depends(require_user_id),
+) -> BankAccountConnectedResponse:
+    """
+    Onboarding de cuenta bancaria. Pasos:
+      1. Validar que bank_id está en SUPPORTED_BANKS.
+      2. Cifrar rut + password con encrypt() (AES-256-GCM).
+      3. INSERT en bank_accounts con status='active', sync_count=0.
+      4. Encolar primer sync vía arq_pool.enqueue_job('sync_bank_account_job', ...).
+      5. Devolver {id, bank_id, status, sync_job_id}.
+    NUNCA logear rut/password ni errores que los contengan (sanitize_error).
+    """
     ...
 
 @router.delete("/accounts/{account_id}", status_code=204)
 async def disconnect_account(account_id: str, user_id: str = Depends(require_user_id)):
+    """Soft-disconnect: status='disconnected', no borra histórico de transactions."""
     ...
 ```
+
+**Doctrina aplicable**:
+- Cifrado con la `BANK_ENCRYPTION_KEY` actual (Fase 3 ya validada Node↔Python).
+- `sync_bank_account_job` ya existe en Fase 6, solo se encola.
+- Fallback de scrapers respeta el routing — no asumir que `scraper.<bank>` siempre gana.
 
 #### `routers/goals.py`, `routers/challenges.py`
 
@@ -359,26 +451,119 @@ Arquitectura de 3 niveles:
 
 ### 2.5 `src/sky/domain/aria.py` — ARIA con consent guard
 
-Pipeline de 5 pasos. **Guard explícito al inicio**:
+**Paridad estricta con `backend/services/ariaService.js`** — buckets, clasificadores
+y nombres de campos deben replicarse 1:1 para que las vistas analíticas `aria.v_*`
+sigan funcionando con datos pre/post migración. **NO inventar buckets nuevos.**
+
+#### Guard de consentimiento (inicio de cada función pública)
 
 ```python
-async def track_spending_event(user_id: str, ...) -> None:
+async def track_spending_event(profile: AnonProfile, tx: dict, user_id: str | None = None) -> None:
     if not user_id:
         return
-    consented = await _has_aria_consent(user_id)
-    if not consented:
-        return  # retorno silencioso — no loguear el user_id
-    # ... resto del pipeline
+    if not await _has_aria_consent(user_id):
+        return  # retorno silencioso — NO loguear el user_id
+    # ... pipeline
 ```
 
-Pipeline tras el guard:
-1. **Extracción**: evento real → señal estructurada (tipo, monto, categoría, fecha).
-2. **Categorización**: valor exacto → rango (monto → bucket 10k-50k-100k-etc; fecha → trimestre).
-3. **Eliminación de identidad**: `user_id` descartado; se genera `batch_id` propio.
-4. **Randomización intra-bucket**: el valor guardado = random dentro del rango, no el real.
-5. **Ruptura de correlaciones**: jitter temporal ±36h; `batch_id` único por registro.
+`_has_aria_consent` consulta `profiles.aria_consent` con admin client. Fail-safe: en
+error de DB, retorna `False` (no escribir).
 
-Escribe en `aria.spending_patterns`, `aria.goal_signals`, `aria.behavioral_signals`. Service_role exclusivo.
+#### Buckets canónicos (paridad Node — copiar tal cual)
+
+```python
+# Amount buckets — getAmountBucket(amount)
+# input en CLP positivo (Math.abs)
+def get_amount_bucket(amount: int) -> str:
+    if amount <= 50000:   return "0-50k"
+    if amount <= 150000:  return "50k-150k"
+    if amount <= 500000:  return "150k-500k"
+    if amount <= 1500000: return "500k-1.5M"
+    return "1.5M+"
+
+# Random in bucket (para amount_noise — NO el monto real)
+_BUCKET_RANGES = {
+    "0-50k":     (1000,    50000),
+    "50k-150k":  (50001,   150000),
+    "150k-500k": (150001,  500000),
+    "500k-1.5M": (500001,  1500000),
+    "1.5M+":     (1500001, 5000000),
+}
+
+# Goal target buckets — getGoalTargetBucket(target_amount)
+def get_goal_target_bucket(amount: int) -> str | None:
+    if not amount or amount <= 0: return None
+    if amount <= 500000:    return "0-500k"
+    if amount <= 2000000:   return "500k-2M"
+    if amount <= 10000000:  return "2M-10M"
+    if amount <= 30000000:  return "10M-30M"
+    return "30M+"
+
+# Income buckets (validados desde profile.income_range)
+INCOME_BUCKETS = {"0-500k", "500k-1M", "1M-2M", "2M-5M", "5M+", "prefer_not"}
+
+# Age ranges
+AGE_RANGES = {"18-25", "26-35", "36-45", "46-55", "55+", "under-18", "prefer_not"}
+
+# Occupations
+OCCUPATIONS = {"empleado", "independiente", "emprendedor", "estudiante",
+               "jubilado", "desempleado", "prefer_not"}
+
+# Region buckets — get_region_bucket(region) usa contains case-insensitive
+# RM-Sur, RM-Norte, RM-Oriente, RM-Central
+# Valparaíso, Biobío, La Araucanía, Antofagasta, Coquimbo, Los Lagos, O'Higgins, Maule
+# Otra región, unknown
+
+# Period: "YYYY-Q[1-4]" — getPeriod()
+```
+
+#### Clasificadores de texto (paridad Node, regex idénticos)
+
+Replicar **exactamente** las regex de `ariaService.js`:
+- `classify_motivation(text) -> "security"|"family"|"experience"|"freedom"|"status"|"unknown"`
+- `classify_blocker(text) -> "impulse"|"social_pressure"|"income_gap"|"habit"|"knowledge"|"unknown"`
+- `classify_mindset(text) -> "saver"|"spender"|"avoider"|"balanced"`
+- `classify_stress(text) -> "high"|"low"|"medium"`
+- `classify_orientation(text) -> "short_term"|"long_term"|"mixed"`
+- `classify_behavior_shift(user_msg, mr_money_reply) -> "positive"|"negative"|"neutral"`
+- `classify_goal_type(title) -> "housing"|"vehicle"|"education"|"travel"|"emergency"|"life_event"|"investment"|"other"`
+- `has_significant_content(text) -> bool` (≥5 palabras + match keyword financiero)
+
+**El texto NUNCA se persiste** — solo las clasificaciones derivadas.
+
+#### Funciones públicas (4)
+
+| Python | Node | Llamada desde |
+|---|---|---|
+| `track_spending_event(profile, tx, user_id)` | `trackSpendingEvent` | `worker/banking_sync.py` post-insert |
+| `track_goal_event(profile, goal, completion_rate, status, user_id)` | `trackGoalEvent` | `routers/goals.py` create/update/complete |
+| `track_behavioral_signal(profile, user_msg, mr_money_reply, user_id)` | `trackBehavioralSignal` | `domain/mr_money.py` post-respuesta |
+| `track_session_insight(profile, session_data, user_id)` | `trackSessionInsight` | (Fase 8 — no implementar aún) |
+
+#### Tablas destino (schema `aria`, service_role)
+
+- `aria.spending_patterns` — campos: age_range, region, income_range, occupation,
+  category, amount_bucket, amount_noise, source, period, batch_id
+- `aria.goal_signals` — campos: age_range, region, income_range, occupation,
+  goal_type, goal_tier, target_bucket, completion_rate, months_to_goal,
+  goal_status, period, batch_id
+- `aria.behavioral_signals` — campos: age_range, region, income_range, occupation,
+  motivation_category, blocker_type, financial_mindset, stress_level,
+  goal_orientation, behavior_shift, period, batch_id
+- `aria.session_insights` — Fase 8
+
+`batch_id` = `uuid4()` por registro (ruptura de correlaciones). `recorded_at` lo
+agrega Postgres con default `NOW() + random_interval ±36h` (ya configurado).
+
+**Cliente DB**: usar `get_aria_client()` (service_role, schema `aria`). NO usar el
+admin client genérico. `aria.*` está bloqueado a clientes anon.
+
+Pipeline 5 pasos formalizado:
+1. **Extracción**: evento → señal estructurada.
+2. **Categorización**: monto → bucket; fecha → trimestre (`getPeriod`).
+3. **Eliminación de identidad**: `user_id` descartado tras consent check.
+4. **Randomización intra-bucket**: `amount_noise = random(bucket_min, bucket_max)`.
+5. **Ruptura de correlaciones**: `batch_id` propio + jitter temporal en DB.
 
 ### 2.6 `src/sky/worker/banking_sync.py` — invocar ARIA post-insert
 
@@ -420,12 +605,14 @@ app.include_router(internal.router)
 
 ### 2.8 `src/sky/core/config.py` — settings nuevos
 
+`cron_secret` y `sync_aria_enabled` ya existen desde Fase 5/6. Solo agregar:
+
 ```python
-# Fase 7
-cron_secret: str = ""                   # x-cron-secret para /api/internal/*
-mr_money_model: str = "claude-sonnet-4-5"
-mr_money_max_tokens: int = 1024
-sync_aria_enabled: bool = True
+# Fase 7 — Mr. Money
+mr_money_model: str = "claude-sonnet-4-7-20250930"
+mr_money_max_tokens: int = 4096   # tool use con propose_challenge requiere holgura
+mr_money_temperature: float = 0.7
+mr_money_cache_ttl: str = "5m"    # prompt caching: system + tools
 ```
 
 ---
@@ -473,7 +660,6 @@ sync_aria_enabled: bool = True
 | Métricas Prometheus detalladas | Fase 10 |
 | Fintoc webhook real | Tras integración Fintoc (Fase futura) |
 | Test de parity Node vs Python | Fase 13 |
-| `POST /api/banking/accounts` (conectar nueva cuenta) | Fase 7 si cabe, sino Fase 8 |
 
 ---
 
