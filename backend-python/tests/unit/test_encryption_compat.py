@@ -83,14 +83,16 @@ class TestNodeCompatibility:
     # TODO: reemplazar con outputs reales de Node
     # Una vez generados, este test garantiza compatibilidad binaria permanente.
 
-    @pytest.mark.skip(reason="Requiere fixtures de Node. Generar y descomentar.")
     def test_decrypt_node_rut(self):
-        node_encrypted = "PEGAR_OUTPUT_DE_NODE_AQUI"
+        # Fixture generado con Node.js encryptionService.js + TEST_KEY
+        node_encrypted = "hGqY/cS+axpHYuwpiq3A0Q==:p8RpECLwJflRvXQFLZqU+Q==:GJ8thEEHzUuf+A=="
         key = "test_key_for_unit_tests_only_32chars!"
         assert decrypt(node_encrypted, key) == "12345678-9"
 
-    @pytest.mark.skip(reason="Requiere fixtures de Node. Generar y descomentar.")
     def test_decrypt_node_password(self):
-        node_encrypted = "PEGAR_OUTPUT_DE_NODE_AQUI"
+        # Fixture generado con Node.js encryptionService.js + TEST_KEY
+        node_encrypted = (
+            "2Q2Nh6RtVmRB2fkhyb7C1w==:RXYvRwFKLaSupgjGCEEhNw==:7KXxA8tydNo5ZHmUKuWb4Q=="
+        )
         key = "test_key_for_unit_tests_only_32chars!"
         assert decrypt(node_encrypted, key) == "mi_clave_secreta"

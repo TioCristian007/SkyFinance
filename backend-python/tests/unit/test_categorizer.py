@@ -1,10 +1,15 @@
 """Tests del categorizador 3 capas."""
-from unittest.mock import AsyncMock, patch
+import json
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from sky.domain.categorizer import (
     _apply_layer1,
+    _categorize_with_ai,
+    _key_variants,
+    _lookup_cache,
+    _save_to_cache,
     categorize_movements,
     normalize_merchant,
 )
@@ -92,3 +97,171 @@ async def test_ai_failure_falls_back_to_other(mock_ai: AsyncMock, mock_cache: As
 async def test_zero_amount_returns_other_fallback() -> None:
     items = await categorize_movements([{"description": "Anything", "amount": 0}])
     assert items[0].category == "other"
+
+
+# ── Tests de _key_variants ────────────────────────────────────────────────────
+
+class TestKeyVariants:
+    def test_single_word(self) -> None:
+        assert _key_variants("jumbo") == ["jumbo"]
+
+    def test_multi_word(self) -> None:
+        assert _key_variants("jumbo las condes") == ["jumbo las condes", "jumbo las", "jumbo"]
+
+    def test_empty_returns_empty(self) -> None:
+        assert _key_variants("") == []
+
+    def test_extra_spaces_ignored(self) -> None:
+        result = _key_variants("netflix  premium")
+        assert "netflix" in result
+
+
+# ── Tests de _lookup_cache ────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_lookup_cache_empty_input() -> None:
+    result = await _lookup_cache([])
+    assert result == {}
+
+
+@pytest.mark.asyncio
+@patch("sky.domain.categorizer.get_engine")
+async def test_lookup_cache_hit_by_prefix(mock_get_engine: MagicMock) -> None:
+    """Cache hit usando variant de prefijo ('jumbo' matchea 'jumbo las condes')."""
+    mock_row = MagicMock()
+    mock_row.merchant_key = "jumbo"
+    mock_row.category = "food"
+    mock_rs = MagicMock()
+    mock_rs.fetchall.return_value = [mock_row]
+    mock_conn = AsyncMock()
+    mock_conn.execute = AsyncMock(return_value=mock_rs)
+    mock_ctx = MagicMock()
+    mock_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_ctx.__aexit__ = AsyncMock(return_value=False)
+    mock_get_engine.return_value.connect.return_value = mock_ctx
+
+    result = await _lookup_cache(["jumbo las condes"])
+    assert result == {"jumbo las condes": "food"}
+
+
+@pytest.mark.asyncio
+@patch("sky.domain.categorizer.get_engine")
+async def test_lookup_cache_miss_returns_empty(mock_get_engine: MagicMock) -> None:
+    mock_rs = MagicMock()
+    mock_rs.fetchall.return_value = []
+    mock_conn = AsyncMock()
+    mock_conn.execute = AsyncMock(return_value=mock_rs)
+    mock_ctx = MagicMock()
+    mock_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_ctx.__aexit__ = AsyncMock(return_value=False)
+    mock_get_engine.return_value.connect.return_value = mock_ctx
+
+    result = await _lookup_cache(["sitio desconocido"])
+    assert result == {}
+
+
+# ── Tests de _save_to_cache ───────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_save_to_cache_empty_entries() -> None:
+    await _save_to_cache([])  # no debe lanzar ni llamar engine
+
+
+@pytest.mark.asyncio
+@patch("sky.domain.categorizer.get_engine")
+async def test_save_to_cache_calls_upsert(mock_get_engine: MagicMock) -> None:
+    mock_conn = AsyncMock()
+    mock_conn.execute = AsyncMock()
+    mock_ctx = MagicMock()
+    mock_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_ctx.__aexit__ = AsyncMock(return_value=False)
+    mock_get_engine.return_value.begin.return_value = mock_ctx
+
+    entries = [
+        {"merchant_key": "starbucks", "category": "food", "source": "ai", "confidence": 0.92}
+    ]
+    await _save_to_cache(entries)
+    mock_conn.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@patch("sky.domain.categorizer.get_engine")
+async def test_save_to_cache_tolerates_execute_error(mock_get_engine: MagicMock) -> None:
+    """Una excepción en execute no debe propagar — solo loguear warning."""
+    mock_conn = AsyncMock()
+    mock_conn.execute = AsyncMock(side_effect=Exception("DB error"))
+    mock_ctx = MagicMock()
+    mock_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_ctx.__aexit__ = AsyncMock(return_value=False)
+    mock_get_engine.return_value.begin.return_value = mock_ctx
+
+    entries = [{"merchant_key": "oxxo", "category": "food", "source": "ai", "confidence": 0.85}]
+    await _save_to_cache(entries)  # no debe lanzar
+
+
+# ── Tests de _categorize_with_ai ─────────────────────────────────────────────
+
+class _FakeTextBlock:
+    """Simulacro de anthropic.types.TextBlock para evitar instanciación real."""
+    type = "text"
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+@pytest.mark.asyncio
+@patch("sky.domain.categorizer._save_to_cache", new_callable=AsyncMock)
+@patch("sky.domain.categorizer.anthropic.AsyncAnthropic")
+@patch("sky.domain.categorizer.TextBlock", _FakeTextBlock)
+async def test_categorize_with_ai_success(
+    mock_anthropic_cls: MagicMock,
+    mock_save_cache: AsyncMock,
+) -> None:
+    items_json = json.dumps([{"key": "netflix", "category": "subscriptions", "confidence": 0.95}])
+    mock_resp = MagicMock()
+    mock_resp.content = [_FakeTextBlock(items_json)]
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(return_value=mock_resp)
+    mock_anthropic_cls.return_value = mock_client
+
+    result = await _categorize_with_ai(["netflix"])
+    assert result == {"netflix": "subscriptions"}
+    mock_save_cache.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@patch("sky.domain.categorizer._save_to_cache", new_callable=AsyncMock)
+@patch("sky.domain.categorizer.anthropic.AsyncAnthropic")
+@patch("sky.domain.categorizer.TextBlock", _FakeTextBlock)
+async def test_categorize_with_ai_low_confidence_becomes_other(
+    mock_anthropic_cls: MagicMock,
+    mock_save_cache: AsyncMock,
+) -> None:
+    items_json = json.dumps([{"key": "misterio", "category": "food", "confidence": 0.3}])
+    mock_resp = MagicMock()
+    mock_resp.content = [_FakeTextBlock(items_json)]
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(return_value=mock_resp)
+    mock_anthropic_cls.return_value = mock_client
+
+    result = await _categorize_with_ai(["misterio"])
+    assert result == {"misterio": "other"}
+
+
+@pytest.mark.asyncio
+async def test_categorize_with_ai_empty_input() -> None:
+    result = await _categorize_with_ai([])
+    assert result == {}
+
+
+@pytest.mark.asyncio
+@patch("sky.domain.categorizer.anthropic.AsyncAnthropic")
+@patch("sky.domain.categorizer.TextBlock", _FakeTextBlock)
+async def test_categorize_with_ai_exception_returns_empty(
+    mock_anthropic_cls: MagicMock,
+) -> None:
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(side_effect=Exception("Network error"))
+    mock_anthropic_cls.return_value = mock_client
+
+    result = await _categorize_with_ai(["cualquier cosa"])
+    assert result == {}

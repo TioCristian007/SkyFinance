@@ -416,19 +416,25 @@ Archivos finales:
 - `src/sky/api/schemas/banking.py`
 - `src/sky/core/locks.py`                     (try_advisory_lock async)
 - `migrations/002_indexes_and_constraints.sql`
-- `tests/unit/test_categorizer.py`            (golden cases)
-- `tests/unit/test_advisory_lock.py`
-- `tests/unit/test_sync_job.py`
-- `tests/integration/test_sync_job.py`        (gate manual con cuenta real)
+- `tests/unit/test_categorizer.py`            (35 casos: regex + _key_variants + _lookup_cache + _save_to_cache + _categorize_with_ai)
+- `tests/unit/test_advisory_lock.py`         (6 casos: _key_from_string + try_advisory_lock acquired/not/exception)
+- `tests/unit/test_sync_job.py`              (15 casos: success + auth error + all-sources-failed + helpers + job wrappers)
+- `tests/unit/test_categorize_job.py`        (4 casos: empty + proceso + fallback + db error)
+- `tests/integration/test_sync_job.py`       (gate manual con cuenta real — skip si no hay creds)
 
 Bugs cerrados: BUG-1 (external_id determinístico), BUG-2 (UNIQUE INDEX),
 BUG-3 (advisory lock), BUG-4 (browser pool paralelo).
 
 Gates verificados:
-- [x] `pytest tests/unit/ -v`               → 95 passed, 2 skipped
+- [x] `pytest tests/ -v`                    → 131 passed, 1 skipped
+- [x] coverage domain/categorizer.py        → 99%
+- [x] coverage worker/banking_sync.py       → 95%
+- [x] coverage worker/jobs/categorize.py    → 100%
+- [x] coverage worker/jobs/sync.py          → 100%
+- [x] coverage core/locks.py               → 100%
 - [x] `mypy src/sky/`                       → 0 errores (70 archivos)
 - [x] `ruff check src/sky/ tests/`          → 0 errores
-- [ ] migración 002 aplicada en staging y prod (gate manual)
+- [ ] migración 002 aplicada en staging y prod (gate manual — pendiente usuario)
 - [ ] arq sky.worker.main.WorkerSettings  → arranca limpio (gate manual)
 - [ ] sync end-to-end con cuenta real (gate manual)
 
