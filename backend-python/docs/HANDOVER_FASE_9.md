@@ -143,6 +143,7 @@ conviene tener el origen sincronizado antes de seguir.
 | 4 | `worker/banking_sync.py` | 114-125 | `await track_spending_event` en loop bloquea el sync. No es realmente fire-and-forget. Usar `asyncio.create_task(...)` o batch. | minor |
 | 5 | `api/routers/chat.py` | 24 | `asyncio.ensure_future` puede ser GC'd. Migrar a `BackgroundTasks` de FastAPI. | minor |
 | 6 | `api/routers/internal.py` | 22 | `==` para cron secret. Conviene `secrets.compare_digest()` para timing-safe. | trivial |
+| 7 | `core/db.py` | 31 | `os.getenv("DATABASE_URL")` directo no lee `.env` — depende del shell environment. `core/config.py::Settings` no declara `database_url`, así que pydantic-settings ignora la var del `.env`. Fix: agregar `database_url: str` al Settings y que `db.py` use `settings.database_url`. | **bloqueante DX local** |
 
 Ninguno de estos justifica un commit aparte. Cuando Fase 9 toque alguno de estos
 archivos, aprovechar para fixearlo dentro del mismo commit.
