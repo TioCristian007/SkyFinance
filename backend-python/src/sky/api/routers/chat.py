@@ -1,9 +1,7 @@
 """sky.api.routers.chat — POST /api/chat (Mr. Money)."""
 from __future__ import annotations
 
-import asyncio
-
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 
 from sky.api.deps import require_user_id
 from sky.api.schemas.chat import ChatRequest, ChatTextResponse, NavigationResponse, ProposeChallenge
@@ -15,13 +13,14 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 async def chat_endpoint(
     body: ChatRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     user_id: str = Depends(require_user_id),
 ) -> ChatTextResponse | ProposeChallenge | NavigationResponse:
     from sky.domain.mr_money import MrMoney
 
     response = await MrMoney().respond(user_id=user_id, message=body.message)
 
-    asyncio.ensure_future(_fire_aria(user_id, body.message, response))
+    background_tasks.add_task(_fire_aria, user_id, body.message, response)
 
     return response
 

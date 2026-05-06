@@ -13,12 +13,14 @@ from typing import Any
 
 from arq import create_pool
 from arq.connections import RedisSettings
+from arq.cron import cron
 
 from sky.core.config import settings
 from sky.core.logging import get_logger, setup_logging
 from sky.ingestion.bootstrap import build_router
 from sky.ingestion.browser_pool import get_browser_pool
 from sky.worker.jobs.categorize import categorize_pending_job
+from sky.worker.jobs.scheduled import scheduled_sync_job
 from sky.worker.jobs.sync import sync_all_user_accounts_job, sync_bank_account_job
 
 logger = get_logger("worker")
@@ -69,10 +71,11 @@ class WorkerSettings:
         sync_bank_account_job,
         sync_all_user_accounts_job,
         categorize_pending_job,
+        scheduled_sync_job,
     ]
 
-    cron_jobs: list[Any] = [
-        # TODO (Fase 9): scheduler como cron ARQ
+    cron_jobs = [
+        cron(scheduled_sync_job, minute=5),  # cada hora a los :05 min
     ]
 
     queue_name = "sky:default"

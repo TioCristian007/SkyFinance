@@ -1,6 +1,8 @@
 """sky.api.routers.internal — Endpoints internos (cron, admin)."""
 from __future__ import annotations
 
+import secrets
+
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import text
 
@@ -15,11 +17,16 @@ router = APIRouter(prefix="/api/internal", tags=["internal"])
 @router.post("/cron/sync-due")
 async def cron_sync_due(request: Request) -> dict[str, int]:
     """
+    [DEPRECATED — Fase 9] Endpoint externo de cron. Reemplazado por el cron
+    nativo ARQ (scheduled_sync_job en worker/jobs/scheduled.py).
+    Se mantiene por compatibilidad mientras se valida el cron ARQ en producción.
+    Eliminar en Fase 11 durante cleanup pre-deploy.
+
     Encola sync de cuentas cuyo last_sync_at supera el umbral de horas.
     Autenticado via x-cron-secret (Railway cron / GitHub Actions).
     """
     secret = request.headers.get("x-cron-secret", "")
-    if not secret or secret != settings.cron_secret:
+    if not secret or not secrets.compare_digest(secret, settings.cron_secret):
         raise HTTPException(status_code=401, detail="Cron secret inválido")
 
     engine = get_engine()

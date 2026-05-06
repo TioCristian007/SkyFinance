@@ -22,6 +22,7 @@ NUNCA logea credenciales ni descripción fuera del scope necesario.
 """
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import UTC, datetime
 from typing import Any
@@ -39,6 +40,24 @@ from sky.ingestion.contracts import AuthenticationError as BankAuthError
 from sky.ingestion.routing.router import IngestionRouter
 
 logger = get_logger("banking_sync")
+
+# Mantiene referencias a tareas ARIA fire-and-forget para evitar GC prematuro.
+_aria_tasks: set[asyncio.Task[None]] = set()
+
+
+async def _track_aria_events(user_id: str, movements: list[Any]) -> None:
+    """Fire-and-forget: registrar eventos de gasto en ARIA post-insert."""
+    try:
+        from sky.domain.aria import track_spending_event  # evitar import circular al top
+        anon_profile = await _load_anon_profile(user_id)
+        for m in movements:
+            await track_spending_event(
+                anon_profile,
+                {"amount": m.amount_clp, "category": "other", "source": "bank_sync"},
+                user_id,
+            )
+    except Exception as exc:
+        logger.warning("aria_track_failed", error=str(exc))
 
 
 async def sync_bank_account(
@@ -112,17 +131,9 @@ async def sync_bank_account(
         )
 
         if settings.sync_aria_enabled and inserted > 0:
-            try:
-                anon_profile = await _load_anon_profile(user_id)
-                for m in result.movements[:inserted]:
-                    from sky.domain.aria import track_spending_event
-                    await track_spending_event(
-                        anon_profile,
-                        {"amount": m.amount_clp, "category": "other", "source": "bank_sync"},
-                        user_id,
-                    )
-            except Exception as exc:
-                logger.warning("aria_track_failed", error=str(exc))
+            _task = asyncio.create_task(_track_aria_events(user_id, result.movements))
+            _aria_tasks.add(_task)
+            _task.add_done_callback(_aria_tasks.discard)
 
         if inserted > 0:
             await arq_pool.enqueue_job("categorize_pending_job")

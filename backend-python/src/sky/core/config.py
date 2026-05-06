@@ -84,6 +84,11 @@ class Settings(BaseSettings):
     scheduler_due_threshold_hours: float = 1.0
     scheduler_max_consecutive_errors: int = 5
 
+    # ── Scheduler / cron ARQ (Fase 9) ──────────────────────────────────────
+    scheduler_backoff_factor: int = 2          # Node: BACKOFF_FACTOR = 2
+    scheduler_max_backoff_hours: float = 24.0  # Node: MAX_BACKOFF_HOURS = 24
+    scheduler_max_per_tick: int = 20           # Node: MAX_ACCOUNTS_PER_TICK = 20
+
     @property
     def rate_limit_overrides_map(self) -> dict[str, tuple[int, int]]:
         """Parsea 'scraper.bchile=2/60,fintoc=30/60' → {'scraper.bchile': (2, 60), ...}"""

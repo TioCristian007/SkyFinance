@@ -1,6 +1,7 @@
 """sky.domain.aria — ARIA pipeline v2 (paridad ariaService.js)."""
 from __future__ import annotations
 
+import random
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -90,7 +91,6 @@ def _get_period() -> str:
 
 
 def _random_in_bucket(bucket: str) -> int:
-    import random
     r = _AMOUNT_RANGES.get(bucket)
     if not r:
         return random.randint(1_000, 50_000)
@@ -229,12 +229,12 @@ def classify_goal_type(title: str) -> str:
     return "other"
 
 
-def has_significant_content(text: str) -> bool:
-    if not text or len(text.strip().split()) < 5:
+def has_significant_content(content: str) -> bool:
+    if not content or len(content.strip().split()) < 5:
         return False
     return bool(re.search(
         r"plata|dinero|peso[s]?|gasto[s]?|ahorro[s]?|sueldo|ingreso|deuda|meta|objetivo|presupuesto|compra|gastar|ahorrar|invertir|financ|bolsillo|cuenta|banco|tarjeta",
-        text,
+        content,
     ))
 
 
