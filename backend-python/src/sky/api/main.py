@@ -15,7 +15,17 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from sky.api.routers import banking
+from sky.api.routers import (
+    banking,
+    challenges,
+    goals,
+    health,
+    internal,
+    simulate,
+    summary,
+    transactions,
+    webhooks,
+)
 from sky.core.config import settings
 from sky.core.db import close_engine
 from sky.core.errors import (
@@ -106,6 +116,14 @@ def create_app() -> FastAPI:
 
     # ── Routes ────────────────────────────────────────────────────────────
     app.include_router(banking.router)
+    app.include_router(transactions.router)
+    app.include_router(summary.router)
+    app.include_router(goals.router)
+    app.include_router(challenges.router)
+    app.include_router(simulate.router)
+    app.include_router(webhooks.router)
+    app.include_router(internal.router)
+    app.include_router(health.router)
 
     @app.get("/")
     async def root() -> dict[str, str]:
@@ -114,10 +132,6 @@ def create_app() -> FastAPI:
             "app": "sky-backend-python",
             "version": "0.1.0",
         }
-
-    @app.get("/api/health")
-    async def health() -> dict[str, str]:
-        return {"status": "ok", "app": "sky-backend-python"}
 
     return app
 

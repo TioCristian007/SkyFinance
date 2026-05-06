@@ -74,6 +74,16 @@ class Settings(BaseSettings):
     sync_max_concurrent_per_user: int = 4       # alineado con browser_pool_size
     sync_aria_enabled: bool = True              # respeta aria_consent del user
 
+    # ── Mr. Money — AI chat (Fase 7) ──────────────────────────────────────
+    mr_money_model: str = "claude-sonnet-4-7-20250930"
+    mr_money_max_tokens: int = 4096
+    mr_money_temperature: float = 0.7
+    mr_money_cache_ttl: str = "5m"
+
+    # ── Scheduler / cron interno (Fase 7) ─────────────────────────────────
+    scheduler_due_threshold_hours: float = 1.0
+    scheduler_max_consecutive_errors: int = 5
+
     @property
     def rate_limit_overrides_map(self) -> dict[str, tuple[int, int]]:
         """Parsea 'scraper.bchile=2/60,fintoc=30/60' → {'scraper.bchile': (2, 60), ...}"""

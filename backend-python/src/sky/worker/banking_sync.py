@@ -23,7 +23,7 @@ NUNCA logea credenciales ni descripción fuera del scope necesario.
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import text
@@ -49,7 +49,7 @@ async def sync_bank_account(
     arq_pool: Any,  # ArqRedis — para encolar categorize_pending_job al final
 ) -> dict[str, Any]:
     """Sincroniza UNA cuenta bancaria. Idempotente. Lock por bank_account_id."""
-    started_at = datetime.utcnow()
+    started_at = datetime.now(UTC)
 
     async with try_advisory_lock(f"sync:bank_account:{bank_account_id}") as got:
         if not got:
@@ -114,7 +114,7 @@ async def sync_bank_account(
         if inserted > 0:
             await arq_pool.enqueue_job("categorize_pending_job")
 
-        elapsed_ms = int((datetime.utcnow() - started_at).total_seconds() * 1000)
+        elapsed_ms = int((datetime.now(UTC) - started_at).total_seconds() * 1000)
         logger.info(
             "sync_completed",
             bank_account_id=bank_account_id, bank_id=bank_id,

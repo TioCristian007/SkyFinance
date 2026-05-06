@@ -1,9 +1,11 @@
-"""
-sky.api.routers.health — TODO (Fase 7): implementar con paridad 1:1 de Node.
+"""sky.api.routers.health — Health check endpoint."""
+from __future__ import annotations
 
-Endpoint correspondiente en Node: backend/routes/health.js
-"""
 from fastapi import APIRouter
 
-router = APIRouter()
-# Implementar en Fase 7
+router = APIRouter(tags=["health"])
+
+
+@router.get("/api/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok", "app": "sky-backend-python"}

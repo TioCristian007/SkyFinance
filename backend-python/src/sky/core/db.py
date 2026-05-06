@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from supabase import Client, create_client
 
 # En producción esto viene de una variable DATABASE_URL directa.
 _engine: AsyncEngine | None = None
@@ -81,3 +82,26 @@ async def close_engine() -> None:
     if _engine is not None:
         await _engine.dispose()
         _engine = None
+
+
+# ── Supabase ARIA client ───────────────────────────────────────────────────────
+
+_aria_client: Client | None = None
+
+
+def get_aria_client() -> Client:
+    """
+    Retorna un cliente Supabase con service_role para escribir en schema aria.*.
+
+    Cliente separado del engine SQLAlchemy. Usa SUPABASE_SERVICE_KEY, nunca
+    la anon key. Callers usan: get_aria_client().schema("aria").table(...).
+    """
+    global _aria_client
+    if _aria_client is None:
+        from sky.core.config import settings
+
+        _aria_client = create_client(
+            settings.supabase_url,
+            settings.supabase_service_key,
+        )
+    return _aria_client

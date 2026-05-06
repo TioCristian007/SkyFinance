@@ -1,9 +1,18 @@
-"""
-sky.api.routers.simulate — TODO (Fase 7): implementar con paridad 1:1 de Node.
+"""sky.api.routers.simulate — Proyecciones financieras (compound interest)."""
+from __future__ import annotations
 
-Endpoint correspondiente en Node: backend/routes/simulate.js
-"""
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
-router = APIRouter()
-# Implementar en Fase 7
+from sky.api.deps import require_user_id
+from sky.api.schemas.simulate import ProjectionRequest, ProjectionResponse
+from sky.domain.simulations import compute_projection
+
+router = APIRouter(prefix="/api/simulate", tags=["simulate"])
+
+
+@router.post("/projection", response_model=ProjectionResponse)
+async def get_projection(
+    body: ProjectionRequest,
+    user_id: str = Depends(require_user_id),
+) -> ProjectionResponse:
+    return compute_projection(**body.model_dump())
