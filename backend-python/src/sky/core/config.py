@@ -75,7 +75,7 @@ class Settings(BaseSettings):
     sync_aria_enabled: bool = True              # respeta aria_consent del user
 
     # ── Mr. Money — AI chat (Fase 7) ──────────────────────────────────────
-    mr_money_model: str = "claude-sonnet-4-7-20250930"
+    mr_money_model: str = "claude-sonnet-4-6"   # alias sin fecha; pin al snapshot en Fase 13
     mr_money_max_tokens: int = 4096
     mr_money_temperature: float = 0.7
     mr_money_cache_ttl: str = "5m"

@@ -11,7 +11,8 @@
 ## 0. Cómo usar este doc
 
 1. Abrir nueva sesión de Claude Code en `C:\Users\crist\OneDrive\Documentos\SkyFinance\sky_OFFICIAL`.
-2. Modelo recomendado: `claude-sonnet-4-7-20250930` (rápido, suficiente para Fase 9).
+2. Modelo recomendado para Claude Code: **Sonnet 4.6** (default — suficiente para Fase 9).
+   Para Mr. Money en runtime el alias en config es `claude-sonnet-4-6`.
 3. Pegar el prompt de §10 al final como primer mensaje.
 4. Sonnet leerá este archivo + `CLAUDE.md` + `MIGRATION_13_PHASES.md` y procederá.
 

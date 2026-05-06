@@ -7,7 +7,8 @@
 ## Changelog del plan
 
 - **2026-05-05** (Opus): 4 ajustes aprobados, NO renegociar:
-  1. Modelo Mr. Money: `claude-sonnet-4-7-20250930`, `max_tokens=4096`. Ver §2.8.
+  1. Modelo Mr. Money: `claude-sonnet-4-6` (alias, pin al snapshot en Fase 13),
+     `max_tokens=4096`. Ver §2.8.
   2. `POST /api/banking/accounts` IN scope (no Fase 8). Ver §2.3 banking.py.
   3. Schemas faltantes especificados explícitos: `BankAccount{Out,ListResponse,
      ConnectRequest,ConnectedResponse}` + `Projection{Request,Response}`. Ver §2.2.
@@ -609,7 +610,7 @@ app.include_router(internal.router)
 
 ```python
 # Fase 7 — Mr. Money
-mr_money_model: str = "claude-sonnet-4-7-20250930"
+mr_money_model: str = "claude-sonnet-4-6"
 mr_money_max_tokens: int = 4096   # tool use con propose_challenge requiere holgura
 mr_money_temperature: float = 0.7
 mr_money_cache_ttl: str = "5m"    # prompt caching: system + tools
