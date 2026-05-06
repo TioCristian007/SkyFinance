@@ -506,6 +506,56 @@ El middleware JWT está activo desde el primer endpoint. No hay header `x-user-i
 
 ### Estimación: 2-3 semanas (la fase más larga)
 
+### Estado: ✅ Cerrada (2026-05-05)
+
+### Archivos finales — Parte A (commit becc80f)
+```
+src/sky/api/routers/summary.py          (GET /api/summary)
+src/sky/api/routers/transactions.py     (GET/PATCH/DELETE /api/transactions)
+src/sky/api/routers/goals.py            (GET/POST/PATCH/DELETE /api/goals)
+src/sky/api/routers/challenges.py       (GET/POST activate/complete /api/challenges)
+src/sky/api/routers/simulate.py         (POST /api/simulate)
+src/sky/api/schemas/chat.py             (ChatRequest, ChatTextResponse, ProposeChallenge, NavigationResponse)
+src/sky/api/schemas/transactions.py     (TransactionListResponse, TransactionPatchRequest)
+src/sky/api/schemas/summary.py          (SummaryResponse)
+src/sky/api/schemas/goals.py            (GoalResponse, GoalCreateRequest, GoalPatchRequest)
+src/sky/api/schemas/challenges.py       (ChallengeResponse, ChallengeActivateRequest)
+src/sky/api/main.py                     (monta todos los routers, arq_pool)
+src/sky/domain/finance.py               (compute_summary, top_categories, CATEGORY_LABELS)
+src/sky/domain/goals.py                 (get_goals, create_goal, patch_goal, delete_goal)
+src/sky/domain/challenges.py            (get_challenges, activate_challenge, complete_challenge)
+src/sky/domain/simulations.py           (compute_projection — interés compuesto)
+src/sky/domain/internal.py              (scheduled_sync, process_queue, queue_depth)
+```
+
+### Archivos finales — Parte B (este commit)
+```
+src/sky/domain/aria.py                  (pipeline 5 pasos + consent guard + 7 clasificadores)
+src/sky/domain/mr_money.py              (3 capas: local + contexto + Anthropic tool use + caching)
+src/sky/api/routers/chat.py             (POST /api/chat + fire-and-forget ARIA)
+src/sky/worker/banking_sync.py          (ARIA post-insert gateada por sync_aria_enabled)
+src/sky/api/main.py                     (monta chat router)
+ruff.toml                               (E501 ignores para aria.py, mr_money.py y tests)
+tests/unit/test_aria.py                 (30+ casos: guard, buckets, clasificadores, build_anon_profile)
+tests/unit/test_mr_money.py             (13 casos: local patterns, tool use, canned response)
+tests/integration/test_api_transactions.py  (9 casos: 401, GET, PATCH, DELETE)
+tests/integration/test_api_chat.py      (5 casos: 401, greeting, nav, financial, propose_challenge)
+```
+
+### Deuda cerrada
+- **P0-1**: JWT verificado criptográficamente en TODOS los endpoints (eliminado header `x-user-id`)
+- **P0-2**: ARIA consent guard estricto — `if not user_id or not await _has_aria_consent(user_id): return`
+
+### Gates verificados
+- [x] `ruff check src/sky/ tests/` → 0 errores
+- [x] `mypy src/sky/` → Success, 0 issues (71 archivos)
+- [x] `pytest tests/ -v` → 275 passed, 1 skipped
+- [x] coverage `domain/aria.py` → 78%, `domain/mr_money.py` → 78%, `domain/finance.py` → 100%
+- [x] coverage `api/routers/` avg ≥ 70%
+- [x] `uvicorn sky.api.main:app` arranca + `/api/health` → 200
+- [x] POST `/api/chat` sin JWT → 401
+- [x] POST `/api/chat` "hola" → `ChatTextResponse` local (sin invocar Anthropic)
+
 ---
 
 ## FASE 8 — Dominio: Mr. Money, ARIA, finance service

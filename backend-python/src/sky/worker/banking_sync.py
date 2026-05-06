@@ -111,6 +111,19 @@ async def sync_bank_account(
             sync_count=int(row["sync_count"] or 0),
         )
 
+        if settings.sync_aria_enabled and inserted > 0:
+            try:
+                anon_profile = await _load_anon_profile(user_id)
+                for m in result.movements[:inserted]:
+                    from sky.domain.aria import track_spending_event
+                    await track_spending_event(
+                        anon_profile,
+                        {"amount": m.amount_clp, "category": "other", "source": "bank_sync"},
+                        user_id,
+                    )
+            except Exception as exc:
+                logger.warning("aria_track_failed", error=str(exc))
+
         if inserted > 0:
             await arq_pool.enqueue_job("categorize_pending_job")
 
@@ -208,6 +221,22 @@ async def _mark_error(bank_account_id: str, msg: str) -> None:
             """),
             {"id": bank_account_id, "msg": msg[:500]},
         )
+
+
+async def _load_anon_profile(user_id: str) -> Any:
+    from sky.domain.aria import build_anon_profile
+    engine = get_engine()
+    async with engine.connect() as conn:
+        rs = await conn.execute(
+            text(
+                "SELECT age_range, region, income_range, occupation"
+                " FROM public.profiles WHERE id = :uid"
+            ),
+            {"uid": user_id},
+        )
+        row = rs.mappings().first()
+    profile_dict: dict[str, Any] = dict(row) if row else {}
+    return build_anon_profile(profile_dict)
 
 
 def _sanitize_error(msg: str) -> str:

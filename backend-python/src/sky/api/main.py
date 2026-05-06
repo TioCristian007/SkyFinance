@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 from sky.api.routers import (
     banking,
     challenges,
+    chat,
     goals,
     health,
     internal,
@@ -121,6 +122,7 @@ def create_app() -> FastAPI:
     app.include_router(goals.router)
     app.include_router(challenges.router)
     app.include_router(simulate.router)
+    app.include_router(chat.router)
     app.include_router(webhooks.router)
     app.include_router(internal.router)
     app.include_router(health.router)
