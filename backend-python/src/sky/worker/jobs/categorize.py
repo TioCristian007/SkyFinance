@@ -13,6 +13,7 @@ from sqlalchemy import text
 from sky.core.config import settings
 from sky.core.db import get_engine
 from sky.core.logging import get_logger
+from sky.core.metrics import sky_queue_depth
 from sky.domain.categorizer import categorize_movements
 
 logger = get_logger("jobs.categorize")
@@ -33,6 +34,8 @@ async def categorize_pending_job(ctx: dict[str, Any]) -> dict[str, Any]:
             {"batch": settings.categorize_batch_size},
         )
         rows = rs.mappings().all()
+
+    sky_queue_depth.set(len(rows))
 
     if not rows:
         return {"processed": 0, "skipped": True}

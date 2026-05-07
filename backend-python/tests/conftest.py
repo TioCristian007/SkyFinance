@@ -7,6 +7,7 @@ os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key")
 os.environ.setdefault("SUPABASE_SERVICE_KEY", "test-service-key")
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-api-key")
 os.environ.setdefault("BANK_ENCRYPTION_KEY", "0" * 64)
+os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost:5432/test")
 
 import fakeredis  # noqa: E402
 import pytest  # noqa: E402

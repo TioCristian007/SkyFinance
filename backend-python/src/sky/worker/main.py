@@ -17,6 +17,7 @@ from arq.cron import cron
 
 from sky.core.config import settings
 from sky.core.logging import get_logger, setup_logging
+from sky.core.sentry_utils import init_sentry
 from sky.ingestion.bootstrap import build_router
 from sky.ingestion.browser_pool import get_browser_pool
 from sky.worker.jobs.categorize import categorize_pending_job
@@ -28,6 +29,7 @@ logger = get_logger("worker")
 
 async def startup(ctx: dict[str, Any]) -> None:
     """Inicializar recursos compartidos del worker."""
+    init_sentry()
     setup_logging(json_output=settings.is_production)
     logger.info("worker_starting")
 

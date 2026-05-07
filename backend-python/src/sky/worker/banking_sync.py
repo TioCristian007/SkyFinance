@@ -35,6 +35,7 @@ from sky.core.encryption import decrypt
 from sky.core.errors import NotFoundError
 from sky.core.locks import try_advisory_lock
 from sky.core.logging import get_logger
+from sky.core.metrics import sky_sync_duration, sky_sync_total
 from sky.ingestion.contracts import AllSourcesFailedError, BankCredentials
 from sky.ingestion.contracts import AuthenticationError as BankAuthError
 from sky.ingestion.routing.router import IngestionRouter
@@ -111,9 +112,11 @@ async def sync_bank_account(
             result = await router.ingest(bank_id=bank_id, user_id=user_id, credentials=creds)
         except BankAuthError:
             await _mark_error(bank_account_id, "Credenciales rechazadas por el banco")
+            sky_sync_total.labels(bank_id=bank_id, status="error").inc()
             raise
         except AllSourcesFailedError as exc:
             await _mark_error(bank_account_id, _sanitize_error(str(exc)))
+            sky_sync_total.labels(bank_id=bank_id, status="error").inc()
             raise
         finally:
             del rut, password, creds
@@ -139,6 +142,11 @@ async def sync_bank_account(
             await arq_pool.enqueue_job("categorize_pending_job")
 
         elapsed_ms = int((datetime.now(UTC) - started_at).total_seconds() * 1000)
+        elapsed_s = elapsed_ms / 1000.0
+        sky_sync_duration.labels(
+            bank_id=bank_id, source_kind=result.source_kind.value
+        ).observe(elapsed_s)
+        sky_sync_total.labels(bank_id=bank_id, status="success").inc()
         logger.info(
             "sync_completed",
             bank_account_id=bank_account_id, bank_id=bank_id,

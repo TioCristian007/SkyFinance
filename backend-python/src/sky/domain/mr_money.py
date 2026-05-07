@@ -14,6 +14,7 @@ from sky.api.schemas.chat import ChatTextResponse, NavigationResponse, ProposeCh
 from sky.core.config import settings
 from sky.core.db import get_engine
 from sky.core.logging import get_logger
+from sky.core.metrics import sky_mr_money_tokens
 from sky.domain.finance import CATEGORY_LABELS, compute_summary, top_categories
 from sky.domain.simulations import compute_projection
 
@@ -284,6 +285,12 @@ class MrMoney:
             cache_read=getattr(resp.usage, "cache_read_input_tokens", 0),
             cache_creation=getattr(resp.usage, "cache_creation_input_tokens", 0),
         )
+        sky_mr_money_tokens.labels(type="input").inc(resp.usage.input_tokens)
+        sky_mr_money_tokens.labels(type="output").inc(resp.usage.output_tokens)
+        if cr := getattr(resp.usage, "cache_read_input_tokens", 0):
+            sky_mr_money_tokens.labels(type="cache_read").inc(cr)
+        if cc := getattr(resp.usage, "cache_creation_input_tokens", 0):
+            sky_mr_money_tokens.labels(type="cache_creation").inc(cc)
 
         proposals: list[ProposeChallenge] = []
         result_text = ""
@@ -353,6 +360,12 @@ class MrMoney:
                 cache_read=getattr(resp.usage, "cache_read_input_tokens", 0),
                 cache_creation=getattr(resp.usage, "cache_creation_input_tokens", 0),
             )
+            sky_mr_money_tokens.labels(type="input").inc(resp.usage.input_tokens)
+            sky_mr_money_tokens.labels(type="output").inc(resp.usage.output_tokens)
+            if cr := getattr(resp.usage, "cache_read_input_tokens", 0):
+                sky_mr_money_tokens.labels(type="cache_read").inc(cr)
+            if cc := getattr(resp.usage, "cache_creation_input_tokens", 0):
+                sky_mr_money_tokens.labels(type="cache_creation").inc(cc)
 
         last_text = " ".join(
             block.text for block in resp.content if block.type == "text"

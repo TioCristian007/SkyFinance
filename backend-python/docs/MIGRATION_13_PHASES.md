@@ -639,31 +639,46 @@ Sin esta migración, `scheduled_sync_job` falla con SQL error en el JOIN profile
 
 **Objetivo:** el equipo puede ver qué pasa en producción sin leer logs manualmente.
 
-### Qué se hace
-1. Instrumentar métricas Prometheus en endpoints clave:
-   - `sky_sync_duration_seconds` (histogram, labels: bank_id, source_kind)
-   - `sky_sync_total` (counter, labels: bank_id, status=success|error)
-   - `sky_queue_depth` (gauge)
-   - `sky_circuit_breaker_state` (gauge, labels: source_id)
-   - `sky_api_request_duration_seconds` (histogram, labels: endpoint)
-2. Health check profundo: `/api/health/deep` que verifica DB + Redis + Anthropic.
-3. Integrar Sentry para errores.
-4. Trace ID por request (ya preparado en structlog).
+### Estado: ✅ Cerrada (2026-05-06)
 
-### Archivos
+### Archivos finales
 ```
-src/sky/core/metrics.py              ← NUEVO
-src/sky/api/routers/health.py        ← modificar (agregar /deep)
-src/sky/api/middleware/tracing.py     ← NUEVO
+src/sky/core/metrics.py                     (6 métricas Prometheus — NUEVO)
+src/sky/core/sentry_utils.py                (before_send pipeline 2 pasos + PII scrub — NUEVO)
+src/sky/api/routers/health.py               (+ /api/health/deep con DB+Redis+Anthropic)
+src/sky/api/middleware/tracing.py           (RequestTimingMiddleware — NUEVO)
+src/sky/api/main.py                         (init_sentry, /metrics endpoint, tracing middleware)
+src/sky/worker/main.py                      (init_sentry en startup)
+src/sky/worker/banking_sync.py              (sky_sync_duration, sky_sync_total)
+src/sky/worker/jobs/categorize.py           (sky_queue_depth)
+src/sky/ingestion/circuit_breaker.py        (sky_circuit_breaker_state)
+src/sky/domain/mr_money.py                  (sky_mr_money_tokens)
+src/sky/core/config.py                      (database_url: str sin default, sentry_dsn)
+src/sky/core/db.py                          (TODO #7 cerrado: DATABASE_URL desde settings)
+pyproject.toml                              (sentry-sdk[fastapi], mypy overrides)
+tests/unit/test_sentry_utils.py             (13 casos — NUEVO)
+tests/unit/test_health_deep.py              (11 casos: 7 helpers + 4 rutas — NUEVO)
 ```
 
-### Gate de verificación
-```bash
-curl http://localhost:8000/metrics
-# Devuelve métricas en formato Prometheus.
-curl http://localhost:8000/api/health/deep
-# {"status":"ok","db":"ok","redis":"ok","anthropic":"ok"}
-```
+### Deuda cerrada
+- **P2-1**: structlog ya presente; `sky_api_request_duration` y `sky_sync_duration` tracean latencia
+- **P2-2**: Sentry integrado con `before_send` PII scrub en 2 pasos; init en API y worker
+- **P2-4**: `/metrics` Prometheus + `/api/health/deep` + `sky_circuit_breaker_state`
+- **TODO #7**: `database_url: str` en config (fail-fast); `db.py` carga vía settings, no `os.getenv`
+- **P2-3 DIFERIDO a Fase 11**: `slowapi` HTTP rate limiting — ver TODO en `api/main.py`
+
+### Gates verificados
+- [x] `ruff check src/sky/ tests/` → 0 errores
+- [x] `mypy src/sky/` → Success, 0 issues (72 archivos)
+- [x] `pytest tests/ -v` → 308 passed, 1 skipped (+24 tests vs baseline 284)
+- [x] coverage `core/metrics.py` → 100%
+- [x] coverage `core/sentry_utils.py` → 82%
+- [x] coverage `api/routers/health.py` → 100%
+- [x] coverage `api/middleware/tracing.py` → 100%
+- [x] `uvicorn sky.api.main:app` arranca + `/api/health` → 200
+- [x] `/api/health/deep` → JSON válido (503 sin DB real, comportamiento correcto)
+- [x] `/metrics` → formato Prometheus con métricas `sky_*`
+- [x] TODO #7: `python -c "from sky.core.db import get_engine; print('OK')"` sin `$env:DATABASE_URL` → OK
 
 ### Estimación: 3-5 días
 

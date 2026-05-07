@@ -17,24 +17,14 @@ from sqlalchemy.ext.asyncio import (
 )
 from supabase import Client, create_client
 
-# En producción esto viene de una variable DATABASE_URL directa.
 _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
 def _get_database_url() -> str:
-    """
-    Construye la URL de conexión.
-    En producción: usar DATABASE_URL directa (más limpio).
-    """
-    import os
-    db_url = os.getenv("DATABASE_URL")
-    if db_url:
-        return db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    raise RuntimeError(
-        "DATABASE_URL no está configurada. "
-        "Formato: postgresql+asyncpg://user:pass@host:port/dbname"
-    )
+    from sky.core.config import settings
+    db_url: str = settings.database_url
+    return db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
 
 def get_engine() -> AsyncEngine:

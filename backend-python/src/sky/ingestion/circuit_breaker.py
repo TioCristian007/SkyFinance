@@ -14,6 +14,8 @@ from enum import StrEnum
 
 from redis.asyncio import Redis
 
+from sky.core.metrics import sky_circuit_breaker_state
+
 
 class CircuitState(StrEnum):
     CLOSED = "closed"
@@ -55,6 +57,7 @@ class CircuitBreaker:
                 elapsed = time.time() - float(opened_at)
                 if elapsed >= self.config.open_duration_seconds:
                     await self.redis.set(f"{self._prefix}:state", CircuitState.HALF_OPEN.value)
+                    sky_circuit_breaker_state.labels(source_id=self.source_id).set(2.0)
                     return True
             return False
         # HALF_OPEN — permitir intentos limitados
@@ -93,6 +96,7 @@ class CircuitBreaker:
         pipe.set(f"{self._prefix}:opened_at", str(time.time()))
         pipe.delete(f"{self._prefix}:ho_success")
         await pipe.execute()
+        sky_circuit_breaker_state.labels(source_id=self.source_id).set(1.0)
 
     async def _close(self) -> None:
         pipe = self.redis.pipeline()
@@ -101,6 +105,7 @@ class CircuitBreaker:
         pipe.delete(f"{self._prefix}:ho_success")
         pipe.delete(f"{self._prefix}:failures")
         await pipe.execute()
+        sky_circuit_breaker_state.labels(source_id=self.source_id).set(0.0)
 
     async def reset(self) -> None:
         """Reset manual (para admin/debug)."""

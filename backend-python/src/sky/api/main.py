@@ -14,7 +14,10 @@ from arq.connections import RedisSettings
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from starlette.responses import Response as StarletteResponse
 
+from sky.api.middleware.tracing import RequestTimingMiddleware
 from sky.api.routers import (
     banking,
     challenges,
@@ -37,6 +40,7 @@ from sky.core.errors import (
     ValidationError,
 )
 from sky.core.logging import get_logger, setup_logging
+from sky.core.sentry_utils import init_sentry
 from sky.ingestion.bootstrap import build_router
 
 logger = get_logger("api")
@@ -45,6 +49,7 @@ logger = get_logger("api")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Startup y shutdown hooks."""
+    init_sentry()
     setup_logging(json_output=settings.is_production)
     logger.info("api_starting", port=settings.port)
 
@@ -93,6 +98,10 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization", "x-cron-secret"],
     )
+    # RequestTimingMiddleware se agrega después de CORS → es outermost (recibe request primero).
+    app.add_middleware(RequestTimingMiddleware)
+    # TODO(Fase11): slowapi — rate limiting HTTP público (P2-3).
+    # Ver backend-python/docs/MIGRATION_13_PHASES.md §Fase11.
 
     # ── Exception handlers ────────────────────────────────────────────────
     @app.exception_handler(AuthenticationError)
@@ -134,6 +143,13 @@ def create_app() -> FastAPI:
             "app": "sky-backend-python",
             "version": "0.1.0",
         }
+
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics() -> StarletteResponse:
+        return StarletteResponse(
+            content=generate_latest(),
+            media_type=CONTENT_TYPE_LATEST,
+        )
 
     return app
 

@@ -89,6 +89,12 @@ class Settings(BaseSettings):
     scheduler_max_backoff_hours: float = 24.0  # Node: MAX_BACKOFF_HOURS = 24
     scheduler_max_per_tick: int = 20           # Node: MAX_ACCOUNTS_PER_TICK = 20
 
+    # ── Database (TODO #7 — Fase 10) ──────────────────────────────────────────
+    database_url: str  # fail-fast si falta; db.py hace el replace a +asyncpg
+
+    # ── Observabilidad (Fase 10) ──────────────────────────────────────────────
+    sentry_dsn: str = ""  # vacío = Sentry deshabilitado (dev silencioso)
+
     @property
     def rate_limit_overrides_map(self) -> dict[str, tuple[int, int]]:
         """Parsea 'scraper.bchile=2/60,fintoc=30/60' → {'scraper.bchile': (2, 60), ...}"""
