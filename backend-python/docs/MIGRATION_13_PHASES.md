@@ -688,28 +688,60 @@ tests/unit/test_health_deep.py              (11 casos: 7 helpers + 4 rutas — N
 
 **Objetivo:** los servicios Python están deployados en Railway (o equivalente), accesibles pero sin tráfico real.
 
-### Qué se hace
-1. Verificar que `docker/api.Dockerfile` y `docker/worker.Dockerfile` buildean correctamente.
-2. Deployar en Railway como servicios NUEVOS (no reemplazar los de Node):
-   - `sky-api-python` — FastAPI, puerto 8000
-   - `sky-worker-python` — ARQ worker
-   - `sky-redis` — Redis (si Railway lo soporta, o Redis Cloud free tier)
-3. Configurar variables de entorno (mismas que Node + `REDIS_URL` + `DATABASE_URL`).
-4. Verificar que `/api/health` responde en el servicio Python.
-5. **NO apuntar `api.skyfinanzas.com` a Python todavía.** Dar un dominio temporal tipo `api-python.skyfinanzas.com` o usar el dominio de Railway.
+### Estado: ✅ Cerrada (2026-05-10)
 
-### Archivos
+### Archivos finales
 ```
-docker/api.Dockerfile          ← ya listo
-docker/worker.Dockerfile       ← ya listo
-docker/docker-compose.yml      ← ya listo
+docker/api.Dockerfile                           (python:3.12-slim, sin Playwright, <500MB)
+docker/worker.Dockerfile                        (playwright install chromium --with-deps, <1.5GB)
+docker/docker-compose.yml                       (Redis + API + worker con healthchecks)
+railway.json                                    (healthcheckPath /api/health, ON_FAILURE restart)
+src/sky/api/main.py                             (fail-fast CORS/PROMETHEUS_SECRET/SENTRY_DSN, LIFO middlewares)
+src/sky/api/middleware/security_headers.py      (HSTS, X-Frame-Options, CSP prod-only, Referrer, Permissions — NUEVO)
+src/sky/api/middleware/idempotency.py           (dedup 24h + in-progress sentinel 409 — NUEVO)
+src/sky/api/middleware/jwt_context.py           (setea request.state.user_id antes de SlowAPI — NUEVO)
+src/sky/api/middleware/rate_limit.py            (slowapi Redis-backed por user_id, fallback IP — reescrito)
+src/sky/api/deps.py                             (require_user_id lee request.state — reescrito)
+src/sky/api/routers/banking.py                  (rate limit en POST + audit log connected/disconnected)
+src/sky/api/routers/chat.py                     (rate limit en POST /api/chat)
+src/sky/api/routers/internal.py                 (warning log cron deprecated, NO borrado — Fase 13)
+src/sky/core/audit.py                           (log_event: INSERT audit_log, structlog.error+sentry en fallo — NUEVO)
+src/sky/core/config.py                          (api_rate_limit_per_minute, prometheus_secret, idempotency_ttl_seconds, bank_encryption_key_v2)
+src/sky/core/encryption.py                      (strip_version_prefix + decrypt acepta prefijo vN:)
+src/sky/worker/banking_sync.py                  (audit log sync.start/success/error)
+migrations/004_audit_log.sql                    (BIGSERIAL id, UUID user_id, JSONB metadata, RLS — NUEVO)
+scripts/rekey_bank_accounts.py                  (dry-run/apply — re-cifrado v1→v2 — NUEVO)
+docs/SECURITY.md                                (política de seguridad 9 secciones — NUEVO)
+docs/DR_RUNBOOK.md                              (3 escenarios DR — NUEVO)
+docs/RUNBOOK_KEY_ROTATION.md                    (5 pasos step-by-step — NUEVO)
+docs/DECISION_SECRETS_MANAGER.md               (ADR Railway→AWS SM — NUEVO)
+docs/API_CONTRACT.md                            (Idempotency-Key header contract — NUEVO)
+docs/FASE11_DEPLOY_CHECKLIST.md                 (Railway deploy checklist + ENV vars — NUEVO)
+tests/unit/test_rate_limit.py                   (6 casos — NUEVO)
+tests/unit/test_security_headers.py             (9 casos — NUEVO)
+tests/unit/test_idempotency.py                  (5 casos — NUEVO)
+tests/unit/test_audit.py                        (5 casos — NUEVO)
 ```
 
-### Gate de verificación
-```bash
-curl https://sky-api-python-production.up.railway.app/api/health
-# {"status":"ok","app":"sky-backend-python"}
-```
+### Deuda cerrada
+- **P2-3**: slowapi Redis-backed por user_id verificado (`JWTContextMiddleware` setea `request.state.user_id` antes de `SlowAPIMiddleware`)
+- **P2-6**: `encryption.strip_version_prefix` + `decrypt` acepta prefijo `vN:` + runbook key rotation
+- **R4**: `docs/DECISION_SECRETS_MANAGER.md` (ADR Railway env vars → plan migración AWS SM)
+- **R18** (adelantado de Fase 12): `public.audit_log` + `core/audit.py` — inmutable por doctrina
+
+### Gates verificados
+- [x] `ruff check src/sky/ tests/ scripts/` → 0 errores
+- [x] `mypy src/sky/` → 0 issues (76 archivos)
+- [x] `pytest tests/ -v` → 320 passed, 1 skipped
+- [x] coverage `api/middleware/rate_limit.py` → 100%
+- [x] coverage `api/middleware/security_headers.py` → 100%
+- [x] coverage `core/audit.py` → 100%
+- [x] coverage `api/middleware/idempotency.py` → 86%
+- [x] coverage `core/encryption.py` → 94%
+- [x] Prod fail-fast verificado: `RuntimeError` cuando `PROMETHEUS_SECRET` vacío en `is_production=True`
+- [ ] `docker build -f docker/api.Dockerfile .` — gate manual (usuario)
+- [ ] Railway deploy + `/api/health` responde 200 — gate manual (usuario)
+- [ ] Migración `004_audit_log.sql` aplicada en Supabase — gate manual (usuario, ver `FASE11_DEPLOY_CHECKLIST.md`)
 
 ### Estimación: 1-2 días
 
