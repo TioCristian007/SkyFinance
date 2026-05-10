@@ -1,35 +1,56 @@
--- Fase 11: tabla de audit log (ISO27001 A.12.4)
--- Aplicar ANTES del deploy en Railway (ver docs/FASE11_DEPLOY_CHECKLIST.md).
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Fase 11: audit log (ISO27001 A.12.4)
+-- ─────────────────────────────────────────────────────────────────────────────
+-- La tabla public.audit_log YA EXISTE en Supabase con schema enfocado en
+-- privacy (user_hash, ip_hash, event_type, outcome, detail, occurred_at).
+-- Esta migración solo agrega índices y RLS — NO crea ni modifica la tabla.
+--
+-- Schema esperado (ya en producción):
+--   id (uuid), event_type (text), user_hash (text), resource_type (text),
+--   resource_id (uuid), outcome (text), detail (jsonb), ip_hash (text),
+--   user_agent (text), occurred_at (timestamptz)
+--
+-- core/audit.py calcula user_hash = sha256(user_id + AUDIT_LOG_SALT) antes
+-- de insertar. Nunca se persiste user_id ni IP raw.
+--
 -- Ejecutar como: Dashboard Supabase > SQL Editor > New Query > pegar > Run.
+-- ─────────────────────────────────────────────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS public.audit_log (
-    id            BIGSERIAL PRIMARY KEY,
-    user_id       UUID,
-    action        TEXT          NOT NULL,
-    resource_type TEXT,
-    resource_id   UUID,
-    metadata      JSONB         NOT NULL DEFAULT '{}'::jsonb,
-    ip_address    INET,
-    user_agent    TEXT,
-    created_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW()
-);
+-- Índices de performance (queries comunes: por user_hash + tiempo, y por event_type)
+CREATE INDEX IF NOT EXISTS idx_audit_log_user_occurred
+    ON public.audit_log (user_hash, occurred_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_audit_log_user_created
-    ON public.audit_log (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_log_event_occurred
+    ON public.audit_log (event_type, occurred_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_audit_log_action
-    ON public.audit_log (action, created_at DESC);
-
--- RLS: usuarios autenticados solo pueden leer sus propios eventos.
--- El backend escribe con service_role (bypasses RLS).
+-- RLS: bloquear TODO acceso desde clientes (anon/authenticated).
+-- service_role bypassa RLS por diseño de Supabase → el backend Python
+-- (con SUPABASE_SERVICE_KEY) sigue pudiendo insertar y leer.
+-- El endpoint /api/audit/me (Fase 12) hará el filtrado por user_hash
+-- en el backend después de calcular el hash del request.
 ALTER TABLE public.audit_log ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY audit_log_own_read ON public.audit_log
-    FOR SELECT USING (user_id = auth.uid());
+-- Borrar policy vieja si existe (la migration anterior pudo haber dejado restos)
+DROP POLICY IF EXISTS audit_log_own_read ON public.audit_log;
 
--- Inmutabilidad: solo INSERT desde código (doctrinal).
--- Con service_role el REVOKE no es efectivo — la garantía está en core/audit.py.
--- TODO Fase 12: trigger de purge para registros > 90 días (retención mínima).
+CREATE POLICY audit_log_service_role_only ON public.audit_log
+    FOR ALL
+    USING (false)
+    WITH CHECK (false);
 
+-- Comentario inmutabilidad (la garantía real está en core/audit.py — solo INSERT)
 COMMENT ON TABLE public.audit_log IS
-    'Inmutable. Solo INSERT desde código. Retención: 90 días (TODO purge trigger Fase 12).';
+    'Inmutable. Solo INSERT vía service_role desde core/audit.py. '
+    'Hashing user_hash/ip_hash en aplicación (privacy-by-design). '
+    'Retención: 90 días (TODO purge trigger en Fase 12).';
+
+-- ── Verificación ─────────────────────────────────────────────────────────────
+-- SELECT indexname FROM pg_indexes
+--  WHERE tablename = 'audit_log'
+--    AND indexname LIKE 'idx_audit_log_%'
+--  ORDER BY indexname;
+-- Esperado: idx_audit_log_event_occurred, idx_audit_log_user_occurred
+--
+-- SELECT policyname, cmd FROM pg_policies
+--  WHERE schemaname = 'public' AND tablename = 'audit_log';
+-- Esperado: audit_log_service_role_only · ALL

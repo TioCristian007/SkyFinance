@@ -1,11 +1,23 @@
-"""Tests del helper core/audit.py (Fase 11 — R18)."""
+"""Tests del helper core/audit.py (Fase 11 — R18, ISO27001 A.12.4).
+
+API pública de log_event() preserva legibilidad (action, user_id, metadata),
+mapea internamente al schema real con hashing:
+    action="sync.start" → event_type="sync", outcome="started"
+    user_id="uuid"      → user_hash=sha256(uuid+salt)
+    metadata={...}      → detail=jsonb(...)
+    ip_address="ip"     → ip_hash=sha256(ip+salt)
+
+Tests validan tanto el mapping como el hashing y el fail-safe.
+"""
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
-def _mock_engine() -> MagicMock:
+def _mock_engine() -> tuple[MagicMock, AsyncMock]:
     mock_conn = AsyncMock()
     mock_conn.execute = AsyncMock()
     mock_ctx = MagicMock()
@@ -21,8 +33,9 @@ async def _call_log_event(**kwargs: Any) -> None:
     await log_event(**kwargs)
 
 
-async def test_log_sync_start() -> None:
-    """log_event sync.start ejecuta INSERT."""
+# ── Mapping action → (event_type, outcome) ───────────────────────────────────
+
+async def test_log_sync_start_maps_to_event_type_and_outcome() -> None:
     engine, conn = _mock_engine()
     with patch("sky.core.audit.get_engine", return_value=engine):
         await _call_log_event(
@@ -36,16 +49,16 @@ async def test_log_sync_start() -> None:
     sql = str(conn.execute.call_args[0][0])
     assert "audit_log" in sql
     params = conn.execute.call_args[0][1]
-    assert params["action"] == "sync.start"
-    # Verificar que metadata no contiene PII
-    import json
-    meta = json.loads(params["metadata"])
+    assert params["event_type"] == "sync"
+    assert params["outcome"] == "started"
+    # Sin user_id raw — debe ser hash
+    assert "user_id" not in params
+    detail = json.loads(params["detail"])
     pii_keys = {"rut", "password", "encrypted_rut", "encrypted_pass", "clave"}
-    assert not pii_keys.intersection(meta.keys()), f"PII encontrado en metadata: {meta}"
+    assert not pii_keys.intersection(detail.keys()), f"PII en detail: {detail}"
 
 
-async def test_log_sync_success() -> None:
-    """log_event sync.success ejecuta INSERT con new_transactions y elapsed_ms."""
+async def test_log_sync_success_outcome_success() -> None:
     engine, conn = _mock_engine()
     with patch("sky.core.audit.get_engine", return_value=engine):
         await _call_log_event(
@@ -55,18 +68,14 @@ async def test_log_sync_success() -> None:
             resource_id="account-uuid",
             metadata={"bank_id": "bchile", "new_transactions": 5, "elapsed_ms": 1200},
         )
-    conn.execute.assert_called_once()
     params = conn.execute.call_args[0][1]
-    assert params["action"] == "sync.success"
-    import json
-    meta = json.loads(params["metadata"])
-    assert meta["new_transactions"] == 5
-    pii_keys = {"rut", "password", "encrypted_rut", "encrypted_pass"}
-    assert not pii_keys.intersection(meta.keys())
+    assert params["event_type"] == "sync"
+    assert params["outcome"] == "success"
+    detail = json.loads(params["detail"])
+    assert detail["new_transactions"] == 5
 
 
-async def test_log_sync_error() -> None:
-    """log_event sync.error ejecuta INSERT con error_type (no mensaje completo)."""
+async def test_log_sync_error_outcome_failure() -> None:
     engine, conn = _mock_engine()
     with patch("sky.core.audit.get_engine", return_value=engine):
         await _call_log_event(
@@ -77,14 +86,13 @@ async def test_log_sync_error() -> None:
             metadata={"bank_id": "bchile", "error_type": "AuthenticationError"},
         )
     params = conn.execute.call_args[0][1]
-    assert params["action"] == "sync.error"
-    import json
-    meta = json.loads(params["metadata"])
-    assert meta["error_type"] == "AuthenticationError"
+    assert params["event_type"] == "sync"
+    assert params["outcome"] == "failure"
+    detail = json.loads(params["detail"])
+    assert detail["error_type"] == "AuthenticationError"
 
 
 async def test_log_account_connected() -> None:
-    """log_event account.connected ejecuta INSERT con bank_id."""
     engine, conn = _mock_engine()
     with patch("sky.core.audit.get_engine", return_value=engine):
         await _call_log_event(
@@ -96,12 +104,104 @@ async def test_log_account_connected() -> None:
             ip_address="192.168.1.1",
         )
     params = conn.execute.call_args[0][1]
-    assert params["action"] == "account.connected"
-    assert params["ip_address"] == "192.168.1.1"
+    assert params["event_type"] == "account"
+    assert params["outcome"] == "connected"
+    # IP nunca debe persistirse raw
+    assert "ip_address" not in params
+    assert "ip_hash" in params
 
 
-async def test_log_db_failure_no_raise() -> None:
-    """Si DB lanza excepción → log_event swallows + structlog.error (no re-raise)."""
+# ── Hashing user_hash / ip_hash ──────────────────────────────────────────────
+
+async def test_user_hash_is_sha256_of_id_plus_salt() -> None:
+    """Con salt configurada, user_hash = sha256(user_id + salt)."""
+    engine, conn = _mock_engine()
+    test_salt = "test_salt_for_unit_tests_abc123"
+    expected_hash = hashlib.sha256(f"user-uuid{test_salt}".encode()).hexdigest()
+
+    with (
+        patch("sky.core.audit.get_engine", return_value=engine),
+        patch("sky.core.audit.settings") as mock_settings,
+    ):
+        mock_settings.audit_log_salt = test_salt
+        await _call_log_event(
+            action="sync.start",
+            user_id="user-uuid",
+            resource_type="bank_account",
+            resource_id="account-uuid",
+        )
+    params = conn.execute.call_args[0][1]
+    assert params["user_hash"] == expected_hash
+
+
+async def test_user_hash_changes_with_salt() -> None:
+    """Salts diferentes → hashes diferentes para el mismo user_id."""
+    engine, conn1 = _mock_engine()
+
+    with (
+        patch("sky.core.audit.get_engine", return_value=engine),
+        patch("sky.core.audit.settings") as mock_settings,
+    ):
+        mock_settings.audit_log_salt = "salt-A"
+        await _call_log_event(action="sync.start", user_id="same-user")
+    hash_a = conn1.execute.call_args[0][1]["user_hash"]
+
+    engine, conn2 = _mock_engine()
+    with (
+        patch("sky.core.audit.get_engine", return_value=engine),
+        patch("sky.core.audit.settings") as mock_settings,
+    ):
+        mock_settings.audit_log_salt = "salt-B"
+        await _call_log_event(action="sync.start", user_id="same-user")
+    hash_b = conn2.execute.call_args[0][1]["user_hash"]
+
+    assert hash_a != hash_b
+    assert hash_a != "same-user"  # nunca persiste raw
+
+
+async def test_ip_hash_is_sha256_of_ip_plus_salt() -> None:
+    engine, conn = _mock_engine()
+    test_salt = "test_salt_abc"
+    expected = hashlib.sha256(f"192.168.1.1{test_salt}".encode()).hexdigest()
+
+    with (
+        patch("sky.core.audit.get_engine", return_value=engine),
+        patch("sky.core.audit.settings") as mock_settings,
+    ):
+        mock_settings.audit_log_salt = test_salt
+        await _call_log_event(
+            action="account.connected",
+            user_id="user-uuid",
+            ip_address="192.168.1.1",
+        )
+    assert conn.execute.call_args[0][1]["ip_hash"] == expected
+
+
+async def test_no_pii_persisted() -> None:
+    """Verifica que user_id raw NUNCA aparece en params del INSERT."""
+    engine, conn = _mock_engine()
+    with (
+        patch("sky.core.audit.get_engine", return_value=engine),
+        patch("sky.core.audit.settings") as mock_settings,
+    ):
+        mock_settings.audit_log_salt = "any-salt"
+        await _call_log_event(
+            action="sync.start",
+            user_id="12345678-9",  # parece RUT chileno
+            ip_address="201.220.10.5",
+            metadata={"bank_id": "bchile"},
+        )
+    params = conn.execute.call_args[0][1]
+    # Ningún field debe contener el user_id raw
+    for k, v in params.items():
+        assert v != "12345678-9", f"user_id raw leakeó en field '{k}'"
+        assert v != "201.220.10.5", f"ip raw leakeó en field '{k}'"
+
+
+# ── Fail-safe ────────────────────────────────────────────────────────────────
+
+async def test_log_db_failure_no_raise_and_sentry_notified() -> None:
+    """Si DB lanza excepción → log_event swallows + Sentry capture (no re-raise)."""
     bad_engine = MagicMock()
     bad_ctx = MagicMock()
     bad_ctx.__aenter__ = AsyncMock(side_effect=Exception("DB connection refused"))
@@ -119,6 +219,5 @@ async def test_log_db_failure_no_raise() -> None:
             resource_type="bank_account",
             resource_id="account-uuid",
         )
-        # Sentry notificado
         mock_sentry.capture_message.assert_called_once()
         assert "audit_log_failed" in str(mock_sentry.capture_message.call_args)

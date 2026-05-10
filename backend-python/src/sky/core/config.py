@@ -95,6 +95,12 @@ class Settings(BaseSettings):
     # ── Observabilidad (Fase 10) ──────────────────────────────────────────────
     sentry_dsn: str = ""  # vacío = Sentry deshabilitado (dev silencioso)
 
+    # ── Audit log salt (Fase 11) ──────────────────────────────────────────────
+    # SHA-256(user_id + salt) → user_hash para audit_log. NUNCA rotar este salt
+    # en producción — invalida correlación histórica. Mismo nivel de criticidad
+    # que BANK_ENCRYPTION_KEY. Vacío = hashing deshabilitado (dev only).
+    audit_log_salt: str = ""
+
     # ── Rate limiting HTTP (Fase 11 — P2-3) ──────────────────────────────────
     api_rate_limit_per_minute: int = 60
 
