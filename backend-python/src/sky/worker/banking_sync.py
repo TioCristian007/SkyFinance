@@ -29,6 +29,7 @@ from typing import Any
 
 from sqlalchemy import text
 
+from sky.core.audit import log_event
 from sky.core.config import settings
 from sky.core.db import get_engine
 from sky.core.encryption import decrypt
@@ -108,15 +109,37 @@ async def sync_bank_account(
         creds = BankCredentials(rut=rut, password=password)
         bank_id = str(row["bank_id"])
 
+        await log_event(
+            action="sync.start",
+            user_id=user_id,
+            resource_type="bank_account",
+            resource_id=bank_account_id,
+            metadata={"bank_id": bank_id},
+        )
+
         try:
             result = await router.ingest(bank_id=bank_id, user_id=user_id, credentials=creds)
         except BankAuthError:
             await _mark_error(bank_account_id, "Credenciales rechazadas por el banco")
             sky_sync_total.labels(bank_id=bank_id, status="error").inc()
+            await log_event(
+                action="sync.error",
+                user_id=user_id,
+                resource_type="bank_account",
+                resource_id=bank_account_id,
+                metadata={"bank_id": bank_id, "error_type": "AuthenticationError"},
+            )
             raise
         except AllSourcesFailedError as exc:
             await _mark_error(bank_account_id, _sanitize_error(str(exc)))
             sky_sync_total.labels(bank_id=bank_id, status="error").inc()
+            await log_event(
+                action="sync.error",
+                user_id=user_id,
+                resource_type="bank_account",
+                resource_id=bank_account_id,
+                metadata={"bank_id": bank_id, "error_type": "AllSourcesFailedError"},
+            )
             raise
         finally:
             del rut, password, creds
@@ -151,6 +174,14 @@ async def sync_bank_account(
             "sync_completed",
             bank_account_id=bank_account_id, bank_id=bank_id,
             new_transactions=inserted, elapsed_ms=elapsed_ms,
+        )
+
+        await log_event(
+            action="sync.success",
+            user_id=user_id,
+            resource_type="bank_account",
+            resource_id=bank_account_id,
+            metadata={"bank_id": bank_id, "new_transactions": inserted, "elapsed_ms": elapsed_ms},
         )
 
         return {

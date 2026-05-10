@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import text
 
 from sky.api.deps import require_user_id
+from sky.api.middleware.rate_limit import limiter
 from sky.api.schemas.banking import (
     BankAccountConnectedResponse,
     BankAccountConnectRequest,
@@ -15,6 +16,7 @@ from sky.api.schemas.banking import (
     SyncAllResponse,
     SyncBankAccountResponse,
 )
+from sky.core.audit import log_event
 from sky.core.config import settings
 from sky.core.db import get_engine
 from sky.core.encryption import encrypt
@@ -28,6 +30,7 @@ _BANK_META: dict[str, dict[str, object]] = {b["id"]: b for b in SUPPORTED_BANKS}
 
 
 @router.post("/sync/{account_id}", response_model=SyncBankAccountResponse)
+@limiter.limit(f"{settings.api_rate_limit_per_minute}/minute")  # type: ignore[untyped-decorator]
 async def sync_bank_account_endpoint(
     account_id: str,
     request: Request,
@@ -35,7 +38,7 @@ async def sync_bank_account_endpoint(
 ) -> SyncBankAccountResponse:
     """
     Encola un sync de la cuenta indicada. Responde inmediato {started: true}.
-    El frontend hace polling sobre /api/banking/accounts (Fase 7) para el progreso.
+    El frontend hace polling sobre /api/banking/accounts para el progreso.
     """
     arq_pool = request.app.state.arq_pool
     job = await arq_pool.enqueue_job("sync_bank_account_job", account_id, user_id)
@@ -45,6 +48,7 @@ async def sync_bank_account_endpoint(
 
 
 @router.post("/sync-all", response_model=SyncAllResponse)
+@limiter.limit(f"{settings.api_rate_limit_per_minute}/minute")  # type: ignore[untyped-decorator]
 async def sync_all_endpoint(
     request: Request,
     user_id: str = Depends(require_user_id),
@@ -107,6 +111,7 @@ async def list_accounts(
 
 
 @router.post("/accounts", response_model=BankAccountConnectedResponse, status_code=201)
+@limiter.limit(f"{settings.api_rate_limit_per_minute}/minute")  # type: ignore[untyped-decorator]
 async def connect_account(
     body: BankAccountConnectRequest,
     request: Request,
@@ -158,6 +163,17 @@ async def connect_account(
     sync_job_id = job.job_id if job else "queued"
 
     logger.info("bank_account_connected", bank_id=body.bank_id, account_id=account_id)
+
+    await log_event(
+        action="account.connected",
+        user_id=user_id,
+        resource_type="bank_account",
+        resource_id=account_id,
+        metadata={"bank_id": body.bank_id},
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+
     return BankAccountConnectedResponse(
         id=account_id,
         bank_id=body.bank_id,
@@ -169,6 +185,7 @@ async def connect_account(
 @router.delete("/accounts/{account_id}", status_code=204)
 async def disconnect_account(
     account_id: str,
+    request: Request,
     user_id: str = Depends(require_user_id),
 ) -> None:
     """Soft-disconnect: status='disconnected', no borra histórico de transactions."""
@@ -186,3 +203,12 @@ async def disconnect_account(
             raise HTTPException(status_code=404, detail="Cuenta no encontrada")
 
     logger.info("bank_account_disconnected", account_id=account_id)
+
+    await log_event(
+        action="account.disconnected",
+        user_id=user_id,
+        resource_type="bank_account",
+        resource_id=account_id,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )

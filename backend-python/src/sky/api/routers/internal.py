@@ -25,6 +25,11 @@ async def cron_sync_due(request: Request) -> dict[str, int]:
     Encola sync de cuentas cuyo last_sync_at supera el umbral de horas.
     Autenticado via x-cron-secret (Railway cron / GitHub Actions).
     """
+    logger.warning(
+        "cron_sync_due_deprecated",
+        reason="Replaced by ARQ cron (scheduled_sync_job). Will be removed in Fase 13.",
+    )
+
     secret = request.headers.get("x-cron-secret", "")
     if not secret or not secrets.compare_digest(secret, settings.cron_secret):
         raise HTTPException(status_code=401, detail="Cron secret inválido")

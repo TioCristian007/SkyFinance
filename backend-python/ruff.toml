@@ -18,3 +18,8 @@ ignore = ["S101"]
 # Tests: decoradores @patch y strings de aserción inevitablemente largos
 "tests/unit/test_aria.py" = ["E501"]
 "tests/unit/test_mr_money.py" = ["E501"]
+# Scripts pre-existentes: errores cosméticos heredados, fuera de scope de refactor
+"scripts/smoke_router.py" = ["E501", "SIM105", "F541", "I001"]
+"scripts/test_bchile_scraper.py" = ["F541"]
+"scripts/test_bci_scraper.py" = ["F541", "W605"]
+"scripts/verify_encryption_compat.py" = ["I001"]

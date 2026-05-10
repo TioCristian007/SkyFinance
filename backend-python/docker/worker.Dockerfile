@@ -1,10 +1,20 @@
-FROM mcr.microsoft.com/playwright/python:v1.49.0-noble
+FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY pyproject.toml ./
-RUN pip install --no-cache-dir -e .
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-COPY src/ src/
+COPY pyproject.toml ./
+COPY src/ ./src/
+
+RUN pip install --no-cache-dir .
+
+# Chromium + todas sus dependencias de sistema en una pasada
+RUN playwright install chromium --with-deps
+
+RUN rm -rf /var/lib/apt/lists/*
 
 CMD ["arq", "sky.worker.main.WorkerSettings"]

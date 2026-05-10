@@ -4,12 +4,15 @@ from __future__ import annotations
 from fastapi import APIRouter, BackgroundTasks, Depends, Request
 
 from sky.api.deps import require_user_id
+from sky.api.middleware.rate_limit import limiter
 from sky.api.schemas.chat import ChatRequest, ChatTextResponse, NavigationResponse, ProposeChallenge
+from sky.core.config import settings
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 
 @router.post("", response_model=ChatTextResponse | ProposeChallenge | NavigationResponse)
+@limiter.limit(f"{settings.api_rate_limit_per_minute}/minute")  # type: ignore[untyped-decorator]
 async def chat_endpoint(
     body: ChatRequest,
     request: Request,

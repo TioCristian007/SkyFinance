@@ -20,8 +20,21 @@ MODELO DE SEGURIDAD:
 import base64
 import hashlib
 import os
+import re as _re
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+# ── Key versioning (Fase 11 — P2-6) ──────────────────────────────────────────
+_VERSION_PREFIX_RE = _re.compile(r"^v\d+:")
+
+
+def strip_version_prefix(ciphertext: str) -> str:
+    """
+    Elimina prefijo de versión si está presente.
+    'v2:iv:tag:cipher' → 'iv:tag:cipher'. Sin prefijo → sin cambios.
+    Backward-compatible: ciphertexts existentes (sin prefijo = v1) no se modifican.
+    """
+    return _VERSION_PREFIX_RE.sub("", ciphertext, count=1)
 
 # Constantes — deben coincidir con encryptionService.js de Node
 _IV_LENGTH = 16   # 128 bits
@@ -84,9 +97,12 @@ def decrypt(encrypted_string: str, raw_key: str) -> str:
     if not encrypted_string:
         raise ValueError("encrypted_string inválido")
 
-    parts = encrypted_string.split(":")
+    # Eliminar prefijo de versión si presente ('v1:', 'v2:', etc.)
+    cleaned = strip_version_prefix(encrypted_string)
+
+    parts = cleaned.split(":")
     if len(parts) != 3:
-        raise ValueError("formato inválido — esperado iv:authTag:ciphertext")
+        raise ValueError("formato inválido — esperado [vN:]iv:authTag:ciphertext")
 
     iv_b64, tag_b64, cipher_b64 = parts
 

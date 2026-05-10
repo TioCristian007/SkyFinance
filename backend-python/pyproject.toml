@@ -44,6 +44,9 @@ dependencies = [
 
     # Auth
     "PyJWT>=2.10.0",
+
+    # Rate limiting HTTP (Fase 11 — P2-3)
+    "slowapi>=0.1.9",
 ]
 
 [project.optional-dependencies]

@@ -95,6 +95,19 @@ class Settings(BaseSettings):
     # ── Observabilidad (Fase 10) ──────────────────────────────────────────────
     sentry_dsn: str = ""  # vacío = Sentry deshabilitado (dev silencioso)
 
+    # ── Rate limiting HTTP (Fase 11 — P2-3) ──────────────────────────────────
+    api_rate_limit_per_minute: int = 60
+
+    # ── Observabilidad prod (Fase 11) ────────────────────────────────────────
+    # Fail-fast si is_production=True y está vacío (verificado en main.py).
+    prometheus_secret: str = ""   # vacío = acceso libre en dev
+
+    # ── Idempotency (Fase 11) ────────────────────────────────────────────────
+    idempotency_ttl_seconds: int = 86400    # 24h
+
+    # ── Rotación de clave bancaria (Fase 11 — P2-6) ──────────────────────────
+    bank_encryption_key_v2: str = ""        # vacío = sin rotación activa
+
     @property
     def rate_limit_overrides_map(self) -> dict[str, tuple[int, int]]:
         """Parsea 'scraper.bchile=2/60,fintoc=30/60' → {'scraper.bchile': (2, 60), ...}"""
