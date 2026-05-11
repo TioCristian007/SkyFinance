@@ -36,6 +36,11 @@ def get_engine() -> AsyncEngine:
             max_overflow=20,
             pool_pre_ping=True,
             echo=False,
+            # Supabase Transaction Pooler (Pgbouncer transaction mode) NO soporta
+            # prepared statements. asyncpg los cachea por default → DuplicatePreparedStatementError.
+            # statement_cache_size=0 deshabilita el caché. Trade-off: cada query
+            # se parsea fresh (~5% overhead) a cambio de compatibilidad pooler.
+            connect_args={"statement_cache_size": 0},
         )
     assert _engine is not None
     return _engine
