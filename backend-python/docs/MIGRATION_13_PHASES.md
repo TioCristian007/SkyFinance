@@ -732,18 +732,69 @@ tests/unit/test_audit.py                        (5 casos — NUEVO)
 ### Gates verificados
 - [x] `ruff check src/sky/ tests/ scripts/` → 0 errores
 - [x] `mypy src/sky/` → 0 issues (76 archivos)
-- [x] `pytest tests/ -v` → 320 passed, 1 skipped
+- [x] `pytest tests/ -v` → 333 passed, 1 skipped (post fixes)
 - [x] coverage `api/middleware/rate_limit.py` → 100%
 - [x] coverage `api/middleware/security_headers.py` → 100%
 - [x] coverage `core/audit.py` → 100%
 - [x] coverage `api/middleware/idempotency.py` → 86%
 - [x] coverage `core/encryption.py` → 94%
 - [x] Prod fail-fast verificado: `RuntimeError` cuando `PROMETHEUS_SECRET` vacío en `is_production=True`
-- [ ] `docker build -f docker/api.Dockerfile .` — gate manual (usuario)
-- [ ] Railway deploy + `/api/health` responde 200 — gate manual (usuario)
-- [ ] Migración `004_audit_log.sql` aplicada en Supabase — gate manual (usuario, ver `FASE11_DEPLOY_CHECKLIST.md`)
+- [x] Railway deploy verificado (2026-05-11) — ver `### Deploy verificado` abajo
+- [x] Migración `004_audit_log.sql` aplicada en Supabase (índices + RLS)
 
-### Estimación: 1-2 días
+### Deploy verificado (2026-05-11 madrugada)
+
+**Servicios Railway operativos:**
+- `sky-api-python-production.up.railway.app` — Active
+- `sky-worker-python` — Active, browser pool 4, 5 functions + cron registrados
+- `Redis` (railway plugin) — Online, internal URL
+
+**Smoke tests reales en producción:**
+- `GET /api/health` → 200 + JSON
+- `GET /api/health/deep` → 200 `{"status":"ok","db":"ok","redis":"ok","anthropic":"ok"}`
+- `POST /api/banking/sync-all` sin JWT → 401 (P0-1 cerrado en prod real)
+- `POST /api/internal/cron/sync-due` sin secret → 401 (`secrets.compare_digest`)
+- `POST /api/internal/cron/sync-due` con secret → `{"enqueued": 0}` (DB conecta + filtra correctamente)
+- `GET /metrics` sin secret → 401
+- `GET /metrics` con `x-prometheus-secret` → exposition format con `sky_*` series, `sky_queue_depth 0.0`
+- Security headers verificados con curl externo: HSTS, CSP, X-Frame-Options, Referrer-Policy, Permissions-Policy
+
+**Sentry inicializado** con `env=production` (verificado en logs de worker startup).
+
+**Worker logs de arranque limpio:**
+```
+sentry_initialized       env=production
+worker_starting
+browser_pool_started     pool_size=4 headless=true
+sources_built            count=3 ids=[scraper.bchile, scraper.falabella, scraper.bci]
+routing_rules_loaded     count=8     (lectura desde DB Supabase, no fallback)
+router_built             sources=3 rules=8
+worker_ready             pool_size=4
+```
+
+### Bugs corregidos durante el deploy (commits adicionales)
+
+- `46ba940` — `core/db.py`: `connect_args={"statement_cache_size": 0}` para asyncpg + Pgbouncer
+  Sin esto, queries fallan con `DuplicatePreparedStatementError` en runtime real (Pgbouncer
+  transaction mode no soporta prepared statements cacheadas).
+- `01d4788` — `railway.json`: quitar `dockerfilePath` y `healthcheckPath` para que worker
+  use su propio Dockerfile + sin healthcheck HTTP.
+- `a25fde2` — `.env.example`: forzar IPv4 (`127.0.0.1`) en `REDIS_URL` para evitar conflicto
+  WSL2/Docker en Windows local.
+- `adff285` — `core/audit.py`: schema mismatch (tabla pre-existente con `user_hash`/`event_type`,
+  no `user_id`/`action`). Reescritura de `log_event` con hashing SHA-256 + `AUDIT_LOG_SALT`.
+
+### Lecciones aprendidas (para Fase 13)
+
+1. **Supabase pooler (port 6543) requiere asyncpg con `statement_cache_size=0`** — documentar
+   en SECURITY.md o configurar en Direct Connection si fuera viable (no lo es por IPv6 issues).
+2. **`railway.json` se aplica a todos los servicios con mismo root directory** — no usar
+   `dockerfilePath` ahí cuando hay múltiples servicios. Configurar por dashboard.
+3. **`$PORT` en Dockerfile-based services** requiere wrapper `sh -c "..."` para shell expansion.
+4. **Schema check antes de codear** cuando hay tablas pre-existentes — Sonnet inventó schema
+   `audit_log` cuando ya existía con diseño superior (privacy-by-design con hashing).
+
+### Estimación: 1-2 días (cumplida — incluye 1 sesión deploy con 6 bugs en cadena resueltos)
 
 ---
 
