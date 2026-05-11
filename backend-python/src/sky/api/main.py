@@ -26,6 +26,8 @@ from sky.api.middleware.rate_limit import limiter, on_rate_limit_exceeded
 from sky.api.middleware.security_headers import SecurityHeadersMiddleware
 from sky.api.middleware.tracing import RequestTimingMiddleware
 from sky.api.routers import (
+    account,
+    audit,
     banking,
     challenges,
     chat,
@@ -152,6 +154,8 @@ def create_app() -> FastAPI:
         return JSONResponse(status_code=429, content={"error": str(exc)})
 
     # ── Routes ────────────────────────────────────────────────────────────────
+    app.include_router(audit.router)          # Fase 12: GET /api/audit/me
+    app.include_router(account.router)        # Fase 12: /api/account/export-request
     app.include_router(banking.router)
     app.include_router(transactions.router)
     app.include_router(summary.router)

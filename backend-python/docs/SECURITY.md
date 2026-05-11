@@ -62,6 +62,45 @@
 | Railway | SOC2 | Infra en US |
 | Anthropic | Política privacidad comercial | API calls, no data persistence |
 
+## 10. Data retention
+
+- **audit_log**: retención configurable via `AUDIT_LOG_RETENTION_DAYS` (default 90 días).
+  Purge ejecutado por el worker ARQ diariamente a las 03:00 UTC (`audit_purge_job`).
+  Función SQL: `SELECT public.purge_audit_log_old(:days)` (batchea en grupos de 10 000).
+  Si un banco contractualmente exige retención mayor, ajustar `AUDIT_LOG_RETENTION_DAYS` sin redeploy.
+- **data_export_requests**: signed URL en `download_url` expira en 7 días (alineado con `expires_at`).
+  Después de 7 días, el usuario debe solicitar un nuevo export.
+
+## 11. RLS verification procedure
+
+Correr antes de cada deploy de migración SQL:
+
+```bash
+cd backend-python
+python scripts/audit_rls_policies.py
+```
+
+Expected output: todas las tablas con `RLS: SI` y evaluación `OK` o `WARN`.
+Exit code 1 = hay tablas sin RLS o con policies que exponen `aria.*` a clientes → **bloquear deploy**.
+
+El script es read-only (solo SELECT). Nunca modifica policies.
+
+## 12. Customer data export (Ley 19.628 art 11)
+
+Flujo completo para que un usuario solicite sus datos:
+
+1. `POST /api/account/export-request` — crea registro `status='pending'`, encola worker job.
+2. Worker genera ZIP con: `transactions`, `goals`, `challenge_states`, `earned_badges`, `audit_log` propio.
+3. ZIP sube al bucket privado `"data-exports"` en Supabase Storage.
+4. `UPDATE data_export_requests SET status='completed', download_url=<signed URL 7d>`.
+5. Usuario pollea `GET /api/account/export-request/{id}` hasta `status='completed'`.
+
+**Datos explícitamente excluidos**: `bank_accounts` (contiene `encrypted_rut`/`encrypted_pass`).
+**Formato**: JSON o CSV (`?format=csv`).
+**Error**: si el job falla, `status='failed'`, `delivered_at=NULL`, error sanitizado (solo tipo de excepción).
+**Rate limit**: 5 req/min en POST (anti-abuse).
+**Pre-requisito de deploy**: bucket `"data-exports"` creado manualmente en Supabase Dashboard (privado).
+
 ---
 
-*Última revisión: 2026-05-10. Actualizar tras cada cambio de arquitectura de seguridad.*
+*Última revisión: 2026-05-11. Actualizar tras cada cambio de arquitectura de seguridad.*

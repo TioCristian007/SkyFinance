@@ -114,6 +114,10 @@ class Settings(BaseSettings):
     # ── Rotación de clave bancaria (Fase 11 — P2-6) ──────────────────────────
     bank_encryption_key_v2: str = ""        # vacío = sin rotación activa
 
+    # ── Audit log retención (Fase 12) ────────────────────────────────────────
+    # Ajustable sin redeploy si un banco contractualmente exige retención mayor.
+    audit_log_retention_days: int = 90
+
     @property
     def rate_limit_overrides_map(self) -> dict[str, tuple[int, int]]:
         """Parsea 'scraper.bchile=2/60,fintoc=30/60' → {'scraper.bchile': (2, 60), ...}"""

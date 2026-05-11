@@ -20,7 +20,9 @@ from sky.core.logging import get_logger, setup_logging
 from sky.core.sentry_utils import init_sentry
 from sky.ingestion.bootstrap import build_router
 from sky.ingestion.browser_pool import get_browser_pool
+from sky.worker.jobs.audit_purge import audit_purge_job
 from sky.worker.jobs.categorize import categorize_pending_job
+from sky.worker.jobs.data_export import process_export_request_job
 from sky.worker.jobs.scheduled import scheduled_sync_job
 from sky.worker.jobs.sync import sync_all_user_accounts_job, sync_bank_account_job
 
@@ -74,10 +76,13 @@ class WorkerSettings:
         sync_all_user_accounts_job,
         categorize_pending_job,
         scheduled_sync_job,
+        audit_purge_job,                     # Fase 12: daily 03:00 UTC
+        process_export_request_job,          # Fase 12: data export Ley 19.628
     ]
 
     cron_jobs = [
-        cron(scheduled_sync_job, minute=5),  # cada hora a los :05 min
+        cron(scheduled_sync_job, minute=5),              # cada hora a los :05
+        cron(audit_purge_job, hour=3, minute=0),         # daily 03:00 UTC
     ]
 
     queue_name = "sky:default"

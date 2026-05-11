@@ -8,6 +8,8 @@ os.environ.setdefault("SUPABASE_SERVICE_KEY", "test-service-key")
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-api-key")
 os.environ.setdefault("BANK_ENCRYPTION_KEY", "0" * 64)
 os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost:5432/test")
+# TODO #8 fix: REDIS_URL dummy para que pydantic-settings no falle al importar
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379")
 
 import fakeredis  # noqa: E402
 import pytest  # noqa: E402
@@ -15,6 +17,17 @@ import pytest_asyncio  # noqa: E402
 
 from sky.ingestion.circuit_breaker import CircuitBreakerConfig  # noqa: E402
 from sky.ingestion.rate_limiter import RateLimitConfig, RateLimiter  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _disable_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fix TODO #8: deshabilita slowapi para tests (no requiere Redis real)."""
+    try:
+        from sky.api.middleware.rate_limit import limiter
+
+        monkeypatch.setattr(limiter, "enabled", False)
+    except Exception:
+        pass  # Tests que no usan la API no necesitan esto
 
 
 @pytest.fixture

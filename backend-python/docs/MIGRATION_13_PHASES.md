@@ -798,40 +798,54 @@ worker_ready             pool_size=4
 
 ---
 
-## FASE 12 — Migraciones SQL e índices faltantes
+## FASE 12 — Seguridad y cumplimiento: Audit purge + RLS audit + /api/audit/me + Data export
 
-**Objetivo:** la base de datos tiene todos los índices y constraints que el código Python necesita.
+### Estado: ✅ Cerrada (2026-05-11)
 
-### Qué se hace
-1. Crear y correr migración: `UNIQUE INDEX uniq_tx_identity ON transactions (user_id, bank_account_id, external_id)` — cierra BUG-2 definitivamente.
-2. Crear tabla `ingestion_routing_rules` si no existe (migración 001 del scaffold).
-3. Crear tabla `bank_tokens` para OAuth futuro (Fintoc).
-4. Verificar que todos los índices de performance existen.
-5. Verificar que RLS está activo en todas las tablas nuevas.
+**Objetivo:** cumplimiento Ley 19.628 art 11, retención de audit log configurable, verificación RLS completa, y endpoint de exportación de datos del usuario.
 
-### Archivos
+### Qué se implementó
+1. **Audit purge** (`migrations/005_audit_log_purge.sql` + `worker/jobs/audit_purge.py`): función SQL `purge_audit_log_old(days)` con batch de 10 000 (max 50 iter); ARQ cron daily 03:00 UTC; `audit_log_retention_days` configurable en `config.py` (default 90).
+2. **RLS audit** (`scripts/audit_rls_policies.py`): script read-only; verifica RLS habilitado + policy `USING(false)` en todas las tablas `public.*` y `aria.*`; exit 0 = ok, exit 1 = issues.
+3. **GET /api/audit/me** (`api/routers/audit.py` + `api/schemas/audit.py`): historial paginado del usuario; `user_hash = SHA-256(user_id + salt)` calculado en backend, nunca expuesto; filtro event_type exact match; desconocido → lista vacía sin tocar DB.
+4. **Customer data export** (`api/routers/account.py` + `api/schemas/account.py` + `worker/jobs/data_export.py`): POST/GET `/api/account/export-request`; worker genera ZIP (JSON o CSV) con transactions, goals, challenge_states, earned_badges, audit_log; sube a Supabase Storage bucket "data-exports"; signed URL 7 días; error sanitizado (solo tipo, sin stack/paths); `max_tries=1`.
+
+### Archivos nuevos/modificados
 ```
-migrations/001_routing_rules.sql               ← ya listo
-migrations/002_indexes_and_constraints.sql      ← NUEVO
-migrations/003_webhook_events_seen.sql          ← NUEVO (futuro)
-migrations/004_bank_tokens.sql                  ← NUEVO (futuro)
+migrations/005_audit_log_purge.sql              ← función purge_audit_log_old() + GRANT EXECUTE
+scripts/audit_rls_policies.py                   ← verificación RLS (read-only, exit code 0/1)
+scripts/verify_fase12_schema.py                 ← verificación schema pre-implementación
+src/sky/core/config.py                          ← +audit_log_retention_days: int = 90
+src/sky/worker/jobs/audit_purge.py              ← job ARQ daily purge
+src/sky/worker/jobs/data_export.py              ← job ARQ exportación ZIP
+src/sky/worker/main.py                          ← +audit_purge_job, +process_export_request_job, +cron
+src/sky/api/routers/audit.py                    ← GET /api/audit/me
+src/sky/api/routers/account.py                  ← POST/GET /api/account/export-request
+src/sky/api/schemas/audit.py                    ← AuditEventOut, AuditEventListResponse
+src/sky/api/schemas/account.py                  ← DataExportRequestCreate, DataExportRequestOut
+src/sky/api/main.py                             ← +audit.router, +account.router
+tests/unit/test_audit_purge.py                  ← 6 tests (100% coverage)
+tests/integration/test_audit_endpoint.py        ← 6 tests (100% coverage)
+tests/integration/test_data_export.py           ← 10 tests (88%/84% coverage)
+docs/SECURITY.md                                ← §10 retención, §11 RLS, §12 data export
+docs/FASE12_CLOSURE_PLAN.md                     ← plan de cierre
 ```
 
-### Gate de verificación
+### Gates verificados ✅
+- `ruff check src/sky/ tests/ scripts/` → 0 errores
+- `mypy src/sky/` → 0 errores (82 archivos)
+- `pytest tests/ -q` → 359 passed, 1 skipped, 0 failed
+- Cobertura Fase 12: 91% total (audit_purge 100%, audit router 100%, schemas 100%, data_export 84%, account router 88%)
+
+### Gates manuales pendientes (usuario)
 ```sql
--- En Supabase SQL Editor:
-SELECT indexname FROM pg_indexes
- WHERE tablename = 'transactions'
-   AND indexname LIKE 'uniq_%';
--- Debe devolver: uniq_tx_identity
-
-SELECT tablename FROM information_schema.tables
- WHERE table_schema = 'public'
-   AND table_name = 'ingestion_routing_rules';
--- Debe devolver 1 fila.
+-- Aplicar migrations/005_audit_log_purge.sql en Supabase SQL Editor
+-- Verificar: SELECT proname FROM pg_proc WHERE proname = 'purge_audit_log_old';
 ```
-
-### Estimación: medio día
+```bash
+python scripts/audit_rls_policies.py  # debe exit 0
+```
+- Crear bucket "data-exports" en Supabase Storage (privado, content-type application/zip)
 
 ---
 
