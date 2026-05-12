@@ -16,10 +16,6 @@ def calc_goal_projection(
     target_amount: int,
     monthly_capacity: int,
 ) -> dict[str, Any]:
-    """
-    Calcula proyección de meta financiera.
-    Paridad con calcGoalProjection() de financeService.js.
-    """
     target = max(1, target_amount)
     remaining = max(0, target - current_amount)
     pct = round(current_amount / target * 100)
@@ -52,7 +48,7 @@ async def _get_monthly_capacity(user_id: str) -> int:
                   FROM public.transactions
                  WHERE user_id = :uid
                    AND date >= :since
-                   AND deleted_at IS NULL
+                   AND categorization_status != 'pending'
             """),
             {"uid": user_id, "since": since},
         )
@@ -66,7 +62,12 @@ async def get_goals(user_id: str) -> list[dict[str, Any]]:
     async with engine.connect() as conn:
         rs = await conn.execute(
             text("""
-                SELECT id, name, target_amount, current_amount, target_date, created_at
+                SELECT id,
+                       title        AS name,
+                       target_amount,
+                       saved_amount AS current_amount,
+                       deadline     AS target_date,
+                       created_at
                   FROM public.goals
                  WHERE user_id = :uid
                  ORDER BY created_at ASC
@@ -105,9 +106,14 @@ async def create_goal(
         rs = await conn.execute(
             text("""
                 INSERT INTO public.goals
-                    (user_id, name, target_amount, current_amount, target_date)
+                    (user_id, title, target_amount, saved_amount, deadline)
                 VALUES (:uid, :name, :target, 0, :target_date)
-                RETURNING id, name, target_amount, current_amount, target_date, created_at
+                RETURNING id,
+                          title        AS name,
+                          target_amount,
+                          saved_amount AS current_amount,
+                          deadline     AS target_date,
+                          created_at
             """),
             {"uid": user_id, "name": name, "target": target_amount, "target_date": target_date},
         )
@@ -130,14 +136,21 @@ async def update_goal(
     goal_id: str,
     updates: dict[str, Any],
 ) -> dict[str, Any] | None:
-    allowed = {"name", "target_amount", "target_date", "current_amount"}
+    # Mapeo de nombres del request → nombres reales de columna
+    field_map = {
+        "name": "title",
+        "current_amount": "saved_amount",
+        "target_date": "deadline",
+        "target_amount": "target_amount",
+    }
+
     set_parts = []
     params: dict[str, Any] = {"id": goal_id, "uid": user_id}
 
-    for key in allowed:
-        if key in updates and updates[key] is not None:
-            set_parts.append(f"{key} = :{key}")
-            params[key] = updates[key]
+    for request_key, db_col in field_map.items():
+        if request_key in updates and updates[request_key] is not None:
+            set_parts.append(f"{db_col} = :{db_col}")
+            params[db_col] = updates[request_key]
 
     if not set_parts:
         return None
@@ -149,7 +162,12 @@ async def update_goal(
             text(
                 f"UPDATE public.goals SET {', '.join(set_parts)}"
                 " WHERE id = :id AND user_id = :uid"
-                " RETURNING id, name, target_amount, current_amount, target_date, created_at"
+                " RETURNING id,"
+                "           title        AS name,"
+                "           target_amount,"
+                "           saved_amount AS current_amount,"
+                "           deadline     AS target_date,"
+                "           created_at"
             ),
             params,
         )
