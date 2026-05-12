@@ -103,7 +103,22 @@ def create_app() -> FastAPI:
         redoc_url=None,
     )
 
-    # ── CORS ──────────────────────────────────────────────────────────────────
+    # ── Rate limiting (slowapi + Redis-backed) ────────────────────────────────
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, on_rate_limit_exceeded)
+
+    # ── Middleware stack (LIFO: último añadido = más externo en request) ──────
+    # Orden de ejecución en request:
+    #   CORS → SecurityHeaders → JWTContext → SlowAPI → Idempotency → RequestTiming → handler
+    #
+    # CORS debe ser el más externo para interceptar OPTIONS antes que nadie.
+    # Si cualquier middleware interno corre antes del preflight, CORS falla.
+    app.add_middleware(RequestTimingMiddleware)      # 1° añadido = más interno
+    app.add_middleware(IdempotencyMiddleware)        # 2°
+    app.add_middleware(SlowAPIMiddleware)            # 3° — aplica rate limit (lee user_id de state)
+    app.add_middleware(JWTContextMiddleware)         # 4° — setea user_id antes que SlowAPI
+    app.add_middleware(SecurityHeadersMiddleware)    # 5°
+
     dev_origins = [
         "http://localhost:5173",
         "http://localhost:4173",
@@ -111,6 +126,7 @@ def create_app() -> FastAPI:
     ]
     allowed = dev_origins + settings.cors_origins_list
 
+    # CORS último = más externo = intercepta OPTIONS antes que nadie
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed,
@@ -118,19 +134,6 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization", "x-cron-secret", "Idempotency-Key"],
     )
-    app.add_middleware(RequestTimingMiddleware)
-
-    # ── Rate limiting (slowapi + Redis-backed) ────────────────────────────────
-    app.state.limiter = limiter
-    app.add_exception_handler(RateLimitExceeded, on_rate_limit_exceeded)
-
-    # ── Middleware stack (LIFO: último añadido = más externo en request) ──────
-    # Orden de ejecución en request:
-    #   SecurityHeaders → JWTContext → SlowAPI → Idempotency → RequestTiming → CORS → handler
-    app.add_middleware(IdempotencyMiddleware)        # 1° añadido = más interno de los 4
-    app.add_middleware(SlowAPIMiddleware)            # 2° — aplica rate limit (lee user_id de state)
-    app.add_middleware(JWTContextMiddleware)         # 3° — setea user_id antes que SlowAPI
-    app.add_middleware(SecurityHeadersMiddleware)    # 4° añadido = más externo
 
     # ── Exception handlers ────────────────────────────────────────────────────
     @app.exception_handler(AuthenticationError)
