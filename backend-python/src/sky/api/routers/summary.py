@@ -69,7 +69,6 @@ async def _fetch_transactions(user_id: str, days: int) -> list[dict[str, object]
                   FROM public.transactions
                  WHERE user_id = :uid
                    AND date >= :since
-                   AND deleted_at IS NULL
                    AND categorization_status != 'pending'
             """),
             {"uid": user_id, "since": since.date()},
