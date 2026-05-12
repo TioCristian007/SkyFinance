@@ -143,7 +143,7 @@ export async function getBankAccounts() {
 export async function connectBank({ bankId, rut, password }) {
   return request("/banking/accounts", {
     method: "POST",
-    body:   JSON.stringify({ bankId, rut, password }),
+    body:   JSON.stringify({ bank_id: bankId, rut, password }),
   });
 }
 
