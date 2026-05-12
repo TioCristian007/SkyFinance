@@ -1,21 +1,33 @@
 """sky.api.schemas.challenges — Schemas Pydantic de desafíos."""
 from __future__ import annotations
 
-from datetime import date, datetime
-
+from typing import Any
 from pydantic import BaseModel
 
 
-class ChallengeOut(BaseModel):
+class ChallengeProgress(BaseModel):
+    pct: int
+    done: bool
+
+
+class ChallengeItem(BaseModel):
     id: str
-    title: str
-    description: str
-    target_amount: int
-    current_amount: int
-    start_date: date
-    end_date: date
-    status: str  # "proposed" | "active" | "completed" | "declined"
-    created_at: datetime
+    label: str
+    icon: str
+    desc: str
+    category: str | None
+    limit_amt: int
+    days: int
+    pts: int
+    difficulty: str
+    progress: ChallengeProgress | None = None
+
+
+class ChallengesResponse(BaseModel):
+    active: list[ChallengeItem]
+    completed: list[ChallengeItem]
+    available: list[ChallengeItem]
+    points: int
 
 
 class ChallengeAcceptResponse(BaseModel):
