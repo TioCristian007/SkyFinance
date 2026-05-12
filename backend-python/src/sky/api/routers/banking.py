@@ -25,8 +25,17 @@ from sky.ingestion.sources import SUPPORTED_BANKS
 
 logger = get_logger("api.banking")
 router = APIRouter(prefix="/api/banking", tags=["banking"])
+@router.get("/banks")
+async def list_supported_banks() -> dict:
+    """Lista los bancos soportados para el onboarding."""
+    return {"banks": SUPPORTED_BANKS}
 
 _BANK_META: dict[str, dict[str, object]] = {b["id"]: b for b in SUPPORTED_BANKS}
+
+@router.get("/banks")
+async def list_supported_banks() -> dict:
+    """Lista los bancos soportados para el onboarding."""
+    return {"banks": SUPPORTED_BANKS}
 
 
 @router.post("/sync/{account_id}", response_model=SyncBankAccountResponse)
