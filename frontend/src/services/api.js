@@ -1,13 +1,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // services/api.js — único canal frontend → backend
-// userId se pasa en el header x-user-id en TODAS las llamadas
+// Auth: Authorization: Bearer <access_token> en TODAS las llamadas
 //
 // BASE_URL:
 //   - Dev local: usa "/api" y el proxy de Vite (vite.config.js) redirige
 //     al backend en http://localhost:3001. Esto evita CORS en dev.
 //   - Producción: usa VITE_API_URL (inyectada en build-time por Railway).
 //     Debe apuntar a la URL pública del backend, incluyendo /api al final.
-//     Ej: https://skyfinance-backend-production.up.railway.app/api
+//     Ej: https://api.skyfinanzas.com/api
 //
 // Si olvidas setear VITE_API_URL en Railway al buildear el frontend,
 // el código cae a "/api" (relativo). Eso fallará visiblemente en prod
@@ -30,22 +30,23 @@ const DEBUG    = typeof window !== "undefined" ? (window.__SKY_DEBUG ?? true) : 
 
 if (DEBUG) console.log("[api] BASE_URL:", BASE_URL);
 
-let _userId = null;
-export function setUserId(id) {
-  if (id !== _userId) {
-    if (DEBUG) console.log("[api] setUserId:", id);
-    _userId = id;
+let _accessToken = null;
+
+export function setAccessToken(token) {
+  if (token !== _accessToken) {
+    if (DEBUG) console.log("[api] setAccessToken: token actualizado");
+    _accessToken = token;
   }
 }
 
 async function request(path, options = {}) {
-  if (!_userId) {
-    console.warn("[api] request sin userId → el backend va a devolver 401", path);
+  if (!_accessToken) {
+    console.warn("[api] request sin accessToken → el backend va a devolver 401", path);
   }
 
   const headers = {
     "Content-Type": "application/json",
-    ..._userId ? { "x-user-id": _userId } : {},
+    ...(_accessToken ? { "Authorization": `Bearer ${_accessToken}` } : {}),
     ...(options.headers || {}),
   };
 
