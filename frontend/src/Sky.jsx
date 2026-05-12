@@ -14,7 +14,7 @@ import { fmt, fmtK, nowTime } from "./utils/format.js";
 import { BADGES } from "./data/challenges.js";
 import { QUICK_SIMS } from "./data/simulations.js";
 import * as api from "./services/api.js";
-import { setUserId } from "./services/api.js";
+import { setAccessToken } from "./services/api.js";
 import { signOut } from "./services/supabase.js";
 
 import DonutChart      from "./components/DonutChart.jsx";
@@ -316,7 +316,7 @@ const TickerItem = ({ tx }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function Sky({ userId, userEmail }) {
-  setUserId(userId);
+  
 
   // ── Navegación ──────────────────────────────────────────────────────────────
   const [tab, setTab] = useState("dashboard");
