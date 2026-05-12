@@ -17,6 +17,7 @@ import AuthScreen       from "./components/AuthScreen.jsx";
 import OnboardingScreen from "./components/OnboardingScreen.jsx";
 import Sky              from "./Sky.jsx";
 import { C } from "./data/colors.js";
+import { setAccessToken } from "./services/api.js";
 
 export default function App() {
   const [appState, setAppState] = useState("loading"); // loading | auth | onboarding | app
@@ -49,6 +50,7 @@ export default function App() {
 
   async function handleSession(session) {
     setUser(session.user);
+    setAccessToken(session.access_token);
 
     // Verificar si el usuario ya completó el onboarding
     const profile = await getProfile(session.user.id);
