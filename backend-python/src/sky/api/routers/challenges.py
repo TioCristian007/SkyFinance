@@ -69,3 +69,4 @@ async def decline_challenge(
         )
     logger.info("challenge_declined", challenge_id=challenge_id)
     return ChallengeDeclineResponse(id=str(result["id"]), status="declined")
+
