@@ -21,3 +21,5 @@ export default defineConfig({
     allowedHosts: true,
   },
 });
+
+// rebuild: 1
