@@ -203,8 +203,8 @@ function ConnectForm({ banks, onSuccess, onCancel }) {
   const [error,        setError]        = useState("");
   const [showPass,     setShowPass]     = useState(false);
 
-  const available = banks.filter((b) => b.available);
-  const coming    = banks.filter((b) => !b.available);
+  const available = banks.filter((b) => b.status === "active");
+  const coming    = banks.filter((b) => b.status !== "active");
 
   const formatRut = (v) => {
     const clean = v.replace(/[^0-9kK]/g, "");
