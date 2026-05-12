@@ -28,6 +28,7 @@ router = APIRouter(prefix="/api/banking", tags=["banking"])
 
 _BANK_META: dict[str, dict[str, object]] = {b["id"]: b for b in SUPPORTED_BANKS}
 
+
 @router.get("/banks")
 async def list_supported_banks() -> dict:
     """Lista los bancos soportados para el onboarding."""
@@ -124,7 +125,8 @@ async def connect_account(
 ) -> BankAccountConnectedResponse:
     """
     Onboarding de cuenta bancaria.
-    Cifra credenciales, persiste, encola primer sync.
+    Cifra credenciales, persiste con upsert, encola primer sync.
+    Si el banco ya estaba conectado, actualiza credenciales y reactiva.
     NUNCA logea rut/password.
     """
     if body.bank_id not in _BANK_META:
@@ -148,6 +150,13 @@ async def connect_account(
                 VALUES
                     (:uid, :bank_id, :bank_name, :enc_rut, :enc_pass,
                      'active', 0, 0)
+                ON CONFLICT (user_id, bank_id) DO UPDATE
+                    SET encrypted_rut       = EXCLUDED.encrypted_rut,
+                        encrypted_pass      = EXCLUDED.encrypted_pass,
+                        bank_name           = EXCLUDED.bank_name,
+                        status              = 'active',
+                        consecutive_errors  = 0,
+                        updated_at          = NOW()
                 RETURNING id
             """),
             {
