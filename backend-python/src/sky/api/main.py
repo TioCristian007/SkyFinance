@@ -67,7 +67,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.redis = redis
 
     # Pool de ARQ para encolar jobs desde routers
-    app.state.arq_pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+    app.state.arq_pool = await create_pool(RedisSettings.from_dsn(settings.redis_url), default_queue_name="sky:default")
 
     yield
 
