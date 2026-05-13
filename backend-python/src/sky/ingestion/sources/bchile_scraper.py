@@ -192,7 +192,7 @@ class BChileScraperSource(DataSource):
             except (AuthenticationError, TwoFactorTimeoutError):
                 raise
             except Exception as exc:
-                logger.error("bchile_fetch_failed", error=str(exc))
+                import traceback; logger.error("bchile_fetch_failed", error=str(exc), tb=traceback.format_exc())
                 raise RecoverableIngestionError(f"Scraper falló: {exc}") from exc
 
     # ── Login ────────────────────────────────────────────────────────────────
