@@ -25,6 +25,7 @@ async def list_challenges(
 
 
 @router.post("/{challenge_id}/accept", response_model=ChallengeAcceptResponse)
+@router.post("/{challenge_id}/activate", response_model=ChallengeAcceptResponse)
 async def accept_challenge(
     challenge_id: str,
     user_id: str = Depends(require_user_id),
@@ -33,12 +34,13 @@ async def accept_challenge(
         user_id=user_id, challenge_id=challenge_id,
     )
     if result is None:
-        raise HTTPException(status_code=404, detail="Desafío no encontrado o ya no está en estado propuesto")
+        raise HTTPException(status_code=404, detail="Desafío no encontrado o ya no está en estado propuesto")  # noqa: E501
     logger.info("challenge_accepted", challenge_id=challenge_id)
     return ChallengeAcceptResponse(id=str(result["id"]))
 
 
 @router.post("/{challenge_id}/decline", response_model=ChallengeDeclineResponse)
+@router.post("/{challenge_id}/complete", response_model=ChallengeDeclineResponse)
 async def decline_challenge(
     challenge_id: str,
     user_id: str = Depends(require_user_id),
