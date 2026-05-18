@@ -1,10 +1,12 @@
 """sky.api.routers.goals — CRUD de metas financieras."""
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from sky.api.deps import require_user_id
-from sky.api.schemas.goals import GoalCreateRequest, GoalOut, GoalPatchRequest
+from sky.api.schemas.goals import GoalCreateRequest, GoalPatchRequest
 from sky.core.logging import get_logger
 from sky.domain import goals as domain_goals
 
@@ -12,66 +14,69 @@ logger = get_logger("api.goals")
 router = APIRouter(prefix="/api/goals", tags=["goals"])
 
 
-@router.get("", response_model=list[GoalOut])
+def _goal_to_camel(row: dict[str, Any]) -> dict[str, Any]:
+    """Convierte un dict de dominio al shape camelCase que espera el frontend.
+
+    Paridad con Node financeService.getGoals() / editGoal() que devuelven
+    { title, targetAmount, savedAmount, deadline, projection: {pct, ...} }.
+    """
+    current = int(row.get("current_amount") or 0)
+    target = int(row.get("target_amount") or 1)
+    proj = row.get("projection") or {}
+    return {
+        "id":           str(row["id"]),
+        "title":        str(row.get("name") or row.get("title") or ""),
+        "targetAmount": target,
+        "savedAmount":  current,
+        "deadline":     str(row["target_date"]) if row.get("target_date") else None,
+        "projection": {
+            "pct":          int(proj.get("pct", row.get("progress_pct", 0))),
+            "remaining":    int(proj.get("remaining", max(0, target - current))),
+            "monthsToGoal": proj.get("months_to_goal"),
+            "projectedDate": proj.get("projected_date"),
+        },
+        "created_at": str(row["created_at"]) if row.get("created_at") else None,
+    }
+
+
+@router.get("")
 async def list_goals(
     user_id: str = Depends(require_user_id),
-) -> list[GoalOut]:
+) -> dict[str, Any]:
+    """Lista metas del usuario en shape camelCase compatible con Node."""
     rows = await domain_goals.get_goals(user_id)
-    return [
-        GoalOut(
-            id=str(r["id"]),
-            name=str(r["name"]),
-            target_amount=int(r["target_amount"]),
-            current_amount=int(r["current_amount"] or 0),
-            target_date=r.get("target_date"),
-            progress_pct=float(r.get("progress_pct", 0.0)),
-            created_at=r["created_at"],
-        )
-        for r in rows
-    ]
+    return {"goals": [_goal_to_camel(r) for r in rows]}
 
 
-@router.post("", response_model=GoalOut, status_code=201)
+@router.post("", status_code=201)
 async def create_goal(
     body: GoalCreateRequest,
     user_id: str = Depends(require_user_id),
-) -> GoalOut:
+) -> dict[str, Any]:
+    """Crea meta. Acepta title/targetAmount/deadline (frontend) o name/target_amount (interno)."""
+    name = getattr(body, "title", None) or body.name
+    target = getattr(body, "targetAmount", None) or body.target_amount
+    deadline = getattr(body, "deadline", None) or body.target_date
     row = await domain_goals.create_goal(
         user_id=user_id,
-        name=body.name,
-        target_amount=body.target_amount,
-        target_date=body.target_date,
+        name=name,
+        target_amount=target,
+        target_date=deadline,
     )
-    return GoalOut(
-        id=str(row["id"]),
-        name=str(row["name"]),
-        target_amount=int(row["target_amount"]),
-        current_amount=int(row["current_amount"] or 0),
-        target_date=row.get("target_date"),
-        progress_pct=float(row.get("progress_pct", 0.0)),
-        created_at=row["created_at"],
-    )
+    return {"goal": _goal_to_camel(row)}
 
 
-@router.patch("/{goal_id}", response_model=GoalOut)
+@router.patch("/{goal_id}")
 async def update_goal(
     goal_id: str,
     body: GoalPatchRequest,
     user_id: str = Depends(require_user_id),
-) -> GoalOut:
+) -> dict[str, Any]:
     updates = body.model_dump(exclude_none=True)
     row = await domain_goals.update_goal(user_id=user_id, goal_id=goal_id, updates=updates)
     if row is None:
         raise HTTPException(status_code=404, detail="Meta no encontrada")
-    return GoalOut(
-        id=str(row["id"]),
-        name=str(row["name"]),
-        target_amount=int(row["target_amount"]),
-        current_amount=int(row["current_amount"] or 0),
-        target_date=row.get("target_date"),
-        progress_pct=float(row.get("progress_pct", 0.0)),
-        created_at=row["created_at"],
-    )
+    return {"goal": _goal_to_camel(row)}
 
 
 @router.delete("/{goal_id}", status_code=204)

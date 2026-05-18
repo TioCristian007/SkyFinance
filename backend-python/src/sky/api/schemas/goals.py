@@ -17,9 +17,14 @@ class GoalOut(BaseModel):
 
 
 class GoalCreateRequest(BaseModel):
-    name: str = Field(..., min_length=1, max_length=100)
-    target_amount: int = Field(..., gt=0)
+    # Acepta camelCase del frontend (title/targetAmount/deadline)
+    # o snake_case interno (name/target_amount/target_date)
+    name: str | None = Field(None, min_length=1, max_length=100)
+    title: str | None = Field(None, min_length=1, max_length=100)
+    target_amount: int | None = Field(None, gt=0)
+    targetAmount: int | None = Field(None, gt=0)
     target_date: date | None = None
+    deadline: date | None = None
 
 
 class GoalPatchRequest(BaseModel):
