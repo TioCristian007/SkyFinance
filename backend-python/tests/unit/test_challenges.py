@@ -40,40 +40,42 @@ def _mock_engine_begin(row: dict | None, rowcount: int = 1) -> MagicMock:
 async def test_get_challenges_empty(mock_get_engine: MagicMock) -> None:
     mock_get_engine.return_value = _mock_engine_connect([])
 
-    from sky.domain.challenges import get_challenges
+    from sky.domain.challenges import MOCK_CHALLENGES, get_challenges
     result = await get_challenges("user-1")
-    assert result == []
+    assert isinstance(result, dict)
+    assert result["active"] == []
+    assert result["completed"] == []
+    assert len(result["available"]) == len(MOCK_CHALLENGES)
+    assert result["points"] == 0
 
 
 @pytest.mark.asyncio
 @patch("sky.domain.challenges.get_engine")
 async def test_get_challenges_returns_rows(mock_get_engine: MagicMock) -> None:
-    rows = [
-        {
-            "id": "ch-1", "title": "No café este mes", "description": "Evita cafeterías",
-            "target_amount": 20_000, "current_amount": 0,
-            "start_date": "2026-05-01", "end_date": "2026-05-31",
-            "status": "proposed", "created_at": "2026-05-01T00:00:00",
-        }
-    ]
-    mock_get_engine.return_value = _mock_engine_connect(rows)
+    # challenge_states has "no_uber" active; transactions empty (same mock returns both)
+    states_rows = [{"challenge_id": "no_uber", "status": "active", "points_earned": 0}]
+    mock_get_engine.return_value = _mock_engine_connect(states_rows)
 
     from sky.domain.challenges import get_challenges
     result = await get_challenges("user-1")
-    assert len(result) == 1
-    assert result[0]["title"] == "No café este mes"
-    assert result[0]["status"] == "proposed"
+    assert isinstance(result, dict)
+    assert len(result["active"]) == 1
+    assert result["active"][0]["id"] == "no_uber"
 
 
 @pytest.mark.asyncio
 @patch("sky.domain.challenges.get_engine")
 async def test_accept_challenge_returns_id(mock_get_engine: MagicMock) -> None:
-    mock_get_engine.return_value = _mock_engine_begin({"id": "ch-1"})
+    # connect() → empty challenge_states (not yet active); begin() → inserted row
+    mock_engine = MagicMock()
+    mock_engine.connect.return_value = _mock_engine_connect([]).connect.return_value
+    mock_engine.begin.return_value = _mock_engine_begin({"id": "no_uber"}).begin.return_value
+    mock_get_engine.return_value = mock_engine
 
     from sky.domain.challenges import accept_challenge
-    result = await accept_challenge("user-1", "ch-1")
+    result = await accept_challenge("user-1", "no_uber")
     assert result is not None
-    assert result["id"] == "ch-1"
+    assert result["id"] == "no_uber"
 
 
 @pytest.mark.asyncio
