@@ -14,4 +14,4 @@ COPY src/ ./src/
 
 ENV PYTHONPATH=/app/src
 
-CMD ["uvicorn", "sky.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "uvicorn sky.api.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
