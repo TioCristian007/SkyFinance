@@ -11,8 +11,6 @@ from sky.api.middleware.rate_limit import limiter
 from sky.api.schemas.banking import (
     BankAccountConnectedResponse,
     BankAccountConnectRequest,
-    BankAccountListResponse,
-    BankAccountOut,
     SyncAllResponse,
     SyncBankAccountResponse,
 )
@@ -30,7 +28,7 @@ _BANK_META: dict[str, dict[str, object]] = {b["id"]: b for b in SUPPORTED_BANKS}
 
 
 @router.get("/banks")
-async def list_supported_banks() -> dict:
+async def list_supported_banks() -> dict[str, object]:
     """Lista los bancos soportados para el onboarding."""
     return {"banks": SUPPORTED_BANKS}
 
@@ -67,17 +65,32 @@ async def sync_all_endpoint(
     return SyncAllResponse(started=True, job_id=job.job_id)
 
 
-@router.get("/accounts", response_model=BankAccountListResponse)
+_DEFAULT_ACCOUNT_TYPE: dict[str, str] = {
+    "bancoestado": "CuentaRUT",
+    "bchile":      "Cta. Corriente",
+    "santander":   "Cta. Corriente",
+    "bci":         "Cta. Vista",
+    "falabella":   "CMR Cuenta",
+    "itau":        "Cta. Corriente",
+    "scotiabank":  "Cta. Corriente",
+}
+
+
+@router.get("/accounts")
 async def list_accounts(
     user_id: str = Depends(require_user_id),
-) -> BankAccountListResponse:
-    """Lista cuentas activas del user con last_balance, last_sync_at, status."""
+) -> dict[str, object]:
+    """Lista cuentas activas del user con balance, lastSyncAt, status.
+
+    Devuelve camelCase para paridad con el backend Node (mismo shape que
+    getBankBalances() en bankSyncService.js que el frontend ya consume).
+    """
     engine = get_engine()
     async with engine.connect() as conn:
         rs = await conn.execute(
             text("""
-                SELECT id, bank_id, last_balance, last_sync_at,
-                       last_sync_error, status, sync_count
+                SELECT id, bank_id, bank_name, bank_icon, last_balance,
+                       last_sync_at, last_sync_error, status, sync_count
                   FROM public.bank_accounts
                  WHERE user_id = :uid AND status != 'disconnected'
                  ORDER BY created_at ASC
@@ -100,20 +113,23 @@ async def list_accounts(
 
         balance = int(r["last_balance"] or 0)
         total_balance += balance
-        accounts.append(BankAccountOut(
-            id=str(r["id"]),
-            bank_id=str(r["bank_id"]),
-            bank_name=meta.get("name", str(r["bank_id"])),
-            bank_icon=meta.get("icon"),
-            last_balance=balance,
-            last_sync_at=r["last_sync_at"],
-            last_sync_error=r["last_sync_error"],
-            status=str(r["status"] or "active"),
-            sync_count=int(r["sync_count"] or 0),
-            minutes_ago=minutes_ago,
-        ))
+        bank_id = str(r["bank_id"])
+        accounts.append({
+            "id":            str(r["id"]),
+            "bankId":        bank_id,
+            "bankName":      meta.get("name", str(r["bank_name"] or bank_id)),
+            "bankIcon":      meta.get("icon", str(r["bank_icon"] or "🏦")),
+            "balance":       balance,
+            "lastSyncAt":    r["last_sync_at"].isoformat() if r["last_sync_at"] else None,
+            "lastSyncError": r["last_sync_error"],
+            "status":        str(r["status"] or "active"),
+            "syncCount":     int(r["sync_count"] or 0),
+            "minutesAgo":    minutes_ago,
+            "accountType":   _DEFAULT_ACCOUNT_TYPE.get(bank_id, "Cuenta"),
+            "last4":         None,
+        })
 
-    return BankAccountListResponse(accounts=accounts, total_balance=total_balance)
+    return {"accounts": accounts, "totalBalance": total_balance}
 
 
 @router.post("/accounts", response_model=BankAccountConnectedResponse, status_code=201)
