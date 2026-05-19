@@ -45,6 +45,11 @@ async def sync_bank_account_endpoint(
     El frontend hace polling sobre /api/banking/accounts para el progreso.
     """
     arq_pool = request.app.state.arq_pool
+    if arq_pool is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Servicio de sync no disponible. Verifica configuración de Redis.",
+        )
     job = await arq_pool.enqueue_job("sync_bank_account_job", account_id, user_id)
     if job is None:
         raise HTTPException(status_code=503, detail="No se pudo encolar el sync. Reintenta.")
@@ -59,6 +64,11 @@ async def sync_all_endpoint(
 ) -> SyncAllResponse:
     """Encola un sync de TODAS las cuentas activas del user."""
     arq_pool = request.app.state.arq_pool
+    if arq_pool is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Servicio de sync no disponible. Verifica configuración de Redis.",
+        )
     job = await arq_pool.enqueue_job("sync_all_user_accounts_job", user_id)
     if job is None:
         raise HTTPException(status_code=503, detail="No se pudo encolar el sync. Reintenta.")
@@ -189,6 +199,11 @@ async def connect_account(
         account_id = str(row["id"])
 
     arq_pool = request.app.state.arq_pool
+    if arq_pool is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Servicio de sync no disponible. Verifica configuración de Redis.",
+        )
     job = await arq_pool.enqueue_job("sync_bank_account_job", account_id, user_id)
     sync_job_id = job.job_id if job else "queued"
 

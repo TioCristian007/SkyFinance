@@ -50,7 +50,8 @@ async def health() -> dict[str, str]:
 @router.get("/api/health/deep")
 async def health_deep(request: Request) -> JSONResponse:
     db = await check_db()
-    redis = await check_redis(request.app.state.redis)
+    redis_client = getattr(request.app.state, "redis", None)
+    redis = await check_redis(redis_client) if redis_client is not None else "down"
     anth = check_anthropic()
 
     is_core_ok = db == "ok" and redis == "ok"

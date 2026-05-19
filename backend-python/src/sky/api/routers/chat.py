@@ -5,27 +5,51 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Request
 
 from sky.api.deps import require_user_id
 from sky.api.middleware.rate_limit import limiter
-from sky.api.schemas.chat import ChatRequest, ChatTextResponse, NavigationResponse, ProposeChallenge
+from sky.api.schemas.chat import (
+    ChatRequest,
+    ChatTextResponse,
+    ChatUnifiedResponse,
+    NavigationResponse,
+    ProposeChallenge,
+)
 from sky.core.config import settings
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 
-@router.post("", response_model=ChatTextResponse | ProposeChallenge | NavigationResponse)
+@router.post("", response_model=ChatUnifiedResponse)
 @limiter.limit(f"{settings.api_rate_limit_per_minute}/minute")  # type: ignore[untyped-decorator]
 async def chat_endpoint(
     body: ChatRequest,
     request: Request,
     background_tasks: BackgroundTasks,
     user_id: str = Depends(require_user_id),
-) -> ChatTextResponse | ProposeChallenge | NavigationResponse:
+) -> ChatUnifiedResponse:
     from sky.domain.mr_money import MrMoney
 
     response = await MrMoney().respond(user_id=user_id, message=body.message)
 
     background_tasks.add_task(_fire_aria, user_id, body.message, response)
 
-    return response
+    if isinstance(response, ChatTextResponse):
+        return ChatUnifiedResponse(reply=response.text)
+    if isinstance(response, ProposeChallenge):
+        return ChatUnifiedResponse(
+            reply=response.rationale,
+            proposals=[{
+                "type": "propose_challenge",
+                "title": response.title,
+                "description": response.description,
+                "target_amount": response.target_amount,
+                "duration_days": response.duration_days,
+            }],
+        )
+    if isinstance(response, NavigationResponse):
+        return ChatUnifiedResponse(
+            reply=response.label,
+            navigations=[{"simulation_type": response.route}],
+        )
+    return ChatUnifiedResponse(reply="")
 
 
 async def _fire_aria(

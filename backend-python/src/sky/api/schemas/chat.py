@@ -1,7 +1,7 @@
 """sky.api.schemas.chat — Schemas Pydantic de Mr. Money."""
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import BaseModel, Field
 
@@ -35,3 +35,10 @@ ChatResponse = Annotated[
     ChatTextResponse | ProposeChallenge | NavigationResponse,
     Field(discriminator="type"),
 ]
+
+
+class ChatUnifiedResponse(BaseModel):
+    """Shape unificado para paridad con Node aiService.js → Sky.jsx lo consume directamente."""
+    reply: str = ""
+    proposals: list[dict[str, Any]] = []
+    navigations: list[dict[str, Any]] = []
