@@ -11,4 +11,4 @@ COPY src/ ./src/
 
 RUN pip install --no-cache-dir .
 
-CMD ["sh", "-c", "uvicorn sky.api.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "exec uvicorn sky.api.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
