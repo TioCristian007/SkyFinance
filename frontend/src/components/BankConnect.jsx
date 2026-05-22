@@ -389,13 +389,28 @@ export default function BankConnect({ onSyncComplete }) {
 
   const loadAccounts = async () => {
     try {
-      const [accRes, banksRes] = await Promise.all([
+      // allSettled: la lista de bancos NO debe depender de /accounts.
+      // Si /accounts falla (401, 503, DB), igual queremos que el usuario
+      // pueda abrir "Conectar banco" y ver los logos.
+      const [accRes, banksRes] = await Promise.allSettled([
         api.getBankAccounts(),
         api.getSupportedBanks(),
       ]);
-      setAccounts(accRes.accounts || []);
-      setTotalBalance(accRes.totalBalance || 0);
-      setBanks(banksRes.banks || []);
+
+      if (accRes.status === "fulfilled") {
+        setAccounts(accRes.value.accounts || []);
+        setTotalBalance(accRes.value.totalBalance || 0);
+      } else {
+        console.error("[BankConnect] getBankAccounts falló:", accRes.reason?.message);
+        setAccounts([]); setTotalBalance(0);
+      }
+
+      if (banksRes.status === "fulfilled") {
+        setBanks(banksRes.value.banks || []);
+      } else {
+        console.error("[BankConnect] getSupportedBanks falló:", banksRes.reason?.message);
+        setBanks([]);
+      }
     } catch (e) {
       console.error("[BankConnect] loadAccounts:", e.message);
     } finally {

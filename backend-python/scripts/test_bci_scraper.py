@@ -1,4 +1,4 @@
-"""
+r"""
 scripts/test_bci_scraper.py — Test manual del scraper de BCI.
 
 USO:
