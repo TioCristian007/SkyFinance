@@ -5,19 +5,24 @@ from uuid import uuid4
 
 import pytest
 
+from sky.core.errors import RateLimitError
 from sky.ingestion.contracts import (
     AccountBalance,
     AllSourcesFailedError,
     CanonicalMovement,
+    CircuitOpenError,
     IngestionResult,
     MovementSource,
+    RecoverableIngestionError,
     SourceKind,
+    TwoFactorTimeoutError,
 )
 from sky.ingestion.contracts import AuthenticationError as BankAuthError
 from sky.worker.banking_sync import (
     _mark_error,
     _persist_movements,
     _sanitize_error,
+    _user_message_for_failure,
     sync_bank_account,
 )
 
@@ -148,7 +153,7 @@ async def test_sync_success_path(
 @patch("sky.worker.banking_sync._mark_error", new_callable=AsyncMock)
 @patch("sky.worker.banking_sync.get_engine")
 @patch("sky.worker.banking_sync.decrypt", side_effect=lambda x, _k: f"plain_{x}")
-async def test_sync_auth_error_propagates(
+async def test_sync_auth_error_returns_failure_dict(
     _decrypt: MagicMock,
     mock_get_engine: MagicMock,
     mock_mark_error: AsyncMock,
@@ -156,7 +161,7 @@ async def test_sync_auth_error_propagates(
     fake_router: MagicMock,
     fake_arq_pool: MagicMock,
 ) -> None:
-    """AuthenticationError se propaga al caller y marca error en DB."""
+    """AuthenticationError retorna dict de fallo (sin re-lanzar) y marca error en DB."""
     mock_lock.return_value = _make_advisory_lock_cm(acquired=True)
     mock_row = {
         "id": "acc-uuid", "user_id": "user-uuid", "bank_id": "bchile",
@@ -166,14 +171,15 @@ async def test_sync_auth_error_propagates(
     mock_get_engine.return_value = _make_engine_with_row(mock_row)
     fake_router.ingest = AsyncMock(side_effect=BankAuthError("bad creds"))
 
-    with pytest.raises(BankAuthError):
-        await sync_bank_account(
-            router=fake_router,
-            bank_account_id="acc-uuid",
-            user_id="user-uuid",
-            arq_pool=fake_arq_pool,
-        )
+    out = await sync_bank_account(
+        router=fake_router,
+        bank_account_id="acc-uuid",
+        user_id="user-uuid",
+        arq_pool=fake_arq_pool,
+    )
 
+    assert out["success"] is False
+    assert out["error_type"] == "AuthenticationError"
     mock_mark_error.assert_awaited_once()
 
 
@@ -182,7 +188,7 @@ async def test_sync_auth_error_propagates(
 @patch("sky.worker.banking_sync._mark_error", new_callable=AsyncMock)
 @patch("sky.worker.banking_sync.get_engine")
 @patch("sky.worker.banking_sync.decrypt", side_effect=lambda x, _k: f"plain_{x}")
-async def test_sync_all_sources_failed_propagates(
+async def test_sync_all_sources_failed_returns_failure_dict(
     _decrypt: MagicMock,
     mock_get_engine: MagicMock,
     mock_mark_error: AsyncMock,
@@ -190,7 +196,7 @@ async def test_sync_all_sources_failed_propagates(
     fake_router: MagicMock,
     fake_arq_pool: MagicMock,
 ) -> None:
-    """AllSourcesFailedError se propaga y marca error."""
+    """AllSourcesFailedError retorna dict de fallo (sin re-lanzar) y marca error en DB."""
     mock_lock.return_value = _make_advisory_lock_cm(acquired=True)
     mock_row = {
         "id": "acc-uuid", "user_id": "user-uuid", "bank_id": "bchile",
@@ -199,17 +205,18 @@ async def test_sync_all_sources_failed_propagates(
     }
     mock_get_engine.return_value = _make_engine_with_row(mock_row)
     fake_router.ingest = AsyncMock(
-        side_effect=AllSourcesFailedError("bchile", [("scraper.bchile", Exception("fail"))])
+        side_effect=AllSourcesFailedError("bchile", [("scraper.bchile", RecoverableIngestionError("fail"))])
     )
 
-    with pytest.raises(AllSourcesFailedError):
-        await sync_bank_account(
-            router=fake_router,
-            bank_account_id="acc-uuid",
-            user_id="user-uuid",
-            arq_pool=fake_arq_pool,
-        )
+    out = await sync_bank_account(
+        router=fake_router,
+        bank_account_id="acc-uuid",
+        user_id="user-uuid",
+        arq_pool=fake_arq_pool,
+    )
 
+    assert out["success"] is False
+    assert out["error_type"] == "AllSourcesFailedError"
     mock_mark_error.assert_awaited_once()
 
 
@@ -220,10 +227,15 @@ class TestSanitizeError:
         assert _sanitize_error("") == "Error de sincronización"
 
     def test_password_in_msg_sanitized(self) -> None:
-        assert _sanitize_error("wrong password for user") == "Error de autenticación bancaria"
+        assert "clave" in _sanitize_error("wrong password for user").lower() or \
+               "credencial" in _sanitize_error("wrong password for user").lower() or \
+               "rut" in _sanitize_error("wrong password for user").lower()
 
-    def test_rut_in_msg_sanitized(self) -> None:
-        assert _sanitize_error("invalid rut: 12345678-9") == "Error de autenticación bancaria"
+    def test_antibot_campo_rut_no_es_auth_error(self) -> None:
+        """No se encontró el campo de RUT es bloqueo anti-bot, NO error de credenciales."""
+        msg = _sanitize_error("No se encontró el campo de RUT")
+        assert "autenticación" not in msg.lower()
+        assert "reintenta más tarde" in msg.lower() or "automáticamente" in msg.lower()
 
     def test_timeout_message(self) -> None:
         result = _sanitize_error("ETIMEDOUT connecting to bank")
@@ -233,6 +245,62 @@ class TestSanitizeError:
         long_msg = "A" * 300
         result = _sanitize_error(long_msg)
         assert len(result) == 200
+
+
+class TestUserMessageForFailure:
+    def _exc(self, causes: list[tuple[str, Exception]]) -> AllSourcesFailedError:
+        return AllSourcesFailedError("bchile", causes)
+
+    def test_2fa_timeout(self) -> None:
+        exc = self._exc([("scraper.bchile", TwoFactorTimeoutError("timeout 2fa"))])
+        msg = _user_message_for_failure(exc)
+        assert "aprobación" in msg.lower()
+        assert "app del banco" in msg.lower()
+
+    def test_antibot_campo_rut(self) -> None:
+        exc = self._exc([("scraper.bchile", RecoverableIngestionError("No se encontró el campo de RUT"))])
+        msg = _user_message_for_failure(exc)
+        assert "automáticamente" in msg.lower()
+        assert "reintenta más tarde" in msg.lower()
+
+    def test_antibot_incapsula(self) -> None:
+        exc = self._exc([("scraper.bchile", RecoverableIngestionError("incapsula block detected"))])
+        msg = _user_message_for_failure(exc)
+        assert "automáticamente" in msg.lower()
+
+    def test_circuit_open(self) -> None:
+        exc = self._exc([("scraper.bchile", CircuitOpenError("circuito abierto para scraper.bchile"))])
+        msg = _user_message_for_failure(exc)
+        assert "saturado" in msg.lower() or "minutos" in msg.lower()
+
+    def test_rate_limit(self) -> None:
+        exc = self._exc([("scraper.bchile", RateLimitError("rate limit exceeded"))])
+        msg = _user_message_for_failure(exc)
+        assert "intentos" in msg.lower()
+
+    def test_credentials_clave_incorrecta(self) -> None:
+        exc = self._exc([("scraper.bchile", RecoverableIngestionError("clave incorrecta para el usuario"))])
+        msg = _user_message_for_failure(exc)
+        assert "clave" in msg.lower() or "rut" in msg.lower()
+
+    def test_timeout(self) -> None:
+        exc = self._exc([("scraper.bchile", RecoverableIngestionError("ETIMEDOUT after 30s"))])
+        msg = _user_message_for_failure(exc)
+        assert "respondió" in msg.lower() or "tarde" in msg.lower()
+
+    def test_default(self) -> None:
+        exc = self._exc([("scraper.bchile", RecoverableIngestionError("some unexpected internal error xyz"))])
+        msg = _user_message_for_failure(exc)
+        assert "sincronización" in msg.lower() or "reintenta" in msg.lower()
+
+    def test_2fa_wins_over_generic(self) -> None:
+        """2FA timeout tiene mayor prioridad que un error genérico."""
+        exc = self._exc([
+            ("scraper.bchile", RecoverableIngestionError("generic error")),
+            ("scraper.bci", TwoFactorTimeoutError("2fa timeout")),
+        ])
+        msg = _user_message_for_failure(exc)
+        assert "aprobación" in msg.lower()
 
 
 @pytest.mark.asyncio

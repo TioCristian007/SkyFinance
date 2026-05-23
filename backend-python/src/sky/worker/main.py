@@ -92,3 +92,7 @@ class WorkerSettings:
     max_jobs = settings.browser_pool_size * 2
     job_timeout = 600   # 10 min max por job (syncs pueden tardar)
     keep_result = 3600  # resultados en Redis por 1h
+    # Errores terminales (BankAuthError, AllSourcesFailedError) retornan dict de fallo
+    # sin re-lanzar, por lo que ARQ no los reintenta. max_tries=2 protege solo ante
+    # errores inesperados (DB blip, etc.) — un scrape con 2FA como máximo se repite 1 vez.
+    max_tries = 2

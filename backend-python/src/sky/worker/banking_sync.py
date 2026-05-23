@@ -33,11 +33,16 @@ from sky.core.audit import log_event
 from sky.core.config import settings
 from sky.core.db import get_engine
 from sky.core.encryption import decrypt
-from sky.core.errors import NotFoundError
+from sky.core.errors import NotFoundError, RateLimitError
 from sky.core.locks import try_advisory_lock
 from sky.core.logging import get_logger
 from sky.core.metrics import sky_sync_duration, sky_sync_total
-from sky.ingestion.contracts import AllSourcesFailedError, BankCredentials
+from sky.ingestion.contracts import (
+    AllSourcesFailedError,
+    BankCredentials,
+    CircuitOpenError,
+    TwoFactorTimeoutError,
+)
 from sky.ingestion.contracts import AuthenticationError as BankAuthError
 from sky.ingestion.routing.router import IngestionRouter
 
@@ -129,18 +134,20 @@ async def sync_bank_account(
                 resource_id=bank_account_id,
                 metadata={"bank_id": bank_id, "error_type": "AuthenticationError"},
             )
-            raise
+            return {"success": False, "skipped": False, "error_type": "AuthenticationError", "bank_id": bank_id}
         except AllSourcesFailedError as exc:
-            await _mark_error(bank_account_id, _sanitize_error(str(exc)))
+            user_msg = _user_message_for_failure(exc)
+            await _mark_error(bank_account_id, user_msg)
             sky_sync_total.labels(bank_id=bank_id, status="error").inc()
+            cause_type = type(exc.primary_cause).__name__ if exc.primary_cause else "unknown"
             await log_event(
                 action="sync.error",
                 user_id=user_id,
                 resource_type="bank_account",
                 resource_id=bank_account_id,
-                metadata={"bank_id": bank_id, "error_type": "AllSourcesFailedError"},
+                metadata={"bank_id": bank_id, "error_type": "AllSourcesFailedError", "cause_type": cause_type},
             )
-            raise
+            return {"success": False, "skipped": False, "error_type": "AllSourcesFailedError", "bank_id": bank_id}
         finally:
             del rut, password, creds
 
@@ -290,11 +297,59 @@ async def _load_anon_profile(user_id: str) -> Any:
 
 
 def _sanitize_error(msg: str) -> str:
-    """Eliminar PII y stack traces antes de mostrar al usuario."""
+    """Eliminar PII y stack traces antes de mostrar al usuario en paths genéricos."""
     if not msg:
         return "Error de sincronización"
-    if re.search(r"password|rut|clave|credential", msg, re.I):
-        return "Error de autenticación bancaria"
+    # Anti-bot / campo no encontrado: evaluar ANTES de credenciales para no confundir
+    if re.search(
+        r"no se encontr[oó] el campo|campo de rut|campo de clave|incapsula|challenge",
+        msg, re.I,
+    ):
+        return "No pudimos conectar con el banco automáticamente en este momento. Reintenta más tarde."
     if re.search(r"ETIMEDOUT|ECONNREFUSED|timeout", msg, re.I):
         return "El banco no respondió. Intenta más tarde."
+    # Credenciales: patrones específicos (evitar falsos positivos por la palabra "rut" sola)
+    if re.search(r"rut\s+inv[aá]lid|rut\s+no|clave\s+incorrecta|clave\s+rechazad|password|credential", msg, re.I):
+        return "RUT o clave incorrectos. Reconecta el banco con tus credenciales."
     return msg[:200]
+
+
+def _user_message_for_failure(exc: AllSourcesFailedError) -> str:
+    """Mapea AllSourcesFailedError a un mensaje accionable en español para el usuario."""
+    causes = [e for _, e in exc.errors]
+
+    # Prioridad 1: timeout de 2FA
+    if any(isinstance(c, TwoFactorTimeoutError) for c in causes):
+        return "No se recibió la aprobación en tu app del banco. Reintenta y aprueba la notificación a tiempo."
+
+    # Prioridad 2: anti-bot / campo no encontrado (bloqueo de red, Incapsula)
+    _antibot = re.compile(
+        r"no se encontr[oó] el campo|campo de rut|campo de clave|incapsula|challenge",
+        re.I,
+    )
+    if any(_antibot.search(str(c)) for c in causes):
+        return "No pudimos conectar con el banco automáticamente en este momento. Reintenta más tarde."
+
+    # Prioridad 3: circuito abierto
+    _circuit = re.compile(r"circuito abierto", re.I)
+    if any(isinstance(c, CircuitOpenError) or _circuit.search(str(c)) for c in causes):
+        return "El servicio de conexión está temporalmente saturado. Reintenta en unos minutos."
+
+    # Prioridad 4: rate limit
+    if any(isinstance(c, RateLimitError) or re.search(r"rate limit", str(c), re.I) for c in causes):
+        return "Demasiados intentos seguidos. Espera un momento y reintenta."
+
+    # Prioridad 5: credenciales erróneas
+    _creds = re.compile(
+        r"rut\s+inv[aá]lid|rut\s+invalido|clave\s+incorrecta|credential|password|clave\s+rechazad",
+        re.I,
+    )
+    if any(_creds.search(str(c)) for c in causes):
+        return "RUT o clave incorrectos. Reconecta el banco con tus credenciales."
+
+    # Prioridad 6: timeout / conexión
+    if any(re.search(r"timeout|etimedout|econnrefused", str(c), re.I) for c in causes):
+        return "El banco no respondió. Intenta más tarde."
+
+    # Default
+    return "No pudimos completar la sincronización. Reintenta más tarde."
