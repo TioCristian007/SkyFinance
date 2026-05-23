@@ -20,14 +20,8 @@ from sky.ingestion.contracts import DataSource
 logger = get_logger("sources_factory")
 
 SUPPORTED_BANKS = [
-    {"id": "bchile",      "name": "Banco de Chile",  "icon": "🏦", "status": "active",  "has_2fa": True},   # noqa: E501
-    {"id": "falabella",   "name": "Banco Falabella", "icon": "🏦", "status": "pending", "has_2fa": False},  # noqa: E501
-    {"id": "bci",         "name": "BCI",             "icon": "🏦", "status": "pending", "has_2fa": True},   # noqa: E501
-    {"id": "santander",   "name": "Santander Chile", "icon": "🏦", "status": "pending", "has_2fa": True},   # noqa: E501
-    {"id": "bancoestado", "name": "Banco Estado",    "icon": "🏦", "status": "pending", "has_2fa": True},   # noqa: E501
-    {"id": "itau",        "name": "Itaú Chile",      "icon": "🏦", "status": "pending", "has_2fa": False},  # noqa: E501
-    {"id": "scotiabank",  "name": "Scotiabank Chile","icon": "🏦", "status": "pending", "has_2fa": False},  # noqa: E501
-    {"id": "mercadopago", "name": "Mercado Pago",    "icon": "💳", "status": "pending", "has_2fa": False},  # noqa: E501
+    {"id": "bchile", "name": "Banco de Chile", "icon": "🏦", "status": "active",  "has_2fa": True},
+    {"id": "bci",    "name": "BCI",            "icon": "🏦", "status": "pending", "has_2fa": True},
 ]
 
 
