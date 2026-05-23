@@ -1,23 +1,25 @@
 # CLAUDE.md — Sky Finance
 
 > Contexto persistente para sesiones de Claude Code. Léelo antes de tocar nada.
-> Mantén este archivo conciso. La fuente de verdad detallada vive en otro lado.
+> Mantén este archivo conciso. La fuente de verdad detallada vive en otro lado (ver abajo).
 
 ---
 
-## 📜 Fuente de verdad doctrinal
+## 📜 Fuentes de verdad (jerarquía)
 
-**`C:\Users\crist\OneDrive\Documentos\SkyFinance\Estados del Arte\SkyFinanzas_EstadoDelArte_v5_Documentado.pdf`**
+Sky tiene **dos** fuentes de verdad complementarias. Entiéndelas antes de actuar:
 
-Ese documento está **registrado ante INAPI** (propiedad intelectual, Chile) y es la única fuente autoritativa del producto, arquitectura, deuda y visión. Está dividido deliberadamente en:
+1. **`Estados del Arte/SkyFinanzas_EstadoDelArte_v5_Documentado.pdf`** — fuente **doctrinal y legal**, registrada ante INAPI (propiedad intelectual, Chile). Manda en doctrina, visión y titularidad.
+   - ⚠️ **Importante**: el v5 fue registrado cuando la migración Python era *futuro (Parte II)*. **A mayo 2026 esa migración está completa y en producción.** La Parte II del v5 describe el objetivo de entonces, no el estado actual. Cuando se reactualice el registro INAPI, la Parte II se reescribirá como estado vigente.
 
-- **Parte I** — Estado actual verificado (lo implementado en producción Node.js)
-- **Parte II** — Arquitectura objetivo (migración Python — Fases 0-13)
-- **Parte III** — Plan de remediación de deuda (P0/P1/P2 + BUG-1 a BUG-4)
-- **Parte IV** — Visión, gobierno, doctrina permanente
-- **Anexo A** — Estructura de repositorios actual y objetivo
+2. **`docs/ESTADO_DEL_ARTE.md`** (+ `docs/estado-del-arte/01..09`) — reflejo **técnico vigente y verificado**. Es el punto de entrada operativo y se mantiene al día continuamente. Léelo al inicio de cada sesión nueva.
 
-**Regla principal**: si algo en este `CLAUDE.md` contradice al v5, gana el v5. Lee el v5 cuando necesites profundidad. Este archivo solo carga lo esencial para que cada sesión arranque eficiente.
+**Reglas de precedencia**:
+- En **doctrina/visión/legal** → gana el v5 PDF.
+- En **estado técnico actual** (qué corre hoy, qué está roto, deuda viva) → gana `docs/ESTADO_DEL_ARTE.md`.
+- Este `CLAUDE.md` es un **derivado conciso de ambos** para arrancar cada sesión rápido. Si contradice a cualquiera de los dos, este archivo está mal y se corrige.
+
+**Disciplina de mantenimiento (no negociable)**: cuando algo de fondo cambie, el orden es **v5 PDF (si toca doctrina/legal) → `docs/ESTADO_DEL_ARTE.md` → este `CLAUDE.md`**. Esta pieza nunca debe quedarse atrás del Estado del Arte.
 
 **Cofundadores y titularidad** — SkyFinanzas SpA (RUT 78.395.382-K):
 - Cristian Cristóbal Amaru Vásquez Guevara · 22.141.522-1
@@ -37,55 +39,41 @@ Sky NO es una app de gastos con IA. Es un **sistema operativo financiero persona
 
 ---
 
-## ⚖️ Doctrina inviolable (del Capítulo 26 + Capítulos 4, 8, 13, 14)
+## ⚖️ Doctrina inviolable (23 reglas)
 
-Estas reglas sobrescriben conveniencia de corto plazo. No se negocian durante construcción.
+Detalle completo y firmado: **`docs/estado-del-arte/09_DOCTRINA.md`** (deriva del v5 §26 + §13.2 + §14.4 + §15.4 + Parte III §20). Sobrescriben conveniencia de corto plazo. No se negocian durante construcción; un cambio que contradice una de ellas se rechaza en review sin negociar.
 
-1. **El producto debe sentirse ligero.** La ligereza es feature, no limitación.
-2. **Mr. Money guía; no decide.** Propuestas estructuradas requieren confirmación explícita.
-3. **La confianza vale más que cualquier monetización rápida.**
-4. **El frontend NO es la fuente de verdad.** Toda lógica crítica vive en backend.
-5. **La arquitectura desacopla** proveedor bancario, lógica de negocio y analytics.
-6. **Los datos del usuario existen primero para servir al usuario.**
-7. **ARIA solo se activa con `aria_consent = true`.** Sin UUID en `aria.*`. Service_role exclusivo.
-8. **La ambición debe merecerse con ejecución disciplinada.**
-9. **La deuda técnica se documenta, no se oculta.** Honestidad narrativa.
-10. **La arquitectura tolera pivotes estratégicos.** Ningún proveedor/banco/integración es inamovible.
+**Producto**: (1) el producto debe sentirse ligero · (2) Mr. Money guía, no decide · (3) la confianza vale más que cualquier monetización rápida · (4) el frontend NO es la fuente de verdad · (5) los datos del usuario existen primero para servir al usuario.
 
-### Reglas técnicas inviolables (Parte II §13.2 + §14.4 + §15.4)
+**Arquitectura**: (6) desacopla proveedor / negocio / analytics · (7) el dominio jamás pregunta de qué `source` vino un movimiento (si necesita distinguir origen, el modelo canónico está incompleto — se enriquece, no se rompe) · (8) modelo canónico único `CanonicalMovement` · (9) tolera pivotes estratégicos, ningún proveedor es inamovible · (10) **la API Python NUNCA importa Playwright**; solo el worker tiene browser pool; API y worker son procesos deployables independientes.
 
-11. **API Python NUNCA importa Playwright.** El worker es el único con browser pool arrancado. API y worker son procesos deployables independientes.
-12. **`sky.domain` jamás pregunta de qué `source` vino un movimiento.** Si una capa superior necesita distinguir origen, el modelo canónico está incompleto — se enriquece, no se rompe la abstracción.
-13. **Modelo canónico único**: todo proveedor devuelve `CanonicalMovement`. Categorización, Mr. Money, ARIA, summary, reporting consumen el mismo shape.
-14. **Scraper como fallback permanente.** Incluso tras integrar APIs directas, el scraper queda como última línea. Solo se elimina si un contrato bancario lo exige.
-15. **`AuthenticationError` NO dispara failover** del IngestionRouter. La credencial es el problema y todos los proveedores la rechazarían igual.
-16. **Rate limit = `skip`, no `fail`.** El siguiente provider de la cadena se intenta.
-17. **Configuración como palanca operativa**: cambios de estrategia (activar BCI directo al 5%, mover Fintoc a primera línea) son `UPDATE` a `ingestion_routing_rules`, no deploys.
+**Ingestión/resiliencia**: (11) scraper como fallback permanente · (12) `AuthenticationError` NO dispara failover · (13) rate limit = `skip`, no `fail` · (14) configuración como palanca operativa (cambios de estrategia son `UPDATE` a `ingestion_routing_rules`, no deploys).
 
-### Seguridad inviolable (Parte I §11.1 + Parte III §20)
+**Seguridad**: (15) `SUPABASE_SERVICE_KEY` y `BANK_ENCRYPTION_KEY` solo en backend · (16) credenciales = AES-256-GCM con IV único (`iv:authTag:ciphertext`, compat binaria Node↔Python) · (17) IA solo desde el backend · (18) RLS en TODAS las tablas `public`; `aria` solo service_role · (19) frontend nunca llama a Supabase con `service_role` ni a Anthropic directo · (20) errores de scraper sanitizados antes de mostrarse.
 
-18. **`SUPABASE_SERVICE_KEY` y `BANK_ENCRYPTION_KEY` solo en backend.** Nunca en frontend, repo, ni logs.
-19. **Credenciales bancarias = AES-256-GCM con IV único** (formato `iv:authTag:ciphertext` base64, compatible binario Node ↔ Python).
-20. **Mr. Money llama a Anthropic solo desde el backend.** Nunca desde el browser.
-21. **RLS habilitado en TODAS las tablas de `public`.** Schema `aria` bloqueado a clientes (solo service_role escribe).
-22. **Frontend NUNCA llama a Supabase con `service_role` ni a Anthropic directo.**
-23. **Errores de scraper sanitizados** antes de mostrarse al usuario (eliminar password, rut, stack, timeouts).
+**Privacidad**: (21) ARIA solo con `aria_consent = true`; sin UUID en `aria.*`.
+
+**Operación**: (22) la deuda técnica se documenta, no se oculta · (23) la ambición se merece con ejecución disciplinada (gate de verificación por cambio).
 
 ---
 
 ## 🏗️ Stack y arquitectura
 
-Monorepo. Tres patas:
+Monorepo. Estado **mayo 2026**: migración Python **completa y en producción**. Node archivado.
 
 | Carpeta | Rol | Estado |
 |---|---|---|
-| `backend/` | Node.js + Express, vivo en producción | ✅ Sirve usuarios reales |
-| `backend-python/` | Python 3.12 + FastAPI + ARQ + Playwright. Migración. | 🟡 Fases 0-5 cerradas. **NO toca prod hasta Fase 13** |
-| `frontend/` | React 18.3 + Vite 5.4. Solo consume el backend. | ✅ Estable |
+| `backend-python/` | Python 3.12 + FastAPI + ARQ + Playwright | ✅ **Producción** — sirve usuarios reales · **FOCO ACTIVO** |
+| `frontend/` | React 18.3 + Vite 5.4. Solo consume el backend. | ✅ **Producción** |
+| `backend/` | Node.js + Express — backend legacy | 🗄️ Archivado post-cutover (solo referencia). **No tocar.** |
 
-**DB compartida**: Supabase Postgres. Esquemas `public` (RLS) y `aria` (analytics, sin UUID, service_role only).
+**DB compartida**: Supabase Postgres 15. Esquemas `public` (RLS en todo) y `aria` (analytics, sin UUID, service_role only).
 
-**Despliegue actual**: Railway · `app.skyfinanzas.com` (frontend) + `api.skyfinanzas.com` (backend Node) · DNS Squarespace.
+**Despliegue**: Railway (proyecto SkyFinanzas) · `app.skyfinanzas.com` (frontend) + `api.skyfinanzas.com` (API Python) · DNS en registrador (CNAME → Railway) · landing `skyfinanzas.com` en GitHub Pages.
+
+**IA**: Anthropic Claude — **Sonnet 4.6** (Mr. Money) y **Haiku 4.5** (categorización capa 3). Solo desde el backend.
+
+**Procesos deployables (separación dura)**: la API nunca importa Playwright; solo el **worker** arranca el browser pool. Comparten Postgres y Redis. Servicios Railway: `sky-api-python`, `sky-worker-python`, `sky-cron-sync`, `Redis`, `SkyFinance` (frontend). Deuda: `appealing-benevolence` (Node legacy) sigue online — decomisionar.
 
 ### Regla de oro
 ```
@@ -96,13 +84,7 @@ ARIA      → solo escribe analytics anónimos
 Cifrado   → solo el backend conoce BANK_ENCRYPTION_KEY
 ```
 
-### Regla doctrinal Parte I vs Parte II
-Cada decisión técnica se etiqueta mentalmente:
-- **Parte I** = qué hay vivo HOY (Node.js, prod). Tocar con cuidado quirúrgico.
-- **Parte II** = qué se está construyendo (Python, migración). Aquí trabajamos.
-- **Parte III** = deuda registrada. Cada P/BUG tiene fase asignada de cierre.
-
-Cuando algo sea ambiguo: leer el v5 PDF, sección correspondiente.
+Detalle de arquitectura (middleware stack, routers, sync bancario, diagrama): **`docs/estado-del-arte/04_ARQUITECTURA.md`**.
 
 ---
 
@@ -110,288 +92,246 @@ Cuando algo sea ambiguo: leer el v5 PDF, sección correspondiente.
 
 ```
 sky_OFFICIAL/
-├── backend/                     ← Node.js prod (Parte I del v5)
-│   ├── server.js, middleware/, routes/, services/, scripts/
-│   └── Dockerfile (node:22-slim + Chromium vía apt)
-├── backend-python/              ← Python migración (Parte II del v5) ← FOCO ACTIVO
+├── backend-python/              ← Python PRODUCCIÓN ← FOCO ACTIVO
 │   ├── src/sky/
-│   │   ├── core/                ← config, db, encryption, locks, logging, errors, metrics
-│   │   ├── ingestion/           ← Fase 4-5 ✅ (router + scrapers + rate limit + CB + rules DB)
+│   │   ├── core/                ← config, db, encryption, locks, logging, errors, metrics, audit
+│   │   ├── ingestion/           ← router + scrapers + rate limit + circuit breaker + rules DB
 │   │   │   ├── routing/         ← router.py, rules.py
-│   │   │   ├── sources/         ← bchile_scraper, falabella_scraper (skel), bci_direct (parcial)
+│   │   │   ├── sources/         ← bchile_scraper (validado), bci_direct (roto), __init__ (SUPPORTED_BANKS)
 │   │   │   └── parsers/         ← bchile_parser
-│   │   ├── api/                 ← FastAPI; main + jwt_auth ✅; routers/* schemas/* STUBS hasta Fase 7
-│   │   ├── worker/              ← ARQ; main ✅; jobs/* y banking_sync STUBS hasta Fase 6
-│   │   └── domain/              ← Mr. Money, ARIA, finance, categorizer — STUBS hasta Fase 8
-│   ├── tests/                   ← unit (verde) + integration (vacío) + parity (vacío)
-│   ├── scripts/                 ← smoke_router, test_bchile_scraper, test_bci_scraper, verify_encryption_compat
-│   ├── migrations/              ← 000_immediate_fixes.sql, 001_routing_rules.sql
-│   ├── docs/
-│   │   ├── MIGRATION_13_PHASES.md     ← plan maestro técnico
-│   │   ├── REMEDIATION_P0_P3.md       ← deuda P0-P3 → fase de cierre
-│   │   └── FASE5_CLOSURE_PLAN.md      ← template del proceso de cierre por fase
-│   ├── pyproject.toml · ruff.toml · mypy.ini · .env.example
-│   └── README.md                 ← estado real Python
-├── frontend/                    ← React app (Parte I)
+│   │   ├── api/                 ← FastAPI: main + jwt_auth + routers/* + schemas/* (implementados)
+│   │   ├── worker/              ← ARQ: main + jobs/* + banking_sync (implementados)
+│   │   └── domain/              ← Mr. Money, ARIA, finance, categorizer (implementados)
+│   ├── tests/                   ← 359 tests (unit verde + integration + parity)
+│   ├── scripts/                 ← smoke_router, test_*_scraper, verify_encryption_compat, rekey_*, audit_rls_policies
+│   ├── migrations/              ← SQL versionadas
+│   ├── docs/                    ← referencia operativa durable + archive/ (histórico de las 13 fases)
+│   │   ├── API_CONTRACT.md · SECURITY.md · DECISION_SECRETS_MANAGER.md
+│   │   ├── DR_RUNBOOK.md · RUNBOOK_KEY_ROTATION.md · REMEDIATION_P0_P3.md
+│   │   └── archive/            ← planes de cierre de fases, sprints, auditorías (histórico, doctrina §22)
+│   └── README.md
+├── frontend/                    ← React app (producción)
+│   └── src/  Sky.jsx (god-component ~1.600 LOC, deuda P1-1) · services/api.js · components/BankConnect.jsx
+├── backend/                     ← Node.js LEGACY archivado (no tocar)
+├── docs/                        ← 📍 ESTADO DEL ARTE (punto de entrada técnico)
+│   ├── ESTADO_DEL_ARTE.md       ← índice integral + TL;DR
+│   ├── estado-del-arte/01..09   ← empresa, producto, ecosistema, arquitectura, infra, config, seguridad, deuda, doctrina
+│   └── SECURITY_INFRASTRUCTURE.md
 └── CLAUDE.md                    ← este archivo
 ```
 
-**Fuera del monorepo**:
-- `SkyFinancWebSite/` (repo separado) — landing pública en GitHub Pages, CNAME `skyfinanzas.com`
-- `SupabaseSQLQuerys/` (repo separado) — migraciones SQL versionadas
+**Fuera del monorepo**: `SkyFinancWebSite/` (landing, repo separado, GitHub Pages) · `SupabaseSQLQuerys/` (migraciones SQL versionadas, repo separado).
 
 ---
 
-## 📐 Contrato `DataSource` (Parte II §14)
+## 📐 Contrato `DataSource` (la pieza más protegida)
 
-La pieza más protegida del rediseño. Modificarlo requiere RFC interno.
+Vive en `backend-python/src/sky/ingestion/contracts.py`. Modificarlo requiere RFC interno. Detalle: **`docs/estado-del-arte/03_ECOSISTEMA.md`**.
 
-### `kind` (5 tipos)
-| Kind | Significado |
-|---|---|
-| `SCRAPER` | Browser automation (BChile, Falabella) |
-| `AGGREGATOR` | Fintoc, Belvo |
-| `BANK_API_DIRECT` | API propia del banco con acuerdo bilateral |
-| `SFA` | Open Banking regulado chileno (CMF) |
-| `MANUAL_UPLOAD` | Archivo subido por el usuario, fallback humano |
+### `kind` (5) · `auth_mode` (4)
+- **kind**: `SCRAPER` · `AGGREGATOR` · `BANK_API_DIRECT` · `SFA` · `MANUAL_UPLOAD`
+- **auth_mode**: `PASSWORD` · `OAUTH` · `API_KEY` · `CONSENT_TOKEN`
 
-### `auth_mode` (4 modos)
-| Modo | Para |
-|---|---|
-| `PASSWORD` | RUT + clave (scraping) |
-| `OAUTH` | Tokens access/refresh (Fintoc, bancos) |
-| `API_KEY` | Clave institucional |
-| `CONSENT_TOKEN` | Token de consentimiento explícito (SFA) |
-
-### Source identifiers
-| Identifier | Capa | Estado |
+### Bancos soportados (`SUPPORTED_BANKS`)
+| Identifier | Capa · Auth | Estado |
 |---|---|---|
-| `scraper.bchile` | SCRAPER · PASSWORD | ✅ Validado contra cuenta real |
-| `scraper.falabella` | SCRAPER · PASSWORD | 🟡 Skeleton |
-| `scraper.bci` | SCRAPER · PASSWORD | 🟡 Parcial |
-| `mercadopago.api` | AGGREGATOR · OAUTH | 🔴 Futuro |
-| `fintoc` | AGGREGATOR · OAUTH | 🔴 Futuro |
-| `bci.direct`, `santander.direct` | BANK_API_DIRECT · OAUTH | 🔴 Futuro |
-| `sfa.<bank>` | SFA · CONSENT_TOKEN | 🔴 Horizonte |
-| `manual` | MANUAL_UPLOAD · — | 🔴 Futuro |
+| `bchile` | SCRAPER · PASSWORD | **active** — validado funcionando desde IP residencial. ⚠️ Bloqueado por anti-bot (Incapsula) desde datacenter Railway. 2FA app. |
+| `bci` | SCRAPER · PASSWORD | **pending** — scraper roto: BCI cambió el dominio del portal (`portalpersonas.bci.cl` ya no resuelve). Requiere rework. |
+| `falabella` | SCRAPER · PASSWORD | removido del listado (skeleton, no operativo) |
+| `mercadopago`, `fintoc`, `*.direct`, `sfa.*`, `manual` | varios | 🔴 Futuro |
 
-### `CanonicalMovement` (campos)
-`external_id` (SHA-256 determinístico) · `amount_clp` (int CLP) · `raw_description` · `occurred_at` (date) · `movement_source` (CUENTA / TARJETA / LÍNEA) · `source_kind` · `source_metadata` (libre, debug — el dominio NO lo lee).
+> El frontend solo expone como conectables BChile y BCI; los `pending` aparecen como "Próximamente".
 
-### Determinismo del `external_id`
+### `CanonicalMovement`
+`external_id` (SHA-256 determinístico) · `amount_clp` (int CLP; **positivo = ingreso, negativo = gasto**) · `raw_description` · `occurred_at` (date) · `movement_source` (CUENTA / TARJETA / LÍNEA) · `source_kind` · `source_metadata` (libre, debug — el dominio NO lo lee).
+
 ```python
 external_id = f"{bank_id}_{sha256(f'{date}|{amount}|{desc.lower()}').hexdigest()[:16]}"
 ```
-Mismo movimiento real → mismo id → idempotencia natural en `INSERT ... ON CONFLICT`.
+Mismo movimiento real → mismo id → idempotencia natural en `INSERT ... ON CONFLICT`. Consecuencia: migrar un banco de scraping a SFA **no duplica histórico**.
 
 ---
 
-## 🔁 IngestionRouter — failover, circuit breaker, rate limit (Parte II §15)
+## 🔁 IngestionRouter — failover, circuit breaker, rate limit
 
 - **Cadena de proveedores por banco**: lista ordenada en `public.ingestion_routing_rules`. Editable sin redeploy.
-- **Rollout %**: hash determinístico de `user_id + bank_id` para canary releases (5% → 50% → 100%).
-- **Circuit breaker en Redis** (`cb:<source_id>`): abre tras **5 fallos en 60s**, mantiene abierto **120s**, cierra tras **3 éxitos consecutivos** en half-open.
-- **Rate limit en Redis** (`rl:<source_id>`): sliding window log atómico (Lua), namespaces separados de CB.
-- **Política de failover**: salta si circuit OPEN → registra `RecoverableIngestionError` y prueba siguiente → `AuthenticationError` propaga sin failover → toda la cadena falla = `AllSourcesFailedError`.
+- **Rollout %**: hash determinístico de `user_id + bank_id` para canary releases.
+- **Circuit breaker en Redis** (`cb:<source_id>`): abre tras **5 fallos en 60s**, mantiene **120s**, cierra tras **3 éxitos consecutivos** en half-open.
+- **Rate limit en Redis** (`rl:<source_id>`): sliding window log atómico (Lua), namespace separado del CB.
+- **Política de failover**: circuit OPEN → salta al siguiente · `RecoverableIngestionError` → siguiente · `AuthenticationError` → propaga sin failover · rate limit → skip · toda la cadena falla → `AllSourcesFailedError`.
 
 ---
 
-## 🧠 Mr. Money — arquitectura de respuesta (Parte I §4)
+## 🧠 Mr. Money — arquitectura de respuesta
 
-1. **Detección local primero** — patrones (saludos, consultas de desafíos) responden sin tokens.
-2. Si no hay match local → construye contexto financiero (balance, ingresos/gastos por categoría, tasa ahorro, metas, desafíos, cuentas) → eleva a `claude-sonnet`.
+1. **Detección local primero** — patrones (saludos, consultas de desafíos) responden **sin tokens** (~60-70% de consultas).
+2. Si no hay match local → construye contexto financiero (balance, ingresos/gastos por categoría, tasa de ahorro, metas, desafíos, cuentas) → eleva a `claude-sonnet-4-6`.
 3. Tipos de respuesta: texto simple · `propose_challenge` (estructurada, render interactivo, **requiere confirmación**) · navegación (deep-link a vistas).
-4. Tools (tool use de Anthropic) para proyecciones financieras y evaluar realismo de metas.
+4. Tool use de Anthropic para proyecciones financieras y evaluar realismo de metas.
+
+Config: `mr_money_max_tokens=4096`, `temperature=0.7`, prompt caching 5m.
 
 ---
 
-## 🧮 Categorización 3 capas (Parte I §3.3)
+## 🧮 Categorización 3 capas
 
 Orden estricto, cada capa solo invoca la siguiente si falla:
 1. **Reglas deterministas** — ~25 regex. Sin tokens.
-2. **Caché de comercios** — tabla `merchant_categories`, lookup por prefijo progresivo (`"jumbo las condes" → "jumbo las" → "jumbo"`). Compartida entre todos los usuarios.
-3. **Claude API** — solo si las dos capas anteriores fallan. Resultado se guarda en caché.
+2. **Caché de comercios** — tabla `merchant_categories`, lookup por prefijo progresivo (`"jumbo las condes" → "jumbo las" → "jumbo"`). Compartida entre usuarios.
+3. **Claude API** (`claude-haiku-4-5`) — solo si las dos capas anteriores fallan. Resultado se guarda en caché.
+
+Las tx se insertan con `categorization_status='pending'` y descripción `'Procesando...'`; el job ARQ `categorize_pending_job` las procesa async. **Display ingreso/gasto en frontend = por signo del monto (`tx.amount > 0`), NO por categoría.**
 
 ---
 
-## 🛡️ ARIA — pipeline de anonimización (Parte I §8)
+## 🛡️ ARIA — pipeline de anonimización
 
-Solo activo si `profiles.aria_consent = true` (P0-2 fortalece este guard).
-
-5 pasos:
-1. **Extracción** — evento real → señal estructurada
-2. **Categorización** — valor exacto → rango (monto → bucket, fecha → trimestre)
-3. **Eliminación de identidad** — UUID descartado antes de escribir en `aria.*`
-4. **Randomización intra-bucket** — valor guardado = random dentro del rango, no el real
-5. **Ruptura de correlaciones** — jitter temporal ±36h, batch_id propio por registro
-
-Threshold de vistas analíticas: **mínimo 10 registros** (k-anonymity informal).
-
-Tablas `aria.*`: `spending_patterns`, `goal_signals`, `behavioral_signals`, `session_insights`. Vistas: `v_motivation_by_cohort`, `v_spending_by_segment`.
+Solo activo si `profiles.aria_consent = true`. 5 pasos: (1) extracción evento→señal · (2) categorización valor→rango · (3) eliminación de UUID antes de escribir · (4) randomización intra-bucket · (5) ruptura de correlaciones (jitter ±36h, batch_id propio). Vistas con **k-anonymity ≥ 10**. Tablas `aria.*`: `spending_patterns`, `goal_signals`, `behavioral_signals`, `session_insights`.
 
 ---
 
-## 📋 Inventario de deuda activa (Parte III §19)
+## 📋 Deuda viva (mayo 2026)
 
-| ID | Item | Estado | Cierra en |
-|---|---|---|---|
-| **P0-1** | JWT auth en backend (Node lee header sin verificar) | Abierto en Node | Python Fase 7 (`api/middleware/jwt_auth.py` ya existe) |
-| **P0-2** | Consent ARIA inconsistente en flujo bancario | Abierto | Fix Node (30 min) + reforzado en Python Fase 8 |
-| ~~P0-3~~ | ~~Refresh en vivo post-sync~~ | ✅ Resuelto Abr-2026 | — |
-| **P1-1** | `Sky.jsx` god-component (1 678 LOC) | Abierto | Refactor frontend (paralelo) |
-| **P1-2** | CORS permisivo por fallback | Abierto | Python: rechazar deploy sin allowlist |
-| **P2-1..4** | Tests / CI / rate limiting / monitoring | Abiertos | Python Fase 10 |
-| **P2-5** | Paralelismo Puppeteer sin límite | Mitigado (secuencial) | Python: browser pool default 4 |
-| **P2-6** | Rotación `BANK_ENCRYPTION_KEY` sin procedimiento | Abierto | Python: key versioning |
-| **BUG-1** | `external_id` inconsistente (2 implementaciones Node) | Abierto | Python: única `build_external_id` |
-| **BUG-2** | Upsert apunta a UNIQUE INDEX inexistente | Abierto | Python migration `002_indexes_and_constraints.sql` |
-| **BUG-3** | Lock en memoria del proceso | Abierto | Python: `pg_try_advisory_lock` |
-| **BUG-4** | Sync secuencial entre bancos (5 min) | Abierto | Python: browser pool paralelo (~90s) |
+Fuente: **`docs/estado-del-arte/08_ESTADO_Y_DEUDA.md`** + `backend-python/docs/REMEDIATION_P0_P3.md`. Las 13 fases técnicas están **cerradas**; P0 y BUG-1..4 cerrados por el cutover.
 
-**Regla**: cuando trabajemos en una fase, verificar qué P/BUG cierra y asegurar que se cumple antes del commit de cierre.
+### Bloqueadores activos
+| ID | Item | Nota |
+|---|---|---|
+| **B-1** | Scraping bloqueado desde datacenter (anti-bot Incapsula en BChile) | Funciona desde IP residencial, no desde Railway. Crítico arquitectónico → refuerza tesis SFA. |
+| **B-2** | Scraper BCI roto — dominio cambiado | `portalpersonas.bci.cl` ya no resuelve. Requiere rework (sprint propio). |
+| **B-3** | Audit log no audita | INSERT mezcla `:detail::jsonb` (named) con `$1..$7` (posicional) → falla cada sync. No fatal, pero no escribe. Fix en `sky/core/audit.py`. |
+| **B-4** | Balance visible tras desconectar cuenta | Probable caché de frontend o total no recalculado. Requiere reproducción. |
+| **B-5** | Lentitud general | Sin profiling. **Medir antes de optimizar.** |
+
+### Deuda abierta / infra
+- **P1-1**: `Sky.jsx` god-component (~1.600 LOC) — refactor frontend.
+- Decomisionar `appealing-benevolence` (Node legacy) · limpiar `api-v2.skyfinanzas.com` (502, leftover canary) · warm standby Fly.io (DR Railway).
+
+### Prioridades sugeridas
+1. **Prep pitch BCI** (objetivo de negocio inmediato) · 2. **B-3** audit (fix trivial) · 3. **B-4** balance · 4. **B-2** rework BCI · 5. **B-1** anti-bot · 6. **B-5** performance · 7. limpiar infra legacy.
 
 ---
 
 ## 🐍 Convenciones Python (backend-python/)
 
 - `from __future__ import annotations` siempre.
-- `StrEnum` (3.11+) en vez de `(str, Enum)`. `from enum import StrEnum`.
+- `StrEnum` (3.11+) en vez de `(str, Enum)`.
 - Async-first: SQLAlchemy 2.0 async, `redis.asyncio`, FastAPI native async, ARQ, `httpx` async.
 - `structlog` con context binding. Nunca `print`.
 - Excepciones tipadas en `sky.core.errors`. NO crear duplicados.
-- `pydantic-settings` (`Settings` clase) para config; fail-fast si falta env var crítica.
+- `pydantic-settings` (`Settings`) para config; fail-fast si falta env var crítica.
 - `dataclass(frozen=True, slots=True)` para value objects inmutables.
-- Sin `# type: ignore` salvo cuando mypy genuinamente no puede inferir; ruff `UP037` los detecta sobrantes.
+- Sin `# type: ignore` salvo cuando mypy genuinamente no infiere.
 
 ### Tests
-- `pytest` con `asyncio_mode=auto`. Sin `@pytest.mark.asyncio` en cada test.
-- `fakeredis[lua]>=2.26` para Redis en tests. Fixture `fake_redis` ya en `conftest.py`.
+- `pytest` con `asyncio_mode=auto`. Sin `@pytest.mark.asyncio` por test.
+- `fakeredis[lua]>=2.26` para Redis. Fixture `fake_redis` en `conftest.py`.
 - `@pytest.fixture(autouse=True)` para resetear estado global.
-- Nunca `time.sleep` en tests async — usa `await asyncio.sleep`.
-- Timing tests del circuit breaker: `await asyncio.sleep ≥ 1.0s`. Nunca `< 1.0s`.
-- Variables dummy de Supabase en `conftest.py` con `os.environ.setdefault(...)` ANTES de cualquier import de `sky.*`.
+- Nunca `time.sleep` en tests async — usa `await asyncio.sleep`. Timing del circuit breaker: `≥ 1.0s`.
+- Dummies de Supabase en `conftest.py` con `os.environ.setdefault(...)` ANTES de cualquier import de `sky.*`.
 
 ### Naming Redis
 - `rl:<source_id>` rate limit · `cb:<source_id>` circuit breaker · namespaces separados.
 
+### Cola ARQ
+- Cola única **`sky:default`**. API y worker crean sus pools con `default_queue_name="sky:default"`. Jobs sin nombre de cola caen en `arq:queue` (fantasma) y no corren — bug histórico ya corregido.
+
 ### Mensajes de commit
-- Cierre de fase: español, formato del plan correspondiente. Ej:
-  `Fase 5 cerrada: IngestionRouter con rate limit, circuit breaker, rules en DB`
-- Otros commits: convencional pero en español.
-- Siempre `Co-Authored-By: Claude ...`
+- Convencional pero en **español**. Siempre `Co-Authored-By: Claude ...`.
 
 ---
 
-## ⚙️ Comandos comunes
+## ⚙️ Comandos comunes (PowerShell, Windows)
 
-### Setup (una vez)
 ```powershell
-cd backend-python
-python -m venv .venv
-.venv\Scripts\activate            # Windows; Linux/Mac: source .venv/bin/activate
-pip install -e ".[dev]"
-playwright install chromium
-```
+cd backend-python; .venv\Scripts\activate
+pip install -e ".[dev]"            # setup (una vez) + playwright install chromium
 
-### Loop dev
-```powershell
-.venv\Scripts\activate
-pytest tests/unit/ -v --cov=src/sky/ingestion --cov-report=term-missing
-ruff check src/sky/ingestion/ tests/
-mypy src/sky/ingestion/
-```
+# loop dev
+pytest tests/unit/ -v --cov=src/sky --cov-report=term-missing
+ruff check src/sky/ ; mypy src/sky/
 
-### Smoke contra Redis real
-```powershell
-docker run -d --rm -p 6379:6379 --name sky-redis-smoke redis:7-alpine
-$env:REDIS_URL = "redis://localhost:6379"
-python scripts/smoke_router.py
-docker stop sky-redis-smoke
-```
-
-### Levantar stack
-```powershell
-$env:REDIS_URL = "redis://localhost:6379"
+# levantar stack
+$env:REDIS_URL = "redis://127.0.0.1:6379"   # en Windows usar 127.0.0.1, NO localhost
 uvicorn sky.api.main:app --reload --port 8000
-arq sky.worker.main.WorkerSettings   # cuando Fase 6 esté implementada
+arq sky.worker.main.WorkerSettings
+
+# smoke contra Redis real
+docker run -d --rm -p 6379:6379 --name sky-redis-smoke redis:7-alpine
+python scripts/smoke_router.py ; docker stop sky-redis-smoke
+
+# antes de migración SQL (gate de RLS)
+python scripts/audit_rls_policies.py        # exit 1 bloquea deploy
 ```
 
-### PowerShell vs bash
-- PowerShell: `$env:VAR = "valor"` (NO `VAR=valor cmd` estilo bash).
-- PowerShell: `;` o `if ($?) { ... }` (NO `&&`).
-- Heredoc multilínea: `@'...'@` (single-quoted, literal). Cierre `'@` debe ir en columna 0.
+- PowerShell: `$env:VAR = "valor"` (NO `VAR=valor cmd`). Encadenar con `;` o `if ($?) { ... }` (NO `&&`). Heredoc: `@'...'@` (cierre `'@` en columna 0).
 
 ---
 
-## 🚦 Cierre de fase — proceso estándar
+## ✅ Gates de calidad (por cambio)
 
-Cada fase nueva sigue este patrón (template = `backend-python/docs/FASE5_CLOSURE_PLAN.md`):
+No hay "cierre de fase" (las 13 fases ya cerraron; sus planes viven en `backend-python/docs/archive/`). Para cualquier cambio de código, todos deben dar exit 0 antes del commit:
 
-1. **Plan**: crear `docs/FASE<N>_CLOSURE_PLAN.md` antes de tocar código. Sin plan no se escribe código.
-2. **Implementación**: por archivo según el plan.
-3. **Gates §3** — todos exit code 0:
-   - `ruff check src/sky/ingestion/ tests/`
-   - `mypy src/sky/ingestion/`
-   - `pytest tests/ -v --cov=... --cov-report=term-missing`
-   - Smoke contra Redis local (si aplica)
-   - `uvicorn` arranca + `/api/health` responde 200
-4. **Migraciones SQL** (si aplica): aplicar en staging primero, prod después. Verificar con query.
-5. **Verificar P/BUG cerrados**: cruzar con tabla §19 del v5.
-6. **Commit**: mensaje exacto del plan, en español. `Co-Authored-By: Claude`.
-7. **Update**: `docs/MIGRATION_13_PHASES.md` con `### Estado: ✅ Cerrada (YYYY-MM-DD)` + archivos + gates marcados.
+1. `ruff check src/sky/ tests/`
+2. `mypy src/sky/`
+3. `pytest tests/ -v` (359 tests; cobertura en el módulo tocado)
+4. Smoke contra Redis local si tocas ingestión/routing.
+5. `uvicorn` arranca + `/api/health` responde 200 si tocas la API.
+6. Si hay migración SQL: `audit_rls_policies.py` verde + aplicar en staging antes que prod.
 
 ---
 
 ## 🤝 Reglas de operación con Claude
 
+- **Lee `docs/ESTADO_DEL_ARTE.md` al inicio de cada sesión nueva.** Es el estado vigente.
+- **Mantén `CLAUDE.md` sincronizado.** Si un cambio deja este archivo o el Estado del Arte desactualizados, actualízalos (orden: v5 PDF si es doctrina/legal → `docs/ESTADO_DEL_ARTE.md` → `CLAUDE.md`). Esta pieza no se queda atrás.
 - **Trabajamos directo en `main`** (decisión 2026-04-30). Sin worktrees, sin PRs en flujo normal. `.claude/` está en `.gitignore`.
-- **El usuario hace `git push`**. Yo solo commit local.
+- **El usuario hace `git push`.** Yo solo commit local.
 - **Nunca `--force` push a main.** Si parece necesario, algo está mal — diagnosticar antes.
 - **Ante ambigüedad o conflicto**: parar y preguntar antes de tocar archivos. No tomar acciones destructivas (`reset --hard`, merge, force) sin OK explícito.
-- **Plan-first para fases**: nunca empezar a escribir código de una fase sin primero el `FASE<N>_CLOSURE_PLAN.md`.
-- **Si encuentro deuda fuera de scope**: documentar como TODO referenciando la fase correcta del v5, no arreglarlo en el momento.
-- **No tocar `backend/` (Node) salvo solicitud explícita.** Ese código está en producción sirviendo usuarios.
-- **PowerShell por defecto** — el usuario está en Windows con miniconda. Adaptar comandos.
+- **Si encuentro deuda fuera de scope**: documentarla en `docs/estado-del-arte/08_ESTADO_Y_DEUDA.md` (o como TODO), no arreglarla en el momento.
+- **No tocar `backend/` (Node).** Está archivado; solo referencia histórica.
+- **Producción es real.** `backend-python/` y `frontend/` sirven usuarios. Cambios con cuidado quirúrgico; respetar la doctrina §09.
+- **PowerShell por defecto** — Windows + miniconda.
 
 ---
 
-## 🎯 Visión estratégica (Parte IV §24)
+## 🎯 Visión estratégica (5 fases de negocio)
 
-Las 5 fases de negocio (no confundir con las 13 fases técnicas):
+No confundir con las 13 fases técnicas (ya cerradas).
 
-| Fase de negocio | Objetivo |
+| Fase | Objetivo |
 |---|---|
-| **F1 — Demostrar alivio** | Que un usuario sienta más claridad en una semana. Cierre de P0 + migración Python. |
+| **F1 — Demostrar alivio** ← **etapa actual** | Que un usuario sienta más claridad en una semana. Objetivo inmediato: **pitch a BCI**. |
 | **F2 — Consolidar hábito** | Recomendación entre pares. Más bancos. Fintoc + APIs directas. Entrada universitaria. |
 | **F3 — Capa institucional** | ARIA genera valor B2B (bancos, gobierno, aseguradoras). |
 | **F4 — Infraestructura** | Sky como plataforma. Contrato `DataSource` como API pública. |
 | **F5 — Categoría regional** | Expansión Perú, México, Colombia. |
 
-**Riesgos estratégicos vivos** (Parte IV §25): onboarding · complejidad acumulada · traición de datos · dependencia de proveedor · regulación (SFA) · sobrehype · talento · deuda · ejecución de migración.
+**Dirección estratégica de fondo**: migrar de scraping a **SFA (Open Banking CMF)** cuando los bancos liberen APIs; el scraper queda como fallback permanente. La fragilidad del scraping (anti-bot, cambios de portal) es el argumento técnico honesto para el SFA.
 
 ---
 
 ## 🔖 Atajos de contexto frecuentes
 
-| Pregunta | Archivo / sección |
+| Pregunta | Dónde mirar |
 |---|---|
-| "Qué es Sky exactamente" | v5 PDF · §1, §2 (identidad y tesis) |
-| "Qué hay implementado HOY" | v5 PDF · Parte I (§1-§11) o `backend-python/README.md` |
-| "Cómo es la arquitectura objetivo" | v5 PDF · Parte II (§12-§18) |
-| "Estado de fases técnicas" | `backend-python/docs/MIGRATION_13_PHASES.md` |
-| "Deuda técnica P0/P1/P2/BUG" | v5 PDF · Parte III (§19-§22) o `backend-python/docs/REMEDIATION_P0_P3.md` |
-| "Decisiones doctrinales completas" | v5 PDF · §26 |
-| "Cómo cierro una fase" | `backend-python/docs/FASE5_CLOSURE_PLAN.md` (template) |
-| "Estructura objetivo del repo Python" | v5 PDF · Anexo A.2 |
-| "Mapeo Node → Python (qué archivo va a qué)" | v5 PDF · Anexo A · "Mapeo conceptual" |
-| "Bancos soportados + estado" | `backend-python/src/sky/ingestion/sources/__init__.py` (`SUPPORTED_BANKS`) |
-| "Reglas de routing iniciales" | `backend-python/migrations/001_routing_rules.sql` |
-| "Cómo corre el smoke" | `backend-python/scripts/smoke_router.py` |
+| "Estado vigente / TL;DR" | `docs/ESTADO_DEL_ARTE.md` |
+| "Qué es Sky / empresa / visión" | `docs/estado-del-arte/01_EMPRESA.md` · `02_PRODUCTO.md` |
+| "Bancos, DataSource, modelo canónico, SFA" | `docs/estado-del-arte/03_ECOSISTEMA.md` |
+| "Arquitectura (middleware, routers, sync, diagrama)" | `docs/estado-del-arte/04_ARQUITECTURA.md` |
+| "Infra (Railway, Supabase, DNS, DR)" | `docs/estado-del-arte/05_INFRAESTRUCTURA.md` |
+| "Variables de entorno / config / despliegue / CI" | `docs/estado-del-arte/06_CONFIGURACION.md` |
+| "Seguridad (cifrado, RLS, ARIA, audit, runbooks)" | `docs/estado-del-arte/07_SEGURIDAD.md` |
+| "Qué funciona / qué no / deuda viva" | `docs/estado-del-arte/08_ESTADO_Y_DEUDA.md` |
+| "Doctrina completa (23 reglas)" | `docs/estado-del-arte/09_DOCTRINA.md` |
+| "Doctrina legal / titularidad / profundidad" | v5 PDF (registro INAPI) |
+| "Contrato de API REST" | `backend-python/docs/API_CONTRACT.md` |
+| "Runbooks (DR, rotación de clave)" | `backend-python/docs/DR_RUNBOOK.md` · `RUNBOOK_KEY_ROTATION.md` |
+| "Cómo se construyó (histórico de fases)" | `backend-python/docs/archive/` |
 
 ---
 
 ## 📅 Última actualización
 
-`2026-04-30` · Tras lectura del v5 PDF (registro INAPI) y cierre de Fase 5.
-
-Cuando algo de fondo cambie en el producto/arquitectura/doctrina, actualizar el v5 PDF primero (registro legal), después este archivo. Este `CLAUDE.md` siempre debe ser un derivado fiel del v5.
+`2026-05-23` · Reescrito para reflejar que la **migración Python está completa y en producción** (las 13 fases cerradas, Node archivado). Alineado con `docs/ESTADO_DEL_ARTE.md`. El v5 PDF sigue siendo la fuente doctrinal/legal; su Parte II quedará reescrita cuando se reactualice el registro INAPI.
