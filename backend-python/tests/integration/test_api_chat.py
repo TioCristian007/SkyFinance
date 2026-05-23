@@ -63,8 +63,8 @@ async def test_chat_greeting_local_response(client: AsyncClient) -> None:
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["type"] == "text"
-    assert "Mr. Money" in data["text"] or "Hola" in data["text"]
+    assert "Mr. Money" in data["reply"] or "Hola" in data["reply"]
+    assert data["proposals"] == []
     mock_anthropic.assert_not_called()
 
 
@@ -76,8 +76,7 @@ async def test_chat_nav_intent(client: AsyncClient) -> None:
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["type"] == "navigation"
-    assert data["route"] == "/challenges"
+    assert data["navigations"][0]["simulation_type"] == "/challenges"
     mock_anthropic.assert_not_called()
 
 
@@ -108,7 +107,7 @@ async def test_chat_financial_question_calls_anthropic(client: AsyncClient) -> N
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["type"] == "text"
+    assert "comida" in data["reply"]
     assert mock_client_instance.messages.create.called
 
 
@@ -122,11 +121,8 @@ async def test_chat_propose_challenge_not_stored_in_db(client: AsyncClient) -> N
     tool_block.name = "propose_challenge"
     tool_block.id = "tool-ch-1"
     tool_block.input = {
-        "title": "No Uber 2 semanas",
-        "description": "Evita Uber 14 días.",
-        "target_amount": 60_000,
-        "duration_days": 14,
-        "rationale": "Gastás $60k en Uber este mes.",
+        "challenge_id": "no_uber",
+        "reasoning": "Gastás $60k en Uber este mes.",
     }
     first_resp = MagicMock()
     first_resp.stop_reason = "tool_use"
@@ -160,6 +156,6 @@ async def test_chat_propose_challenge_not_stored_in_db(client: AsyncClient) -> N
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["type"] == "propose_challenge"
-    assert data["title"] == "No Uber 2 semanas"
-    assert data["duration_days"] == 14
+    assert data["proposals"][0]["type"] == "propose_challenge"
+    assert data["proposals"][0]["input"]["challenge_id"] == "no_uber"
+    assert data["proposals"][0]["input"]["reasoning"] == "Gastás $60k en Uber este mes."
