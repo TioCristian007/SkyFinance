@@ -7,6 +7,8 @@
 
 **Versión:** 1.0 · **Fecha:** 2026-05-08 · **Audiencia:** Ingeniero de seguridad incorporándose al equipo.
 
+> ⚠️ **PARCIALMENTE DESACTUALIZADO (post-cutover)**: escrito cuando el backend Node.js seguía en producción. A mayo 2026 el cutover a Python está completo y Node está archivado. Para el estado **actual** de infraestructura y seguridad ver `docs/ESTADO_DEL_ARTE.md` → secciones [05 Infraestructura](estado-del-arte/05_INFRAESTRUCTURA.md) y [07 Seguridad](estado-del-arte/07_SEGURIDAD.md). Se conserva por su detalle de modelo de amenaza y controles, válido en lo conceptual.
+
 ---
 
 ## 0. Cómo leer este documento
