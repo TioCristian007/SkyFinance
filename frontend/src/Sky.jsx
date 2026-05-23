@@ -280,7 +280,7 @@ const BankCardFull = ({ acc, blurred = false }) => {
 
 /** Ítem de movimiento en el ticker live */
 const TickerItem = ({ tx }) => {
-  const isIncome = tx.category === "income";
+  const isIncome = tx.amount > 0;
   const fmtK2 = (n) => {
     const a = Math.abs(n ?? 0);
     if (a >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
@@ -1092,7 +1092,7 @@ export default function Sky({ userId, userEmail }) {
                     </div>
                     <div style={{ display: "flex", overflowX: "auto", scrollbarWidth: "none" }}>
                       {txs.slice(0, 6).map(tx => {
-                        const isIncome = tx.category === "income";
+                        const isIncome = tx.amount > 0;
                         return (
                           <div key={tx.id} style={{
                             flexShrink: 0, padding: "10px 16px",
@@ -1365,7 +1365,7 @@ export default function Sky({ userId, userEmail }) {
                       ) : (
                         filteredTxs.map(tx => {
                           // Categoría: usa los datos de categories.js para icono y label real
-                          const isIncome = tx.category === "income" || tx.category === "transfer";
+                          const isIncome = tx.amount > 0;
                           const catKey   = tx.category ?? "other";
                           // Colores y labels por categoría (inline para no depender de import aquí)
                           const CAT_UI = {
