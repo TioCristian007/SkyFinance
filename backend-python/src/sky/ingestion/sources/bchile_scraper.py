@@ -476,11 +476,7 @@ class BChileScraperSource(DataSource):
         all_movs: list[CanonicalMovement] = []
         first_balance: int | None = None
 
-        import json as _json
         for acct in unique:
-            # LOG temporal para debugging — ver qué campos viene desde BChile
-            logger.info("bchile_account_raw", producto=_json.dumps(acct, default=str)[:500])
-
             # BChile espera el RUT sin puntos, con guion: "22141522-1"
             rut_clean = re.sub(r"[.]", "", rut).upper()
             if "-" not in rut_clean and len(rut_clean) >= 2:
@@ -496,7 +492,6 @@ class BChileScraperSource(DataSource):
                 "claseCuenta": acct.get("claseCuenta"),
                 "moneda": acct.get("codigoMoneda"),
             }
-            logger.info("bchile_account_cuenta_payload", cuenta=_json.dumps(cuenta, default=str))
 
             try:
                 await self._api_post(
