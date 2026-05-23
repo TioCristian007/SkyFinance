@@ -28,11 +28,17 @@ BChile está detrás de **Imperva Incapsula**. El scraper headless desde la **IP
 ### B-2 · Scraper BCI roto — dominio cambiado
 `portalpersonas.bci.cl` ya no resuelve (NXDOMAIN desde toda red probada; antes funcionaba). BCI cambió el dominio de su portal. Requiere rework: nuevo dominio + probablemente nuevos selectores y endpoints de API interna. BCI está en `pending`. Sprint propio pendiente.
 
-### B-3 · Bug del audit log — no audita
-El INSERT en `audit_log` mezcla `:detail::jsonb` (named) con `$1..$7` (posicional) → `PostgresSyntaxError` en cada sync. No tumba el sync (try/except) pero **no se escribe ningún registro de auditoría**. Fix: corregir el binding del parámetro en `sky/core/audit.py`.
+### B-3 · Auditoría — código corregido, pendiente verificación en runtime
+El bug original (mezcla `:detail::jsonb` named con `$1..$7` posicional) fue corregido en el commit `adff285` (2026-05-10). El INSERT en `sky/core/audit.py` usa parámetros nombrados consistentes (`:event_type`, `:user_hash`, etc.) — confirmado leyendo el código y con grep: **no existen bindings `$1..$7` en ningún archivo de `src/`**.
+
+Lo que queda pendiente es verificar en runtime con Postgres real:
+- Confirmar que el driver asyncpg efectivamente escribe filas con `statement_cache_size=0` (configuración de asyncpg usada en el engine).
+- Confirmar que `resource_id` (columna `uuid` en Postgres) acepta el `str` Python que le pasa el código (asyncpg debería hacer el cast, pero no está verificado con filas reales).
+
+**Estado**: código corregido (no es bloqueador de código); **verificación de runtime pendiente** — correr `log_event(...)` contra Postgres de staging y confirmar fila insertada.
 
 ### B-4 · Balance visible tras desconectar cuenta
-Reportado: al desconectar una cuenta, el saldo seguía visible. El endpoint hace soft-disconnect (`status='disconnected'`) y `/accounts` filtra por status, así que probablemente es caché de estado en el frontend o el total no se recalcula. Requiere reproducción + diagnóstico.
+`handleDisconnect` en `BankConnect.jsx` llamaba `loadAccounts()` (refresca estado interno del componente) pero no llamaba `onSyncComplete?.()`, que es el callback que refresca `bankBalances` en `Sky.jsx`. **Corregido** (2026-05-23): se agregó `onSyncComplete?.()` tras `loadAccounts()`. Verificación visual de QA manual pendiente.
 
 ### B-5 · Lentitud general
 La app se siente lenta. Sin profiling aún. Sospechas: cold-start de Railway, queries de `/summary`/`/transactions`, re-renders del god-component `Sky.jsx`, polling de `BankConnect` cada 5s. **Medir antes de optimizar.**
@@ -70,8 +76,8 @@ La app se siente lenta. Sin profiling aún. Sospechas: cold-start de Railway, qu
 ## Prioridades sugeridas (orden)
 
 1. **Prep del pitch BCI** (objetivo de negocio inmediato — ver `Documentacion_Externa_Reuniones_Bancos/`).
-2. **B-3** audit log (fix trivial, restaura auditoría).
-3. **B-4** balance post-disconnect (se vería mal en demo).
+2. **B-3** verificación de runtime (log_event contra Postgres staging).
+3. **B-4** ~~balance post-disconnect~~ — código corregido; pendiente QA visual.
 4. **B-2** rework scraper BCI (sprint propio).
 5. **B-1** resiliencia anti-bot datacenter (arquitectónico, mediano plazo).
 6. **B-5** performance (profiling primero).

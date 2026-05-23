@@ -199,8 +199,8 @@ Fuente: **`docs/estado-del-arte/08_ESTADO_Y_DEUDA.md`** + `backend-python/docs/R
 |---|---|---|
 | **B-1** | Scraping bloqueado desde datacenter (anti-bot Incapsula en BChile) | Funciona desde IP residencial, no desde Railway. Crítico arquitectónico → refuerza tesis SFA. |
 | **B-2** | Scraper BCI roto — dominio cambiado | `portalpersonas.bci.cl` ya no resuelve. Requiere rework (sprint propio). |
-| **B-3** | Audit log no audita | INSERT mezcla `:detail::jsonb` (named) con `$1..$7` (posicional) → falla cada sync. No fatal, pero no escribe. Fix en `sky/core/audit.py`. |
-| **B-4** | Balance visible tras desconectar cuenta | Probable caché de frontend o total no recalculado. Requiere reproducción. |
+| **B-3** | Audit log — código corregido, pendiente verificación runtime | El bug `$1..$7` fue corregido en `adff285`. Código usa parámetros nombrados. Falta confirmar que asyncpg escribe filas en Postgres real (staging). |
+| **B-4** | Balance post-disconnect | Corregido en `BankConnect.jsx`: `handleDisconnect` ya llama `onSyncComplete?.()`. Pendiente QA visual. |
 | **B-5** | Lentitud general | Sin profiling. **Medir antes de optimizar.** |
 
 ### Deuda abierta / infra
@@ -208,7 +208,7 @@ Fuente: **`docs/estado-del-arte/08_ESTADO_Y_DEUDA.md`** + `backend-python/docs/R
 - Decomisionar `appealing-benevolence` (Node legacy) · limpiar `api-v2.skyfinanzas.com` (502, leftover canary) · warm standby Fly.io (DR Railway).
 
 ### Prioridades sugeridas
-1. **Prep pitch BCI** (objetivo de negocio inmediato) · 2. **B-3** audit (fix trivial) · 3. **B-4** balance · 4. **B-2** rework BCI · 5. **B-1** anti-bot · 6. **B-5** performance · 7. limpiar infra legacy.
+1. **Prep pitch BCI** (objetivo de negocio inmediato) · 2. **B-3** verificación runtime audit · 3. **B-2** rework BCI · 4. **B-1** anti-bot · 5. **B-5** performance · 6. limpiar infra legacy.
 
 ---
 
