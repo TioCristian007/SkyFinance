@@ -519,6 +519,7 @@ export default function BankConnect({ onSyncComplete }) {
       await api.disconnectBank(accountId);
       showToast(`${bankName} desconectado`);
       await loadAccounts();
+      onSyncComplete?.();
     } catch (e) {
       console.error("[BankConnect] handleDisconnect error:", e);
       showToast("Error al desconectar", C.red);
