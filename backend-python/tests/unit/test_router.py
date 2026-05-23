@@ -13,6 +13,7 @@ from sky.ingestion.contracts import (
     AuthenticationError,
     BankCredentials,
     CanonicalMovement,
+    CircuitOpenError,
     DataSource,
     IngestionCapabilities,
     IngestionResult,
@@ -215,6 +216,56 @@ async def test_unknown_source_id_skipped(fake_redis: fakeredis.FakeAsyncRedis) -
     result = await router.ingest("bchile", "user-1", CREDS)
     assert result.source_identifier == "scraper.bchile"
     assert src_bchile.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_circuit_open_sole_source_errors_registered(
+    fake_redis: fakeredis.FakeAsyncRedis,
+) -> None:
+    """Un único proveedor con circuito OPEN → AllSourcesFailedError con CircuitOpenError en errors."""
+    src = FakeSource("scraper.bchile", ["bchile"], result=make_result("scraper.bchile"))
+
+    cb_config = CircuitBreakerConfig(failure_threshold=1, failure_window_seconds=60,
+                                     open_duration_seconds=300, half_open_success_threshold=1)
+    cb = CircuitBreaker(fake_redis, "scraper.bchile", cb_config)
+    await cb.record_failure()
+    assert not await cb.is_available()
+
+    router = make_router(
+        {"scraper.bchile": src},
+        [RoutingRule(bank_id="bchile", source_chain=["scraper.bchile"])],
+        fake_redis,
+    )
+    with pytest.raises(AllSourcesFailedError) as exc_info:
+        await router.ingest("bchile", "user-1", CREDS)
+
+    err = exc_info.value
+    assert len(err.errors) == 1
+    source_id, cause = err.errors[0]
+    assert source_id == "scraper.bchile"
+    assert isinstance(cause, CircuitOpenError)
+    assert src.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_unregistered_source_registers_error(
+    fake_redis: fakeredis.FakeAsyncRedis,
+) -> None:
+    """source_id no registrado en sources → AllSourcesFailedError con RecoverableIngestionError."""
+    router = make_router(
+        {},   # sin sources registradas
+        [RoutingRule(bank_id="bchile", source_chain=["scraper.bchile"])],
+        fake_redis,
+    )
+    with pytest.raises(AllSourcesFailedError) as exc_info:
+        await router.ingest("bchile", "user-1", CREDS)
+
+    err = exc_info.value
+    assert len(err.errors) == 1
+    source_id, cause = err.errors[0]
+    assert source_id == "scraper.bchile"
+    assert isinstance(cause, RecoverableIngestionError)
+    assert "proveedor no registrado" in str(cause)
 
 
 @pytest.mark.asyncio

@@ -223,13 +223,26 @@ class TwoFactorTimeoutError(RecoverableIngestionError):
     pass
 
 
+class CircuitOpenError(RecoverableIngestionError):
+    """El circuit breaker de la fuente está abierto; no se intentó."""
+
+
 class AllSourcesFailedError(IngestionError):
     """Toda la cadena de providers falló."""
+
     def __init__(self, bank_id: str, errors: list[tuple[str, Exception]]):
         self.bank_id = bank_id
         self.errors = errors
-        sources = ", ".join(s for s, _ in errors)
-        super().__init__(f"Todos los proveedores fallaron para {bank_id}: {sources}")
+        if errors:
+            detail = "; ".join(f"{src}: {type(e).__name__}: {e}" for src, e in errors)
+        else:
+            detail = "sin proveedores disponibles"
+        super().__init__(f"Todos los proveedores fallaron para {bank_id}: {detail}")
+
+    @property
+    def primary_cause(self) -> Exception | None:
+        """Última excepción de la cadena (el proveedor más lejos intentado), o None."""
+        return self.errors[-1][1] if self.errors else None
 
 
 # ── build_external_id — ÚNICO en todo el sistema ─────────────────────────────

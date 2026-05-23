@@ -26,6 +26,7 @@ from sky.ingestion.contracts import (
     AllSourcesFailedError,
     AuthenticationError,
     BankCredentials,
+    CircuitOpenError,
     DataSource,
     IngestionResult,
     OAuthTokens,
@@ -115,12 +116,17 @@ class IngestionRouter:
             source = self._sources.get(source_id)
             if source is None:
                 logger.warning("source_not_found", source_id=source_id, bank_id=bank_id)
+                errors.append((
+                    source_id,
+                    RecoverableIngestionError(f"proveedor no registrado: {source_id}"),
+                ))
                 continue
 
             # Check circuit breaker
             cb = CircuitBreaker(self._redis, source_id)
             if not await cb.is_available():
                 logger.info("circuit_open_skipping", source_id=source_id)
+                errors.append((source_id, CircuitOpenError(f"circuito abierto para {source_id}")))
                 continue
 
             # Check rate limiter (skip, no fail)

@@ -8,8 +8,11 @@ La misma transacción real SIEMPRE debe producir el mismo id.
 from datetime import date
 
 from sky.ingestion.contracts import (
+    AllSourcesFailedError,
     CanonicalMovement,
+    CircuitOpenError,
     MovementSource,
+    RecoverableIngestionError,
     SourceKind,
     build_external_id,
 )
@@ -46,6 +49,40 @@ class TestBuildExternalId:
         eid = build_external_id("bchile", date(2026, 4, 15), -4890, "TEST")
         # bank_id + "_" + 16 hex chars
         assert len(eid) == len("bchile_") + 16
+
+
+class TestAllSourcesFailedError:
+    def test_str_includes_source_type_and_message(self) -> None:
+        cause = RecoverableIngestionError("Scraper falló: X")
+        exc = AllSourcesFailedError("bchile", [("scraper.bchile", cause)])
+        s = str(exc)
+        assert "scraper.bchile" in s
+        assert "RecoverableIngestionError" in s
+        assert "Scraper falló: X" in s
+
+    def test_primary_cause_returns_last_error(self) -> None:
+        e1 = RecoverableIngestionError("first")
+        e2 = CircuitOpenError("second")
+        exc = AllSourcesFailedError("bchile", [("src.a", e1), ("src.b", e2)])
+        assert exc.primary_cause is e2
+
+    def test_primary_cause_empty_errors_returns_none(self) -> None:
+        exc = AllSourcesFailedError("bchile", [])
+        assert exc.primary_cause is None
+
+    def test_empty_errors_detail_message(self) -> None:
+        exc = AllSourcesFailedError("bchile", [])
+        assert "sin proveedores disponibles" in str(exc)
+
+    def test_multiple_errors_in_str(self) -> None:
+        exc = AllSourcesFailedError("bchile", [
+            ("src.a", RecoverableIngestionError("a down")),
+            ("src.b", CircuitOpenError("circuito abierto")),
+        ])
+        s = str(exc)
+        assert "src.a" in s
+        assert "src.b" in s
+        assert "CircuitOpenError" in s
 
 
 class TestCanonicalMovement:
