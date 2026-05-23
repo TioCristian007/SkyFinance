@@ -156,11 +156,8 @@ async def test_propose_challenge_no_db_write(
         name="propose_challenge",
         tool_id="tu-1",
         tool_input={
-            "title": "No Uber 2 semanas",
-            "description": "Evita Uber por 14 días.",
-            "target_amount": 50_000,
-            "duration_days": 14,
-            "rationale": "Gastás mucho en transporte.",
+            "challenge_id": "no_uber",
+            "reasoning": "Gastás mucho en transporte.",
         },
     )
     end_resp = _make_text_response("Te propongo este desafío 👆")
@@ -170,8 +167,8 @@ async def test_propose_challenge_no_db_write(
     result = await MrMoney().respond(_USER, "tengo muchos gastos en Uber")
 
     assert isinstance(result, ProposeChallenge)
-    assert result.title == "No Uber 2 semanas"
-    assert result.duration_days == 14
+    assert result.challenge_id == "no_uber"
+    assert result.reasoning == "Gastás mucho en transporte."
     assert mock_client.messages.create.call_count == 2
 
 

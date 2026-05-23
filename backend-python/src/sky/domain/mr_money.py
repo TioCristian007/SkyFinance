@@ -15,6 +15,7 @@ from sky.core.config import settings
 from sky.core.db import get_engine
 from sky.core.logging import get_logger
 from sky.core.metrics import sky_mr_money_tokens
+from sky.domain.challenges import MOCK_CHALLENGES
 from sky.domain.finance import CATEGORY_LABELS, compute_summary, top_categories
 from sky.domain.simulations import compute_projection
 
@@ -68,20 +69,25 @@ MR_MONEY_TOOLS: list[dict[str, Any]] = [
     {
         "name": "propose_challenge",
         "description": (
-            "Propone activar un desafío de ahorro. "
+            "Propone activar uno de los desafíos del catálogo fijo de Sky. "
             "NO lo activa directamente — el usuario debe confirmar. "
-            "Úsala cuando detectas un gasto alto en una categoría o el usuario pide un desafío."
+            "Úsala cuando detectas un gasto alto en una categoría o el usuario pide un desafío. "
+            "Elige el challenge_id más relevante del catálogo."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "title":         {"type": "string",  "description": "Nombre corto del desafío."},
-                "description":   {"type": "string",  "description": "Descripción del desafío en 1-2 frases."},
-                "target_amount": {"type": "integer", "description": "Monto a ahorrar en CLP."},
-                "duration_days": {"type": "integer", "description": "Duración en días."},
-                "rationale":     {"type": "string",  "description": "Por qué este desafío es relevante ahora."},
+                "challenge_id": {
+                    "type": "string",
+                    "enum": [c["id"] for c in MOCK_CHALLENGES],
+                    "description": "ID del desafío del catálogo a proponer.",
+                },
+                "reasoning": {
+                    "type": "string",
+                    "description": "Por qué este desafío es relevante ahora (1-2 frases).",
+                },
             },
-            "required": ["title", "description", "target_amount", "duration_days", "rationale"],
+            "required": ["challenge_id", "reasoning"],
         },
         "cache_control": {"type": "ephemeral"},  # cache all tools up to this point
     },
@@ -172,6 +178,7 @@ async def _build_financial_context(user_id: str) -> tuple[str, dict[str, Any]]:
 
 
 def _build_system_prompt(context_text: str) -> str:
+    catalog = "\n".join(f"  - {c['id']}: {c['label']} — {c['desc']}" for c in MOCK_CHALLENGES)
     return f"""Eres Mr. Money, copiloto financiero de Sky.
 
 {context_text}
@@ -179,6 +186,9 @@ def _build_system_prompt(context_text: str) -> str:
 HERRAMIENTAS (úsalas cuando corresponda):
 READ → compute_projection
 WRITE (requieren aprobación del usuario) → propose_challenge
+
+CATÁLOGO DE DESAFÍOS (usa el challenge_id EXACTO en propose_challenge):
+{catalog}
 
 CUÁNDO USARLAS:
 - Usuario pregunta plazos/proyecciones → compute_projection
@@ -318,18 +328,23 @@ class MrMoney:
 
                     elif block.name == "propose_challenge":
                         inp: dict[str, Any] = cast(dict[str, Any], block.input) if isinstance(block.input, dict) else {}
-                        proposals.append(ProposeChallenge(
-                            title=str(inp.get("title", "")),
-                            description=str(inp.get("description", "")),
-                            target_amount=int(inp.get("target_amount", 0)),
-                            duration_days=int(inp.get("duration_days", 0)),
-                            rationale=str(inp.get("rationale", "")),
-                        ))
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": json.dumps({"status": "proposal_queued"}),
-                        })
+                        cid = str(inp.get("challenge_id", ""))
+                        if any(c["id"] == cid for c in MOCK_CHALLENGES):
+                            proposals.append(ProposeChallenge(
+                                challenge_id=cid,
+                                reasoning=str(inp.get("reasoning", "")),
+                            ))
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": json.dumps({"status": "proposal_queued"}),
+                            })
+                        else:
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": json.dumps({"error": f"challenge_id inválido: {cid}"}),
+                            })
                     else:
                         tool_results.append({
                             "type": "tool_result",

@@ -35,13 +35,13 @@ async def chat_endpoint(
         return ChatUnifiedResponse(reply=response.text)
     if isinstance(response, ProposeChallenge):
         return ChatUnifiedResponse(
-            reply=response.rationale,
+            reply=response.reasoning,
             proposals=[{
                 "type": "propose_challenge",
-                "title": response.title,
-                "description": response.description,
-                "target_amount": response.target_amount,
-                "duration_days": response.duration_days,
+                "input": {
+                    "challenge_id": response.challenge_id,
+                    "reasoning": response.reasoning,
+                },
             }],
         )
     if isinstance(response, NavigationResponse):

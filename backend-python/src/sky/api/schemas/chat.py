@@ -18,11 +18,8 @@ class ChatTextResponse(BaseModel):
 
 class ProposeChallenge(BaseModel):
     type: str = "propose_challenge"
-    title: str
-    description: str
-    target_amount: int
-    duration_days: int
-    rationale: str
+    challenge_id: str          # id del catálogo MOCK_CHALLENGES (ej: "no_uber")
+    reasoning: str             # por qué este desafío es relevante ahora
 
 
 class NavigationResponse(BaseModel):
