@@ -44,7 +44,10 @@ async def startup(ctx: dict[str, Any]) -> None:
     ctx["redis"] = redis
 
     # Pool de ARQ para encolar jobs desde dentro de otros jobs
-    ctx["arq_pool"] = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+    ctx["arq_pool"] = await create_pool(
+        RedisSettings.from_dsn(settings.redis_url),
+        default_queue_name="sky:default",
+    )
 
     logger.info("worker_ready", pool_size=settings.browser_pool_size)
 
