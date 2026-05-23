@@ -24,7 +24,9 @@ def _current_period() -> str:
     return f"{d.year}-{str(d.month).zfill(2)}"
 
 
-def calc_challenge_progress(challenge: dict[str, Any], transactions: list[dict[str, Any]]) -> dict[str, Any]:
+def calc_challenge_progress(
+    challenge: dict[str, Any], transactions: list[dict[str, Any]]
+) -> dict[str, Any]:
     """Paridad con calcChallengeProgress() de financeService.js."""
     period = _current_period()
     in_month = [t for t in transactions if str(t.get("date", "")).startswith(period)]
@@ -98,7 +100,10 @@ async def get_challenges(user_id: str) -> dict[str, Any]:
         for ch in MOCK_CHALLENGES if ch["id"] in active_ids
     ]
     completed = [ch for ch in MOCK_CHALLENGES if ch["id"] in completed_ids]
-    available = [ch for ch in MOCK_CHALLENGES if ch["id"] not in active_ids and ch["id"] not in completed_ids]
+    available = [
+        ch for ch in MOCK_CHALLENGES
+        if ch["id"] not in active_ids and ch["id"] not in completed_ids
+    ]
 
     return {"active": active, "completed": completed, "available": available, "points": points}
 
@@ -153,7 +158,10 @@ async def complete_challenge(user_id: str, challenge_id: str) -> dict[str, Any]:
         row = rs.mappings().first()
         total = (row["points"] if row else 0) or 0
 
-    return {"success": True, "challenge": ch, "points_earned": ch["pts"], "total_points": total + ch["pts"]}
+    return {
+        "success": True, "challenge": ch,
+        "points_earned": ch["pts"], "total_points": total + ch["pts"],
+    }
 
 
 async def accept_challenge(user_id: str, challenge_id: str) -> dict[str, Any] | None:

@@ -15,6 +15,8 @@ ignore = ["S101"]
 "src/sky/domain/aria.py" = ["E501"]
 # Mr. Money: tool descriptions y system prompt largo
 "src/sky/domain/mr_money.py" = ["E501"]
+# Challenges: catálogo MOCK_CHALLENGES es una tabla de datos alineada (legibilidad > 100 chars)
+"src/sky/domain/challenges.py" = ["E501"]
 # Tests: decoradores @patch y strings de aserción inevitablemente largos
 "tests/unit/test_aria.py" = ["E501"]
 "tests/unit/test_mr_money.py" = ["E501"]
