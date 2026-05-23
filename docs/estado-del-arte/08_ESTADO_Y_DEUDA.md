@@ -53,6 +53,25 @@ La app se siente lenta. Sin profiling aún. Sospechas: cold-start de Railway, qu
 | **VITE_API_URL** | Reapuntado de `api-v2` (canary muerto) a `api.skyfinanzas.com`. |
 | **Listado bancos** | `SUPPORTED_BANKS` solo expone BChile + BCI. |
 | **SyntaxWarning `\S`** | Docstrings de scripts como raw strings. |
+| **PII en logs scraper** | (2026-05-23) Eliminados dos `logger.info` de debug que registraban RUT, nombre y nº de cuenta a nivel INFO en `bchile_scraper.py`. Doctrina §16. |
+| **Transparencia de errores de sync** | (2026-05-23) `AllSourcesFailedError` conserva la causa; mensaje al usuario por tipo de error; no se reintentan fallos terminales (ARQ). |
+| **propose_challenge roto** | (2026-05-23) La tool generaba desafíos freeform sin `challenge_id`; el frontend esperaba `{type, input:{challenge_id, reasoning}}` y crasheaba. Restaurada la paridad con el catálogo `MOCK_CHALLENGES`. |
+| **Tests de chat rotos** | (2026-05-23) 4 tests de `test_api_chat.py` asertaban el contrato viejo (`type/text/route`) ya reemplazado por `ChatUnifiedResponse`. Actualizados → recuperada la red de cobertura de Mr. Money. |
+| **ruff verde** | (2026-05-23) Limpiadas las 17 violaciones preexistentes (imports muertos, EOF, líneas largas). El gate `ruff check exit 0` ahora se cumple. |
+
+## 🧹 Rastrilleo de deuda menor (2026-05-23) — pendiente
+
+Hallazgos del barrido de calidad. No bloquean, pero se documentan para no acumularse (doctrina §22):
+
+| ID | Item | Nota |
+|---|---|---|
+| **R-1** | Lista de bancos duplicada en 4+ lugares | `SUPPORTED_BANKS`, `DEFAULT_RULES` (8 bancos fantasma que no existen en SUPPORTED_BANKS), `_DEFAULT_ACCOUNT_TYPE` (banking.py), `BANK_LOGOS` (frontend). Agregar un banco obliga a tocar varios sitios → drift. Consolidar a una fuente. |
+| **R-2** | Naming engañoso de BCI | `BCIDirectSource` (archivo `bci_direct.py`) tiene `source_identifier == "scraper.bci"` y BCI es un scraper (no API directa). Renombrar a `BCIScraperSource`/`bci_scraper.py` cuando se haga el rework B-2. |
+| **R-3** | `FalabellaScraperSource` muerto | Se registra en `build_all_sources` pero `falabella` fue removido de `SUPPORTED_BANKS` y el endpoint de conexión lo rechaza. Source + parser son skeletons TODO. Dejar de registrarlo. |
+| **R-4** | `RuntimeWarning: coroutine never awaited` | En la suite de tests (cerca de `test_sync_job`). Un `AsyncMock` sin await; higiene de tests. |
+| **R-5** | Webhooks sin verificación de firma | `webhooks.py`: TODO de validar HMAC-SHA256 nunca implementado. Confirmar que la ruta no haga nada sensible mientras Fintoc no esté cableado. |
+| **R-6** | Sin gate automático | No hay pre-commit/CI que corra `ruff + mypy + pytest`. Por eso ruff y 4 tests llevaban rojos sin detectarse. **Causa raíz de que la deuda se acumule invisible.** |
+| **R-7** | BOM en 3 mensajes de commit | Commits del 2026-05-23 (`docs/fix/feat` del primer batch) tienen un BOM UTF-8 al inicio del subject (artefacto de PowerShell). Cosmético; limpiable solo con rebase. |
 
 ## Deuda de infraestructura
 

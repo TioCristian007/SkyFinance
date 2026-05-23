@@ -40,7 +40,7 @@ Documentación **modular**. Este índice da el panorama; cada sección profundiz
 **Estado técnico (mayo 2026)**:
 - Backend migrado de Node.js a **Python 3.12 (FastAPI + ARQ + Playwright)**. Las 13 fases de migración cerradas; cutover completo. Node archivado.
 - Producción viva: `app.skyfinanzas.com` (frontend React) + `api.skyfinanzas.com` (API Python), sobre Railway + Supabase + Anthropic.
-- ~1.283 transacciones reales procesadas. Categorización en 3 capas funcionando. 359 tests automatizados.
+- ~1.283 transacciones reales procesadas. Categorización en 3 capas funcionando. 376 tests automatizados.
 
 **Lo que funciona**: ingesta canónica, categorización, Mr. Money, ARIA, metas/desafíos, cifrado AES-256-GCM, RLS, audit log, data export Ley 19.628.
 

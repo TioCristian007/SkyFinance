@@ -102,7 +102,7 @@ sky_OFFICIAL/
 │   │   ├── api/                 ← FastAPI: main + jwt_auth + routers/* + schemas/* (implementados)
 │   │   ├── worker/              ← ARQ: main + jobs/* + banking_sync (implementados)
 │   │   └── domain/              ← Mr. Money, ARIA, finance, categorizer (implementados)
-│   ├── tests/                   ← 359 tests (unit verde + integration + parity)
+│   ├── tests/                   ← 376 tests (unit verde + integration + parity)
 │   ├── scripts/                 ← smoke_router, test_*_scraper, verify_encryption_compat, rekey_*, audit_rls_policies
 │   ├── migrations/              ← SQL versionadas
 │   ├── docs/                    ← referencia operativa durable + archive/ (histórico de las 13 fases)
@@ -274,7 +274,7 @@ No hay "cierre de fase" (las 13 fases ya cerraron; sus planes viven en `backend-
 
 1. `ruff check src/sky/ tests/`
 2. `mypy src/sky/`
-3. `pytest tests/ -v` (359 tests; cobertura en el módulo tocado)
+3. `pytest tests/ -v` (376 tests; cobertura en el módulo tocado)
 4. Smoke contra Redis local si tocas ingestión/routing.
 5. `uvicorn` arranca + `/api/health` responde 200 si tocas la API.
 6. Si hay migración SQL: `audit_rls_policies.py` verde + aplicar en staging antes que prod.
