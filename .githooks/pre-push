@@ -1,0 +1,21 @@
+#!/bin/sh
+# Gate de calidad de Sky. Bloquea el push si ruff/mypy/pytest fallan.
+# Emergencia (saltar gate, bajo tu responsabilidad): SKY_SKIP_GATE=1 git push
+set -e
+
+if [ "$SKY_SKIP_GATE" = "1" ]; then
+  echo "[pre-push] SKY_SKIP_GATE=1 → gate OMITIDO"
+  exit 0
+fi
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT/backend-python" || exit 1
+
+if   [ -x ".venv/Scripts/python.exe" ]; then PY=".venv/Scripts/python.exe"
+elif [ -x ".venv/bin/python" ];        then PY=".venv/bin/python"
+else PY="python"; fi
+
+echo "[pre-push] ruff..."   && "$PY" -m ruff check src/sky/ tests/
+echo "[pre-push] mypy..."   && "$PY" -m mypy src/sky/
+echo "[pre-push] pytest..." && "$PY" -m pytest tests/ -q
+echo "[pre-push] OK ✓ — push permitido"
