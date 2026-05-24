@@ -1,7 +1,6 @@
 """sky.api.schemas.challenges — Schemas Pydantic de desafíos."""
 from __future__ import annotations
 
-from typing import Any
 from pydantic import BaseModel
 
 

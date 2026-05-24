@@ -16,7 +16,6 @@ Uso en routers:
 """
 from __future__ import annotations
 
-import httpx
 import jwt
 from fastapi import Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
