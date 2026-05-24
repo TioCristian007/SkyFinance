@@ -27,6 +27,15 @@ from sky.worker.banking_sync import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _disable_aria_fireforget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R-4: estos tests no verifican ARIA. Sin esto, el success-path dispara
+    `asyncio.create_task(_track_aria_events(...))` y, al cerrarse el event loop
+    del test, queda una corutina AsyncMock sin await (RuntimeWarning)."""
+    from sky.worker import banking_sync
+    monkeypatch.setattr(banking_sync.settings, "sync_aria_enabled", False)
+
+
 @pytest.fixture
 def fake_router() -> MagicMock:
     r = MagicMock()
