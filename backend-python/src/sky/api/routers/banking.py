@@ -19,7 +19,7 @@ from sky.core.config import settings
 from sky.core.db import get_engine
 from sky.core.encryption import encrypt
 from sky.core.logging import get_logger
-from sky.ingestion.sources import SUPPORTED_BANKS
+from sky.ingestion.sources import SUPPORTED_BANKS, account_type_for
 
 logger = get_logger("api.banking")
 router = APIRouter(prefix="/api/banking", tags=["banking"])
@@ -75,16 +75,6 @@ async def sync_all_endpoint(
     return SyncAllResponse(started=True, job_id=job.job_id)
 
 
-_DEFAULT_ACCOUNT_TYPE: dict[str, str] = {
-    "bancoestado": "CuentaRUT",
-    "bchile":      "Cta. Corriente",
-    "santander":   "Cta. Corriente",
-    "bci":         "Cta. Vista",
-    "falabella":   "CMR Cuenta",
-    "itau":        "Cta. Corriente",
-    "scotiabank":  "Cta. Corriente",
-}
-
 
 @router.get("/accounts")
 async def list_accounts(
@@ -135,7 +125,7 @@ async def list_accounts(
             "status":        str(r["status"] or "active"),
             "syncCount":     int(r["sync_count"] or 0),
             "minutesAgo":    minutes_ago,
-            "accountType":   _DEFAULT_ACCOUNT_TYPE.get(bank_id, "Cuenta"),
+            "accountType":   account_type_for(bank_id),
             "last4":         None,
         })
 

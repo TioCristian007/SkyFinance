@@ -11,21 +11,12 @@ from sky.api.deps import require_user_id
 from sky.core.db import get_engine
 from sky.core.logging import get_logger
 from sky.domain.finance import compute_summary
-from sky.ingestion.sources import SUPPORTED_BANKS
+from sky.ingestion.sources import SUPPORTED_BANKS, account_type_for
 
 logger = get_logger("api.summary")
 router = APIRouter(prefix="/api/summary", tags=["summary"])
 
 _BANK_META: dict[str, dict[str, object]] = {b["id"]: b for b in SUPPORTED_BANKS}
-_DEFAULT_ACCOUNT_TYPE: dict[str, str] = {
-    "bancoestado": "CuentaRUT",
-    "bchile":      "Cta. Corriente",
-    "santander":   "Cta. Corriente",
-    "bci":         "Cta. Vista",
-    "falabella":   "CMR Cuenta",
-    "itau":        "Cta. Corriente",
-    "scotiabank":  "Cta. Corriente",
-}
 
 
 @router.get("")
@@ -89,7 +80,7 @@ async def get_summary(
             "status":        str(r["status"] or "active"),
             "syncCount":     int(r["sync_count"] or 0),
             "minutesAgo":    minutes_ago,
-            "accountType":   _DEFAULT_ACCOUNT_TYPE.get(bank_id, "Cuenta"),
+            "accountType":   account_type_for(bank_id),
             "last4":         None,
         })
 

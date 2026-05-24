@@ -21,16 +21,13 @@ from sky.ingestion.routing.router import RoutingRule
 logger = get_logger("routing_rules")
 
 
-# Bootstrap fallback. Mantener sincronizado con SUPPORTED_BANKS.
+# Bootstrap fallback. La autoridad real es public.ingestion_routing_rules (§14):
+# agregar/cambiar routing = UPDATE a esa tabla, sin redeploy.
+# Este fallback solo se usa cuando la DB no responde; debe mantenerse en sync
+# con las sources registradas en build_all_sources() (hoy: bchile + bci).
 DEFAULT_RULES: list[RoutingRule] = [
-    RoutingRule(bank_id="bchile",      source_chain=["scraper.bchile"]),
-    RoutingRule(bank_id="falabella",   source_chain=["scraper.falabella"]),
-    RoutingRule(bank_id="bci",         source_chain=["scraper.bci"]),
-    RoutingRule(bank_id="santander",   source_chain=["scraper.santander"]),
-    RoutingRule(bank_id="bancoestado", source_chain=["scraper.bancoestado"]),
-    RoutingRule(bank_id="itau",        source_chain=["scraper.itau"]),
-    RoutingRule(bank_id="scotiabank",  source_chain=["scraper.scotiabank"]),
-    RoutingRule(bank_id="mercadopago", source_chain=["mercadopago.api"]),
+    RoutingRule(bank_id="bchile", source_chain=["scraper.bchile"]),
+    RoutingRule(bank_id="bci",    source_chain=["scraper.bci"]),
 ]
 
 

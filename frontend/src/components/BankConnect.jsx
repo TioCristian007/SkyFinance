@@ -34,7 +34,9 @@ const is2FAWaiting = (acc) =>
 const isSyncInFlight = (acc) =>
   acc.status === "syncing" || acc.status === "waiting_2fa";
 
-// Logos reales de bancos chilenos
+// Referencias a assets visuales (logos PNG + color de fondo). Solo para render.
+// La fuente de datos del catálogo de bancos (id, name, status, etc.) es el
+// backend: GET /api/banking/banks → consumido via getSupportedBanks() en api.js.
 const BANK_LOGOS = {
   "Falabella":    { src: "/assets/banks/falabella.png",   bg: "#2D6B2D" },
   "de Chile":     { src: "/assets/banks/banco-chile.png", bg: "#1A237E" },

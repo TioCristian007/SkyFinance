@@ -19,10 +19,24 @@ from sky.ingestion.contracts import DataSource
 
 logger = get_logger("sources_factory")
 
-SUPPORTED_BANKS = [
-    {"id": "bchile", "name": "Banco de Chile", "icon": "🏦", "status": "active",  "has_2fa": True},
-    {"id": "bci",    "name": "BCI",            "icon": "🏦", "status": "pending", "has_2fa": True},
+SUPPORTED_BANKS: list[dict[str, object]] = [
+    {
+        "id": "bchile", "name": "Banco de Chile", "icon": "🏦",
+        "status": "active", "has_2fa": True, "account_type": "Cta. Corriente",
+    },
+    {
+        "id": "bci", "name": "BCI", "icon": "🏦",
+        "status": "pending", "has_2fa": True, "account_type": "Cta. Vista",
+    },
 ]
+
+
+def account_type_for(bank_id: str) -> str:
+    """Tipo de cuenta por banco; fallback 'Cuenta' para ids desconocidos."""
+    for bank in SUPPORTED_BANKS:
+        if bank["id"] == bank_id:
+            return str(bank["account_type"])
+    return "Cuenta"
 
 
 def build_all_sources(*, include_browser_sources: bool) -> dict[str, DataSource]:
