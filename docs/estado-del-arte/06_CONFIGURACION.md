@@ -66,7 +66,7 @@ Centralizadas en `sky.core.config:Settings` (pydantic-settings). Fail-fast: si f
 
 ## CI / calidad
 
-- Gates por cambio: `ruff check`, `mypy`, `pytest` (376 tests). `asyncio_mode=auto`. `fakeredis[lua]` para tests de Redis.
+- Gates por cambio: `ruff check`, `mypy`, `pytest` (386 tests). `asyncio_mode=auto`. `fakeredis[lua]` para tests de Redis.
 - RLS audit antes de cada migración SQL: `python scripts/audit_rls_policies.py` (exit 1 bloquea deploy).
 
 ## Comandos comunes (PowerShell, Windows)

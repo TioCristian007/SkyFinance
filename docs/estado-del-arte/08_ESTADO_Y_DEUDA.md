@@ -59,18 +59,18 @@ La app se siente lenta. Sin profiling aún. Sospechas: cold-start de Railway, qu
 | **Tests de chat rotos** | (2026-05-23) 4 tests de `test_api_chat.py` asertaban el contrato viejo (`type/text/route`) ya reemplazado por `ChatUnifiedResponse`. Actualizados → recuperada la red de cobertura de Mr. Money. |
 | **ruff verde** | (2026-05-23) Limpiadas las 17 violaciones preexistentes (imports muertos, EOF, líneas largas). El gate `ruff check exit 0` ahora se cumple. |
 
-## 🧹 Rastrilleo de deuda menor (2026-05-23) — pendiente
+## 🧹 Rastrilleo de deuda menor (2026-05-23)
 
 Hallazgos del barrido de calidad. No bloquean, pero se documentan para no acumularse (doctrina §22):
 
 | ID | Item | Nota |
 |---|---|---|
-| **R-1** | Lista de bancos duplicada en 4+ lugares | `SUPPORTED_BANKS`, `DEFAULT_RULES` (8 bancos fantasma que no existen en SUPPORTED_BANKS), `_DEFAULT_ACCOUNT_TYPE` (banking.py), `BANK_LOGOS` (frontend). Agregar un banco obliga a tocar varios sitios → drift. Consolidar a una fuente. |
+| ✅ **R-1** | ~~Lista de bancos duplicada en 4+ lugares~~ | **Cerrado 2026-05-23.** `SUPPORTED_BANKS` (incl. `account_type`) es la fuente única. `_DEFAULT_ACCOUNT_TYPE` eliminado de `banking.py` y `summary.py`. `DEFAULT_RULES` alineado a bchile+bci. |
 | **R-2** | Naming engañoso de BCI | `BCIDirectSource` (archivo `bci_direct.py`) tiene `source_identifier == "scraper.bci"` y BCI es un scraper (no API directa). Renombrar a `BCIScraperSource`/`bci_scraper.py` cuando se haga el rework B-2. |
 | **R-3** | `FalabellaScraperSource` muerto | Se registra en `build_all_sources` pero `falabella` fue removido de `SUPPORTED_BANKS` y el endpoint de conexión lo rechaza. Source + parser son skeletons TODO. Dejar de registrarlo. |
 | **R-4** | `RuntimeWarning: coroutine never awaited` | En la suite de tests (cerca de `test_sync_job`). Un `AsyncMock` sin await; higiene de tests. |
 | **R-5** | Webhooks sin verificación de firma | `webhooks.py`: TODO de validar HMAC-SHA256 nunca implementado. Confirmar que la ruta no haga nada sensible mientras Fintoc no esté cableado. |
-| **R-6** | Sin gate automático | No hay pre-commit/CI que corra `ruff + mypy + pytest`. Por eso ruff y 4 tests llevaban rojos sin detectarse. **Causa raíz de que la deuda se acumule invisible.** |
+| ✅ **R-6** | ~~Sin gate automático~~ | **Cerrado 2026-05-23.** `.githooks/pre-push` corre ruff+mypy+pytest antes de cada push. Activar con `git config core.hooksPath .githooks`. Script manual: `backend-python/scripts/check_gates.ps1`. |
 | **R-7** | BOM en 3 mensajes de commit | Commits del 2026-05-23 (`docs/fix/feat` del primer batch) tienen un BOM UTF-8 al inicio del subject (artefacto de PowerShell). Cosmético; limpiable solo con rebase. |
 
 ## Deuda de infraestructura
