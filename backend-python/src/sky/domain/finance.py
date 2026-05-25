@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+NON_CONSUMPTION: frozenset[str] = frozenset({"transfer", "savings", "debt_payment"})
+
 CATEGORY_LABELS: dict[str, str] = {
     "income": "Ingresos",
     "food": "Alimentación",
@@ -48,6 +50,7 @@ def compute_summary(
     """
     income = 0
     expenses = 0
+    total_outflow = 0
     by_category: dict[str, int] = {}
 
     for tx in transactions:
@@ -59,16 +62,18 @@ def compute_summary(
         elif amount < 0:
             abs_amount = abs(amount)
             if category != "income":
-                expenses += abs_amount
-                by_category[category] = by_category.get(category, 0) + abs_amount
+                total_outflow += abs_amount
+                if category not in NON_CONSUMPTION:
+                    expenses += abs_amount
+                    by_category[category] = by_category.get(category, 0) + abs_amount
 
     return FinancialSummary(
-        balance=income - expenses,
+        balance=income - total_outflow,
         income=income,
         expenses=expenses,
-        savings_rate=compute_savings_rate(income, expenses),
+        savings_rate=compute_savings_rate(income, total_outflow),
         by_category=by_category,
-        net_flow=income - expenses,
+        net_flow=income - total_outflow,
     )
 
 

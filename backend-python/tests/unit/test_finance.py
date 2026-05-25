@@ -2,6 +2,7 @@
 
 from sky.domain.finance import (
     CATEGORY_LABELS,
+    NON_CONSUMPTION,
     FinancialSummary,
     compute_savings_rate,
     compute_summary,
@@ -107,6 +108,62 @@ class TestComputeSummary:
     def test_returns_financial_summary_dataclass(self) -> None:
         s = compute_summary([])
         assert isinstance(s, FinancialSummary)
+
+
+class TestNonConsumptionExclusion:
+    """Transfer/savings/debt_payment excluidos de expenses pero cuentan en net_flow."""
+
+    def test_non_consumption_constant_contains_expected_keys(self) -> None:
+        assert {"transfer", "savings", "debt_payment"} == NON_CONSUMPTION
+
+    def test_transfer_excluded_from_expenses_and_by_category(self) -> None:
+        txs = [{"amount": -30_000, "category": "transfer"}]
+        s = compute_summary(txs)
+        assert s.expenses == 0
+        assert "transfer" not in s.by_category
+
+    def test_savings_excluded_from_expenses_and_by_category(self) -> None:
+        txs = [{"amount": -20_000, "category": "savings"}]
+        s = compute_summary(txs)
+        assert s.expenses == 0
+        assert "savings" not in s.by_category
+
+    def test_debt_payment_excluded_from_expenses_and_by_category(self) -> None:
+        txs = [{"amount": -15_000, "category": "debt_payment"}]
+        s = compute_summary(txs)
+        assert s.expenses == 0
+        assert "debt_payment" not in s.by_category
+
+    def test_non_consumption_counted_in_net_flow_and_balance(self) -> None:
+        txs = [
+            {"amount": 1_000_000, "category": "income"},
+            {"amount": -200_000,  "category": "food"},
+            {"amount": -100_000,  "category": "transfer"},
+            {"amount":  -50_000,  "category": "savings"},
+            {"amount":  -50_000,  "category": "debt_payment"},
+        ]
+        s = compute_summary(txs)
+        # expenses solo cuenta consumo (food)
+        assert s.expenses == 200_000
+        assert set(s.by_category.keys()) == {"food"}
+        # net_flow y balance cuentan TODOS los egresos
+        total_out = 200_000 + 100_000 + 50_000 + 50_000
+        assert s.net_flow == 1_000_000 - total_out
+        assert s.balance  == 1_000_000 - total_out
+        # savings_rate basada en total_outflow
+        assert abs(s.savings_rate - (1_000_000 - total_out) / 1_000_000) < 1e-9
+
+    def test_consumption_categories_unaffected(self) -> None:
+        txs = [
+            {"amount": 500_000, "category": "income"},
+            {"amount": -80_000, "category": "food"},
+            {"amount": -40_000, "category": "transport"},
+        ]
+        s = compute_summary(txs)
+        assert s.expenses == 120_000
+        assert s.by_category == {"food": 80_000, "transport": 40_000}
+        assert s.net_flow == 380_000
+        assert s.balance  == 380_000
 
 
 class TestTopCategories:

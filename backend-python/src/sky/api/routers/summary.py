@@ -104,7 +104,7 @@ async def get_summary(
 
     return {
         "summary": {
-            "balance":          fin.income - fin.expenses,
+            "balance":          fin.net_flow,
             "income":           fin.income,
             "expenses":         fin.expenses,
             "savingsRate":      savings_rate,

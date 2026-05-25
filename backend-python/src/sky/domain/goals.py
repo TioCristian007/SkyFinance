@@ -54,7 +54,7 @@ async def _get_monthly_capacity(user_id: str) -> int:
         )
         txs: list[dict[str, Any]] = [dict(r) for r in rs.mappings().all()]
     summary = compute_summary(txs)
-    return int(max(0, summary.income - summary.expenses))
+    return int(max(0, summary.net_flow))
 
 
 async def get_goals(user_id: str) -> list[dict[str, Any]]:
