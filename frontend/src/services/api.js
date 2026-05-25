@@ -4,7 +4,7 @@
 //
 // BASE_URL:
 //   - Dev local: usa "/api" y el proxy de Vite (vite.config.js) redirige
-//     al backend en http://localhost:3001. Esto evita CORS en dev.
+//     al backend Python en http://127.0.0.1:8000. Esto evita CORS en dev.
 //   - Producción: usa VITE_API_URL (inyectada en build-time por Railway).
 //     Debe apuntar a la URL pública del backend, incluyendo /api al final.
 //     Ej: https://api.skyfinanzas.com/api

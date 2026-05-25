@@ -198,6 +198,22 @@ async def test_no_pii_persisted() -> None:
         assert v != "201.220.10.5", f"ip raw leakeó en field '{k}'"
 
 
+# ── SQL syntax — no ::jsonb con asyncpg ──────────────────────────────────────
+
+async def test_sql_uses_cast_not_postgres_cast_syntax() -> None:
+    """El SQL debe usar CAST(:detail AS jsonb), no :detail::jsonb.
+
+    asyncpg con named params interpreta '::' como el inicio de un bind param y
+    lanza PostgresSyntaxError. Este test blinda la regresión del bug B-3.
+    """
+    engine, conn = _mock_engine()
+    with patch("sky.core.audit.get_engine", return_value=engine):
+        await _call_log_event(action="sync.start", user_id="user-uuid")
+    sql = str(conn.execute.call_args[0][0])
+    assert "::jsonb" not in sql, "SQL usa ::jsonb — rompe asyncpg con named params (bug B-3)"
+    assert "CAST" in sql and "AS jsonb" in sql, "SQL debe usar CAST(:detail AS jsonb)"
+
+
 # ── Fail-safe ────────────────────────────────────────────────────────────────
 
 async def test_log_db_failure_no_raise_and_sentry_notified() -> None:

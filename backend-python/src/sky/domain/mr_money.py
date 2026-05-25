@@ -230,7 +230,15 @@ class MrMoney:
         try:
             return await self._call_anthropic(user_id, message)
         except Exception as exc:
-            logger.warning("mr_money_anthropic_failed", error=str(exc))
+            if isinstance(exc, (anthropic.AuthenticationError, anthropic.APIStatusError)):
+                logger.error(
+                    "mr_money_credentials_error",
+                    error=str(exc),
+                    exc_info=True,
+                    note="Verificar ANTHROPIC_API_KEY — credencial inválida o servicio caído",
+                )
+            else:
+                logger.error("mr_money_anthropic_failed", error=str(exc), exc_info=True)
             return ChatTextResponse(
                 text="Tuve un problema procesando tu consulta. ¿Podés repetir?"
             )

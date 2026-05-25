@@ -11,6 +11,7 @@ Uso:
 
 from functools import lru_cache
 
+from pydantic import ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -46,6 +47,9 @@ class Settings(BaseSettings):
     chrome_path: str = "/usr/bin/chromium"
     browser_pool_size: int = 4
     bchile_2fa_timeout_sec: int = 120
+    browser_headless: bool = True
+    scraper_debug_capture: bool = False
+    scraper_debug_dir: str = ""   # vacío = usa carpeta temp del sistema
 
     # ── Scheduler ─────────────────────────────────────────────────────────
     scheduler_base_interval_hours: float = 1.0
@@ -117,6 +121,24 @@ class Settings(BaseSettings):
     # ── Audit log retención (Fase 12) ────────────────────────────────────────
     # Ajustable sin redeploy si un banco contractualmente exige retención mayor.
     audit_log_retention_days: int = 90
+
+    @field_validator(
+        "anthropic_api_key", "supabase_service_key", "bank_encryption_key", "database_url",
+        mode="before",
+    )
+    @classmethod
+    def _validate_critical_secret_not_empty(cls, v: object, info: ValidationInfo) -> str:
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError(
+                f"El secreto crítico '{info.field_name}' es vacío o solo espacios — "
+                "el servidor no puede arrancar sin él"
+            )
+        if info.field_name == "anthropic_api_key" and not v.startswith("sk-ant"):
+            raise ValueError(
+                "anthropic_api_key debe comenzar con el prefijo 'sk-ant' — "
+                "verificar ANTHROPIC_API_KEY en el entorno"
+            )
+        return v
 
     @property
     def rate_limit_overrides_map(self) -> dict[str, tuple[int, int]]:

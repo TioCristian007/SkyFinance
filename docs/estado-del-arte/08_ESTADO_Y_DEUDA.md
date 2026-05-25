@@ -5,7 +5,7 @@
 > La sección más importante para operar honestamente. Doctrina §22: "la deuda se documenta, no se oculta".
 > Referencia de deuda formal: `backend-python/docs/REMEDIATION_P0_P3.md`.
 
-**Última actualización**: 2026-05-23
+**Última actualización**: 2026-05-25
 
 ---
 
@@ -22,20 +22,27 @@
 ## ❌ Lo que NO funciona / bloqueadores
 
 ### B-1 · Scraping bloqueado desde datacenter (anti-bot) — **crítico arquitectónico**
-BChile está detrás de **Imperva Incapsula**. El scraper headless desde la **IP de datacenter de Railway** es detectado como bot y recibe una página-desafío sin formulario de login → falla con "No se encontró el campo de RUT". Desde IP residencial (laptop, browser visible) funciona. 
-**Implicación**: el scraping en producción es frágil. Para el demo, el camino confiable es local-first (laptop). Fix real: evasión anti-bot (stealth, proxy residencial) — no trivial. **Refuerza la tesis SFA.**
+BChile está detrás de **Imperva Incapsula**. El scraper headless desde la **IP de datacenter de Railway** es detectado como bot y recibe una página-desafío sin formulario de login → falla con "No se encontró el campo de RUT". Desde IP residencial (laptop, browser visible) funciona.
+
+**Causa raíz confirmada**: Incapsula detecta Playwright headless sin stealth (navigator.webdriver expuesto, User-Agent con "HeadlessChrome", fingerprint de Chromium bundled). Sirve challenge JS que bloquea el formulario → `_fill_rut` no encuentra el campo → `RecoverableIngestionError`.
+
+**Palancas agregadas (2026-05-25)**:
+- `browser_headless=True/False` (setting, no redeploy) — permite correr visible para diagnóstico local.
+- Stealth básico en `browser_pool.py`: `--disable-blink-features=AutomationControlled`, User-Agent realista de Chrome/Windows, `navigator.webdriver=undefined` via init_script, intentar `channel="chrome"` (Chrome de sistema, mejor huella).
+- `scraper_debug_capture=True` (setting) + `scraper_debug_dir` — guarda screenshot + HTML en el punto de fallo (sin PII) para diagnosticar qué sirve Incapsula.
+
+**Implicación**: el scraping en producción sigue siendo frágil. Stealth básico puede ayudar pero no es garantía (Incapsula es sofisticado). Para el demo, el camino confiable es local-first (laptop). Fix real arquitectónico: proxy residencial o migración a SFA. **Refuerza la tesis SFA.**
 
 ### B-2 · Scraper BCI roto — dominio cambiado
 `portalpersonas.bci.cl` ya no resuelve (NXDOMAIN desde toda red probada; antes funcionaba). BCI cambió el dominio de su portal. Requiere rework: nuevo dominio + probablemente nuevos selectores y endpoints de API interna. BCI está en `pending`. Sprint propio pendiente.
 
-### B-3 · Auditoría — código corregido, pendiente verificación en runtime
-El bug original (mezcla `:detail::jsonb` named con `$1..$7` posicional) fue corregido en el commit `adff285` (2026-05-10). El INSERT en `sky/core/audit.py` usa parámetros nombrados consistentes (`:event_type`, `:user_hash`, etc.) — confirmado leyendo el código y con grep: **no existen bindings `$1..$7` en ningún archivo de `src/`**.
+### ✅ B-3 · Auditoría — bug de runtime corregido (2026-05-25)
 
-Lo que queda pendiente es verificar en runtime con Postgres real:
-- Confirmar que el driver asyncpg efectivamente escribe filas con `statement_cache_size=0` (configuración de asyncpg usada en el engine).
-- Confirmar que `resource_id` (columna `uuid` en Postgres) acepta el `str` Python que le pasa el código (asyncpg debería hacer el cast, pero no está verificado con filas reales).
+**Bug encontrado**: el INSERT en `sky/core/audit.py` usaba `:detail::jsonb`. Con SQLAlchemy `text()` + asyncpg, el cast `::jsonb` rompe el parseo del bind param nombrado `:detail` → asyncpg lanza `PostgresSyntaxError` en runtime. **Ningún evento de auditoría se escribía en Postgres real** desde el inicio del sistema.
 
-**Estado**: código corregido (no es bloqueador de código); **verificación de runtime pendiente** — correr `log_event(...)` contra Postgres de staging y confirmar fila insertada.
+**Fix aplicado**: `CAST(:detail AS jsonb)` en lugar de `:detail::jsonb`. Un line change quirúrgico. Test de regresión agregado en `tests/unit/test_audit.py` (`test_sql_uses_cast_not_postgres_cast_syntax`) que verifica que el SQL compilado no contiene `::jsonb`.
+
+**Estado**: ✅ corregido y cubierto por test. Verificación de runtime con Postgres de staging sigue siendo recomendable para confirmar que `resource_id uuid` acepta `str` Python vía asyncpg, pero el bug de sintaxis está resuelto.
 
 ### B-4 · Balance visible tras desconectar cuenta
 `handleDisconnect` en `BankConnect.jsx` llamaba `loadAccounts()` (refresca estado interno del componente) pero no llamaba `onSyncComplete?.()`, que es el callback que refresca `bankBalances` en `Sky.jsx`. **Corregido** (2026-05-23): se agregó `onSyncComplete?.()` tras `loadAccounts()`. Verificación visual de QA manual pendiente.
@@ -58,6 +65,10 @@ La app se siente lenta. Sin profiling aún. Sospechas: cold-start de Railway, qu
 | **propose_challenge roto** | (2026-05-23) La tool generaba desafíos freeform sin `challenge_id`; el frontend esperaba `{type, input:{challenge_id, reasoning}}` y crasheaba. Restaurada la paridad con el catálogo `MOCK_CHALLENGES`. |
 | **Tests de chat rotos** | (2026-05-23) 4 tests de `test_api_chat.py` asertaban el contrato viejo (`type/text/route`) ya reemplazado por `ChatUnifiedResponse`. Actualizados → recuperada la red de cobertura de Mr. Money. |
 | **ruff verde** | (2026-05-23) Limpiadas las 17 violaciones preexistentes (imports muertos, EOF, líneas largas). El gate `ruff check exit 0` ahora se cumple. |
+| **audit INSERT roto en runtime (B-3)** | (2026-05-25) `:detail::jsonb` rompía asyncpg con named params → 0 filas escritas. Corregido con `CAST(:detail AS jsonb)`. Test de regresión agregado. |
+| **Mr. Money: logging silencioso en errores Anthropic** | (2026-05-25) `except` usaba `logger.warning` sin traceback. Cambiado a `logger.error(exc_info=True)` con detección explícita de `AuthenticationError`/`APIStatusError`. |
+| **Stealth anti-bot básico en browser_pool** | (2026-05-25) `--disable-blink-features=AutomationControlled`, User-Agent realista, `navigator.webdriver=undefined`. Palancas `browser_headless` + `scraper_debug_capture`. |
+| **Validators fail-fast en Settings** | (2026-05-25) `field_validator` en pydantic v2 para secrets críticos: vacío/espacios → error al arrancar. `anthropic_api_key` valida además prefijo `sk-ant`. |
 
 ## 🧹 Rastrilleo de deuda menor (2026-05-23)
 
@@ -95,9 +106,9 @@ Hallazgos del barrido de calidad. No bloquean, pero se documentan para no acumul
 ## Prioridades sugeridas (orden)
 
 1. **Prep del pitch BCI** (objetivo de negocio inmediato — ver `Documentacion_Externa_Reuniones_Bancos/`).
-2. **B-3** verificación de runtime (log_event contra Postgres staging).
+2. **B-3** ✅ cerrado — correr `log_event(...)` contra Postgres staging para confirmar que `resource_id uuid` acepta `str` (asyncpg cast). Low-effort, 10 min.
 3. **B-4** ~~balance post-disconnect~~ — código corregido; pendiente QA visual.
 4. **B-2** rework scraper BCI (sprint propio).
-5. **B-1** resiliencia anti-bot datacenter (arquitectónico, mediano plazo).
+5. **B-1** resiliencia anti-bot datacenter — stealth básico agregado; evaluar si es suficiente o se necesita proxy residencial.
 6. **B-5** performance (profiling primero).
 7. Decomisionar Node legacy + limpiar `api-v2`.

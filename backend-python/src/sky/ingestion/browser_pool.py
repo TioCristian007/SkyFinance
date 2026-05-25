@@ -40,23 +40,39 @@ class BrowserPool:
             return
         self._playwright = await async_playwright().start()
 
-        launch_kwargs: dict = {
-            "headless": self._headless,
-            "args": [
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--disable-extensions",
-            ],
-        }
-        # Solo pasar executable_path si está configurado Y el archivo existe.
-        # Si no, Playwright usa su propio Chromium (instalado con `playwright install`).
-        if settings.chrome_path and os.path.exists(settings.chrome_path):
-            launch_kwargs["executable_path"] = settings.chrome_path
+        base_args = [
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--disable-extensions",
+            "--disable-blink-features=AutomationControlled",
+        ]
 
-        self._browser = await self._playwright.chromium.launch(**launch_kwargs)
+        # Intentar Chrome de canal instalado (mejor huella anti-bot); fallback a Chromium bundled.
+        try:
+            self._browser = await self._playwright.chromium.launch(
+                channel="chrome",
+                headless=self._headless,
+                args=base_args,
+            )
+            logger.info(
+                "browser_pool_started",
+                pool_size=self._pool_size, headless=self._headless, channel="chrome",
+            )
+        except Exception:
+            launch_kwargs: dict = {
+                "headless": self._headless,
+                "args": base_args,
+            }
+            if settings.chrome_path and os.path.exists(settings.chrome_path):
+                launch_kwargs["executable_path"] = settings.chrome_path
+            self._browser = await self._playwright.chromium.launch(**launch_kwargs)
+            logger.info(
+                "browser_pool_started",
+                pool_size=self._pool_size, headless=self._headless, channel="chromium-bundled",
+            )
+
         self._started = True
-        logger.info("browser_pool_started", pool_size=self._pool_size, headless=self._headless)
 
     async def stop(self) -> None:
         if self._browser:
@@ -81,6 +97,15 @@ class BrowserPool:
                 viewport={"width": 1280, "height": 720},
                 locale="es-CL",
                 timezone_id="America/Santiago",
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+            )
+            # Enmascarar navigator.webdriver para evadir detección básica de headless.
+            await context.add_init_script(
+                "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})"
             )
             try:
                 yield context
@@ -95,7 +120,7 @@ _pool: BrowserPool | None = None
 def get_browser_pool() -> BrowserPool:
     global _pool
     if _pool is None:
-        _pool = BrowserPool()
+        _pool = BrowserPool(headless=settings.browser_headless)
     return _pool
 
 def set_browser_pool(pool: BrowserPool) -> None:

@@ -197,9 +197,9 @@ Fuente: **`docs/estado-del-arte/08_ESTADO_Y_DEUDA.md`** + `backend-python/docs/R
 ### Bloqueadores activos
 | ID | Item | Nota |
 |---|---|---|
-| **B-1** | Scraping bloqueado desde datacenter (anti-bot Incapsula en BChile) | Funciona desde IP residencial, no desde Railway. Crítico arquitectónico → refuerza tesis SFA. |
+| **B-1** | Scraping bloqueado desde datacenter (anti-bot Incapsula en BChile) | Funciona desde IP residencial, no desde Railway. Stealth básico agregado (2026-05-25): `--disable-blink-features=AutomationControlled`, UA realista, `navigator.webdriver=undefined`, palancas `browser_headless`/`scraper_debug_capture`. No garantizado vs Incapsula sofisticado. Crítico arquitectónico → refuerza tesis SFA. |
 | **B-2** | Scraper BCI roto — dominio cambiado | `portalpersonas.bci.cl` ya no resuelve. Requiere rework (sprint propio). |
-| **B-3** | Audit log — código corregido, pendiente verificación runtime | El bug `$1..$7` fue corregido en `adff285`. Código usa parámetros nombrados. Falta confirmar que asyncpg escribe filas en Postgres real (staging). |
+| ✅ **B-3** | ~~Audit log roto en runtime~~ — **cerrado 2026-05-25** | `:detail::jsonb` rompía asyncpg con named params → 0 filas escritas. Corregido: `CAST(:detail AS jsonb)`. Test de regresión en `test_audit.py`. Pendiente: verificar runtime con Postgres staging (10 min). |
 | **B-4** | Balance post-disconnect | Corregido en `BankConnect.jsx`: `handleDisconnect` ya llama `onSyncComplete?.()`. Pendiente QA visual. |
 | **B-5** | Lentitud general | Sin profiling. **Medir antes de optimizar.** |
 

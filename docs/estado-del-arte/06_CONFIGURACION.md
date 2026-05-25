@@ -33,6 +33,9 @@ Centralizadas en `sky.core.config:Settings` (pydantic-settings). Fail-fast: si f
 | `CHROME_PATH` | `/usr/bin/chromium` | |
 | `BROWSER_POOL_SIZE` | 4 | |
 | `BCHILE_2FA_TIMEOUT_SEC` | 120 | |
+| `BROWSER_HEADLESS` | `true` | `false` = browser visible, útil para diagnóstico local. Cambio sin redeploy. |
+| `SCRAPER_DEBUG_CAPTURE` | `false` | `true` = guarda screenshot+HTML al fallar `_fill_rut`/`_fill_password` (sin PII). Solo activar en diagnóstico. |
+| `SCRAPER_DEBUG_DIR` | `""` | Directorio para capturas. Vacío = `tempfile.gettempdir()`. |
 | `API_RATE_LIMIT_PER_MINUTE` | 60 | |
 | `IDEMPOTENCY_TTL_SECONDS` | 86400 | 24h |
 | `AUDIT_LOG_RETENTION_DAYS` | 90 | Ajustable sin redeploy. |

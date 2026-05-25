@@ -5,7 +5,7 @@ import os
 os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
 os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key")
 os.environ.setdefault("SUPABASE_SERVICE_KEY", "test-service-key")
-os.environ.setdefault("ANTHROPIC_API_KEY", "test-api-key")
+os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-test-key-00000000000000000000000000")
 os.environ.setdefault("BANK_ENCRYPTION_KEY", "0" * 64)
 os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost:5432/test")
 # TODO #8 fix: REDIS_URL dummy para que pydantic-settings no falle al importar

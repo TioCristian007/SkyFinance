@@ -91,7 +91,7 @@ async def log_event(
                          outcome, detail, ip_hash, user_agent)
                     VALUES
                         (:event_type, :user_hash, :resource_type, :resource_id,
-                         :outcome, :detail::jsonb, :ip_hash, :user_agent)
+                         :outcome, CAST(:detail AS jsonb), :ip_hash, :user_agent)
                 """),
                 {
                     "event_type":    event_type,

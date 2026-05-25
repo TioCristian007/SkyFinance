@@ -26,13 +26,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
+import tempfile
 import traceback
 from datetime import date, datetime
 from typing import Any
 
 from playwright.async_api import Page
 
+from sky.core.config import settings
 from sky.core.logging import get_logger
 from sky.ingestion.browser_pool import get_browser_pool
 from sky.ingestion.contracts import (
@@ -206,11 +209,13 @@ class BChileScraperSource(DataSource):
         clean_rut = re.sub(r"[.\-]", "", rut)
 
         if not await self._fill_rut(page, formatted_rut, clean_rut):
+            await self._capture_debug(page, "fill_rut_failed")
             raise RecoverableIngestionError("No se encontró el campo de RUT")
 
         await asyncio.sleep(0.5)
 
         if not await self._fill_password(page, password):
+            await self._capture_debug(page, "fill_password_failed")
             raise RecoverableIngestionError("No se encontró el campo de clave")
 
         progress("Enviando credenciales...")
@@ -632,6 +637,28 @@ class BChileScraperSource(DataSource):
             seen.add(m.external_id)
             out.append(m)
         return out
+
+    async def _capture_debug(self, page: Page, label: str) -> None:
+        """Captura screenshot + HTML del estado actual si scraper_debug_capture=True.
+
+        Se llama justo antes de lanzar RecoverableIngestionError por campo no encontrado.
+        En ese punto NO se ha llenado RUT ni password, así que no hay PII en la captura.
+        """
+        if not settings.scraper_debug_capture:
+            return
+        try:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            base_dir = settings.scraper_debug_dir or tempfile.gettempdir()
+            stem = f"bchile_{label}_{ts}"
+            screenshot_path = os.path.join(base_dir, f"{stem}.png")
+            html_path = os.path.join(base_dir, f"{stem}.html")
+            await page.screenshot(path=screenshot_path)
+            content = await page.content()
+            with open(html_path, "w", encoding="utf-8") as fh:
+                fh.write(content)
+            logger.info("scraper_debug_captured", screenshot=screenshot_path, html=html_path)
+        except Exception as exc:
+            logger.warning("scraper_debug_capture_failed", error=str(exc))
 
     def _format_rut(self, rut: str) -> str:
         clean = re.sub(r"[.\-]", "", rut).upper()
