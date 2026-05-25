@@ -148,7 +148,7 @@ async def _build_financial_context(user_id: str) -> tuple[str, dict[str, Any]]:
 
     summary = compute_summary(txs)
     cats = top_categories(summary.by_category, limit=5)
-    active_chs = [c for c in challenges if c.get("status") == "active"]
+    active_chs = challenges.get("active", [])
 
     cat_text = "\n".join(
         f"  - {CATEGORY_LABELS.get(c['category'], c['category'])}: {_fmt_clp(c['amount'])}"
@@ -161,7 +161,7 @@ async def _build_financial_context(user_id: str) -> tuple[str, dict[str, Any]]:
     ) or "  sin metas"
 
     chs_text = "\n".join(
-        f"  - \"{c['title']}\""
+        f"  - \"{c['label']}\""
         for c in active_chs
     ) or "  ninguno"
 
@@ -264,10 +264,10 @@ class MrMoney:
         if _CHALLENGE_STATUS_RE.search(msg):
             from sky.domain.challenges import get_challenges
             challenges = await get_challenges(user_id)
-            active = [c for c in challenges if c.get("status") == "active"]
+            active = challenges.get("active", [])
             if not active:
                 return ChatTextResponse(text="No tenés desafíos activos por el momento.")
-            lines = [f"- {c['title']}" for c in active]
+            lines = [f"- {c['label']}" for c in active]
             return ChatTextResponse(text="Tus desafíos activos:\n" + "\n".join(lines))
 
         return None

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from sky.api.schemas.chat import ChatTextResponse, NavigationResponse, ProposeChallenge
-from sky.domain.mr_money import MrMoney
+from sky.domain.mr_money import MrMoney, _build_financial_context
 
 _USER = "user-mm-1"
 _CONTEXT = ("=== CONTEXTO FINANCIERO ===\nRESUMEN: ...", {"summary": MagicMock(), "goals": []})
@@ -96,8 +96,17 @@ async def test_nav_intent_cuentas(mock_get_client: MagicMock) -> None:
     mock_get_client.assert_not_called()
 
 
+_EMPTY_CHALLENGES: dict = {"active": [], "completed": [], "available": [], "points": 0}
+_ACTIVE_CHALLENGES: dict = {
+    "active": [{"id": "no_uber", "label": "Sin Uber 7 días"}],
+    "completed": [],
+    "available": [],
+    "points": 0,
+}
+
+
 @pytest.mark.asyncio
-@patch("sky.domain.challenges.get_challenges", new_callable=AsyncMock, return_value=[])
+@patch("sky.domain.challenges.get_challenges", new_callable=AsyncMock, return_value=_EMPTY_CHALLENGES)
 @patch("sky.domain.mr_money._get_client")
 async def test_challenge_status_no_active(
     mock_get_client: MagicMock, mock_challenges: AsyncMock
@@ -110,11 +119,7 @@ async def test_challenge_status_no_active(
 
 
 @pytest.mark.asyncio
-@patch(
-    "sky.domain.challenges.get_challenges",
-    new_callable=AsyncMock,
-    return_value=[{"title": "No Uber", "status": "active"}],
-)
+@patch("sky.domain.challenges.get_challenges", new_callable=AsyncMock, return_value=_ACTIVE_CHALLENGES)
 @patch("sky.domain.mr_money._get_client")
 async def test_challenge_status_with_active(
     mock_get_client: MagicMock, mock_challenges: AsyncMock
@@ -122,7 +127,7 @@ async def test_challenge_status_with_active(
     result = await MrMoney().respond(_USER, "cómo va mi desafío")
 
     assert isinstance(result, ChatTextResponse)
-    assert "No Uber" in result.text
+    assert "Sin Uber 7 días" in result.text
     mock_get_client.assert_not_called()
 
 
@@ -222,3 +227,32 @@ async def test_anthropic_failure_returns_canned_response(
 
     assert isinstance(result, ChatTextResponse)
     assert "problema" in result.text.lower() or "repetir" in result.text.lower()
+
+
+# ── Regresión BUG-1: get_challenges() devuelve dict, no lista ────────────────
+
+@pytest.mark.asyncio
+@patch(
+    "sky.domain.challenges.get_challenges",
+    new_callable=AsyncMock,
+    return_value=_ACTIVE_CHALLENGES,
+)
+@patch("sky.domain.goals.get_goals", new_callable=AsyncMock, return_value=[])
+@patch(
+    "sky.domain.mr_money._fetch_transactions",
+    new_callable=AsyncMock,
+    return_value=[
+        {"amount": 800_000, "category": "income"},
+        {"amount": -50_000,  "category": "food"},
+    ],
+)
+async def test_build_financial_context_handles_dict_challenges(
+    mock_txs: AsyncMock, mock_goals: AsyncMock, mock_chs: AsyncMock
+) -> None:
+    """_build_financial_context no debe lanzar excepción con el shape real de get_challenges()."""
+    ctx_text, raw = await _build_financial_context("user-reg-test")
+
+    assert "CONTEXTO FINANCIERO" in ctx_text
+    # Verifica que se usó c['label'], no c['title']
+    assert "Sin Uber 7 días" in ctx_text
+    assert isinstance(raw, dict)
