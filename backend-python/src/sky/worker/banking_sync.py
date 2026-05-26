@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
@@ -87,7 +87,7 @@ async def sync_bank_account(
             row = (await conn.execute(
                 text("""
                     SELECT id, user_id, bank_id, encrypted_rut, encrypted_pass,
-                           sync_count, consecutive_errors
+                           sync_count, consecutive_errors, last_sync_at
                       FROM public.bank_accounts
                      WHERE id = :id AND user_id = :uid AND status != 'disconnected'
                 """),
@@ -114,17 +114,18 @@ async def sync_bank_account(
         creds = BankCredentials(rut=rut, password=password)
         bank_id = str(row["bank_id"])
 
-        try:
-            await log_event(
-                action="sync.start",
-                user_id=user_id,
-                resource_type="bank_account",
-                resource_id=bank_account_id,
-                metadata={"bank_id": bank_id},
-            )
+        # Sync incremental: retrocedemos 3 días desde el último sync exitoso para
+        # capturar movimientos que llegan tarde; primer sync usa 90 días de backfill.
+        last_sync_at = row.get("last_sync_at")
+        if last_sync_at is not None:
+            last_sync_date: date = last_sync_at.date() if hasattr(last_sync_at, "date") else last_sync_at
+            since: date = last_sync_date - timedelta(days=3)
+        else:
+            since = date.today() - timedelta(days=90)
 
+        try:
             try:
-                result = await router.ingest(bank_id=bank_id, user_id=user_id, credentials=creds)
+                result = await router.ingest(bank_id=bank_id, user_id=user_id, credentials=creds, since=since)
             except BankAuthError:
                 await _mark_error(bank_account_id, "Credenciales rechazadas por el banco")
                 sky_sync_total.labels(bank_id=bank_id, status="error").inc()

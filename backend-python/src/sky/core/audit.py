@@ -29,16 +29,21 @@ logger = get_logger("audit")
 
 
 # Mapping de "action" (API pública) → (event_type, outcome) en el schema real.
-# Convención: <recurso>.<resultado>. event_type captura la acción base,
-# outcome captura success/failure/etc separadamente para queries de auditoría.
+# Solo valores que existen en los CHECK constraints de public.audit_log:
+#   event_type ∈ {user_created, user_deleted, profile_updated, bank_connected,
+#                 bank_disconnected, bank_sync, credentials_rotated,
+#                 data_export_requested, data_export_delivered, deletion_requested,
+#                 deletion_executed, consent_granted, consent_revoked, admin_access}
+#   outcome    ∈ {success, failure, partial}
+# Acciones no mapeadas → warning + skip INSERT (nunca insertar valores inválidos).
 _ACTION_MAP: dict[str, tuple[str, str]] = {
-    "sync.start":            ("sync",    "started"),
-    "sync.success":          ("sync",    "success"),
-    "sync.error":            ("sync",    "failure"),
-    "account.connected":     ("account", "connected"),
-    "account.disconnected":  ("account", "disconnected"),
-    "key.access":            ("key",     "accessed"),
-    "key.rotation":          ("key",     "rotated"),
+    "sync.success":          ("bank_sync",             "success"),
+    "sync.error":            ("bank_sync",             "failure"),
+    "account.connected":     ("bank_connected",        "success"),
+    "account.disconnected":  ("bank_disconnected",     "success"),
+    "key.access":            ("admin_access",          "success"),
+    "key.rotation":          ("credentials_rotated",   "success"),
+    "export.completed":      ("data_export_delivered", "success"),
 }
 
 
@@ -72,13 +77,18 @@ async def log_event(
     NUNCA incluir PII en metadata: sin rut, password, ni tokens bancarios.
     Audit log es inmutable: solo INSERT, sin UPDATE ni DELETE.
 
-    Acciones críticas registradas en _ACTION_MAP:
-        sync.start, sync.success, sync.error,
+    Acciones válidas (ver _ACTION_MAP):
+        sync.success, sync.error,
         account.connected, account.disconnected,
-        key.access, key.rotation
+        key.access, key.rotation, export.completed
+    Acciones no mapeadas → warning + skip INSERT (no lanza excepción).
     """
     try:
-        event_type, outcome = _ACTION_MAP.get(action, (action, "info"))
+        mapping = _ACTION_MAP.get(action)
+        if mapping is None:
+            logger.warning("audit_unknown_action_skipped", action=action)
+            return
+        event_type, outcome = mapping
         user_hash = _hash(user_id)
         ip_hash = _hash(ip_address)
 
