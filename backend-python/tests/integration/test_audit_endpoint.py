@@ -101,7 +101,7 @@ async def test_get_audit_me_returns_events(client: AsyncClient) -> None:
 async def test_get_audit_me_event_type_filter(client: AsyncClient) -> None:
     engine = _make_engine_for_audit([_AUDIT_ROW], 1)
     with patch("sky.api.routers.audit.get_engine", return_value=engine):
-        resp = await client.get("/api/audit/me?event_type=sync")
+        resp = await client.get("/api/audit/me?event_type=bank_sync")
     assert resp.status_code == 200
     # Verifica que se pasó el filtro al engine (2 llamadas a execute: count + data)
     conn = engine.connect.return_value.__aenter__.return_value

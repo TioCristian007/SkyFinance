@@ -50,6 +50,40 @@ class TestBuildExternalId:
         # bank_id + "_" + 16 hex chars
         assert len(eid) == len("bchile_") + 16
 
+    # ── native_id path ────────────────────────────────────────────────────────
+
+    def test_native_id_deterministic(self):
+        """Mismo native_id → mismo external_id, sin importar fecha/monto/desc."""
+        native = "JUV000708124183:20260526 09:42:37:5670:cargo:1"
+        a = build_external_id("bchile", date(2026, 5, 26), -1000, "PAGO", native_id=native)
+        b = build_external_id("bchile", date(2026, 5, 26), -1000, "PAGO", native_id=native)
+        assert a == b
+
+    def test_native_id_wins_over_other_fields(self):
+        """Con native_id, cambiar fecha/monto/desc no altera el id."""
+        native = "NATIVE-XYZ-123"
+        base = build_external_id("bchile", date(2026, 5, 1), -5000, "DESC A", native_id=native)
+        diff_date = build_external_id("bchile", date(2020, 1, 1), -9999, "DESC B", native_id=native)
+        assert base == diff_date
+
+    def test_native_id_vs_no_native_id_produce_different_ids(self):
+        with_native = build_external_id(
+            "bchile", date(2026, 4, 15), -4890, "STARBUCKS", native_id="ID123"
+        )
+        without = build_external_id("bchile", date(2026, 4, 15), -4890, "STARBUCKS")
+        assert with_native != without
+
+    def test_no_native_id_fallback_with_balance(self):
+        """Sin native_id, distintos balances producen distintos ids."""
+        a = build_external_id("bchile", date(2026, 4, 15), -4890, "STARBUCKS", balance=1_000_000)
+        b = build_external_id("bchile", date(2026, 4, 15), -4890, "STARBUCKS", balance=999_000)
+        assert a != b
+
+    def test_no_native_id_with_same_balance_is_stable(self):
+        a = build_external_id("bchile", date(2026, 4, 15), -4890, "STARBUCKS", balance=500_000)
+        b = build_external_id("bchile", date(2026, 4, 15), -4890, "STARBUCKS", balance=500_000)
+        assert a == b
+
 
 class TestAllSourcesFailedError:
     def test_str_includes_source_type_and_message(self) -> None:

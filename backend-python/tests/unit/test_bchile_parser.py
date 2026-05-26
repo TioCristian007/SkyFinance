@@ -20,11 +20,11 @@ class TestNormalizeDate:
     def test_dd_mm_yyyy_slash(self):
         assert normalize_date("15/04/2026") == date(2026, 4, 15)
 
-    def test_none_returns_today(self):
-        assert normalize_date(None) == date.today()
+    def test_none_returns_none(self):
+        assert normalize_date(None) is None
 
-    def test_empty_returns_today(self):
-        assert normalize_date("") == date.today()
+    def test_empty_returns_none(self):
+        assert normalize_date("") is None
 
     def test_epoch_millis(self):
         # 1712332800000 = 2024-04-05 16:00:00 UTC — el resultado exacto depende del TZ local.
@@ -32,8 +32,14 @@ class TestNormalizeDate:
         result = normalize_date(1712332800000)
         assert isinstance(result, date)
 
-    def test_invalid_returns_today(self):
-        assert normalize_date("foo") == date.today()
+    def test_invalid_returns_none(self):
+        assert normalize_date("foo") is None
+
+    def test_never_returns_today_on_bad_string_input(self):
+        """Entradas inválidas (string o None) deben devolver None, nunca date.today()."""
+        for bad in (None, "", "foo", "99/99/9999"):
+            result = normalize_date(bad)
+            assert result is None, f"normalize_date({bad!r}) devolvió {result!r} en vez de None"
 
 
 class TestParseAmount:
