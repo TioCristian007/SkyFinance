@@ -452,7 +452,7 @@ export default function Sky({ userId, userEmail }) {
       }
     } catch {
       setApiErr(true);
-      addBotMsg(`Tienes ${fmt(summary?.balance ?? 0)} disponibles. ¿En qué te ayudo?`);
+      addBotMsg(`Tienes ${fmt(balance)} disponibles. ¿En qué te ayudo?`);
     } finally {
       setTyping(false);
       inputRef.current?.focus();
@@ -625,8 +625,8 @@ export default function Sky({ userId, userEmail }) {
   const points          = profile?.points          ?? 0;
   const hasBankAccounts = (bankBalances.accounts?.length ?? 0) > 0;
   const totalBankBal    = hasBankAccounts ? bankBalances.totalBalance : 0;
-  // balance: saldo real si hay bancos, proyección si no
-  const balance         = hasBankAccounts ? totalBankBal : (summary?.balance ?? 0);
+  // balance: saldo bancario real si hay bancos, 0 si no (nunca net_flow negativo en el dashboard)
+  const balance         = hasBankAccounts ? totalBankBal : 0;
   const spendingRate    = summary?.spendingRate ?? 0;
   // incomeIsReal: true = ingreso viene de transacciones bancarias reales del mes
   //               false = estimado del rango del perfil (alpha / sin banco)
@@ -879,9 +879,9 @@ export default function Sky({ userId, userEmail }) {
 
                 {/* KPI Row */}
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14 }}>
-                  <KpiCard label="Saldo Total"      value={<span style={$}>{fmtCLP(balance)}</span>}        color={balance >= 0 ? P.green : P.red} sub={hasBankAccounts ? "· bancario real" : "· estimado"} />
-                  <KpiCard label="Ingresos del mes" value={<span style={$}>{fmtCLP(income)}</span>}         color={P.text}  sub={incomeIsReal ? `${txs.filter(t=>t.category==="income").length} depósitos · real` : "· estimado del perfil"} />
-                  <KpiCard label="Gastos del mes"   value={<span style={$}>{fmtCLP(expenses)}</span>}       color={P.red}   sub={`${txs.filter(t=>t.category!=="income").length} transacciones`} />
+                  <KpiCard label="Saldo Total"      value={hasBankAccounts ? <span style={$}>{fmtCLP(balance)}</span> : <span style={{ color: P.text3 }}>—</span>} color={hasBankAccounts ? (balance >= 0 ? P.green : P.red) : P.text3} sub={hasBankAccounts ? "· bancario real" : "Conecta tu banco"} />
+                  <KpiCard label="Ingresos del mes" value={<span style={$}>{fmtCLP(income)}</span>}         color={P.text}  sub={incomeIsReal ? `${summary?.incomeCount ?? 0} depósitos · real` : "· estimado del perfil"} />
+                  <KpiCard label="Gastos del mes"   value={<span style={$}>{fmtCLP(expenses)}</span>}       color={P.red}   sub={`${summary?.expenseCount ?? 0} transacciones`} />
                   <KpiCard label="Tasa de ahorro"   value={<span style={$}>{`${savingsRate}%`}</span>} color={savingsRate >= 20 ? P.green : savingsRate >= 10 ? P.amber : P.red} sub={savingsRate >= 20 ? "Excelente ritmo" : savingsRate >= 10 ? "Ritmo moderado" : "Puedes mejorar"} />
                 </div>
 
@@ -1100,7 +1100,7 @@ export default function Sky({ userId, userEmail }) {
                             display: "flex", flexDirection: "column", gap: 3, minWidth: 140,
                           }}>
                             <div style={{ fontSize: 11, color: P.text2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 120 }}>
-                              {tx.description ?? tx.category}
+                              {tx.merchant || tx.description || tx.category}
                             </div>
                             <div style={{ fontSize: 13, fontWeight: 700, color: isIncome ? P.green : P.text, fontVariantNumeric: "tabular-nums", ...$ }}>
                               {isIncome ? "+" : "−"}{fmtK(Math.abs(tx.amount ?? 0))}

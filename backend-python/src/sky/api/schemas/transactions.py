@@ -13,9 +13,10 @@ class TransactionOut(BaseModel):
     description: str
     raw_description: str
     date: date
-    bank_account_id: str
+    bank_account_id: str | None
     movement_source: str
     categorization_status: str
+    merchant: str | None = None
 
 
 class TransactionListResponse(BaseModel):

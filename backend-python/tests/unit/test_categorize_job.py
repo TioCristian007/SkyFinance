@@ -102,6 +102,36 @@ async def test_categorize_pending_job_fallback_marks_failed(
 @pytest.mark.asyncio
 @patch("sky.worker.jobs.categorize.categorize_movements", new_callable=AsyncMock)
 @patch("sky.worker.jobs.categorize.get_engine")
+async def test_categorize_does_not_overwrite_description(
+    mock_get_engine: MagicMock,
+    mock_categorize: AsyncMock,
+) -> None:
+    """El job NO debe sobreescribir description con el label de categoría (P2)."""
+    row_id = str(uuid4())
+    rows = [{"id": row_id, "raw_description": "STARBUCKS PROVIDENCIA", "amount": -4500}]
+    mock_get_engine.return_value = _make_mock_engine(rows=rows)
+
+    mock_categorize.return_value = [
+        CategorizedItem(
+            idx=0, raw_description="STARBUCKS PROVIDENCIA", merchant_key="starbucks providencia",
+            amount=-4500, category="food", label="Alimentación", source="rule",
+        )
+    ]
+
+    await categorize_pending_job({})
+
+    update_conn = mock_get_engine.return_value.begin.return_value.__aenter__.return_value
+    call_kwargs = update_conn.execute.call_args_list[0][0][1]
+    # El parámetro "label" no debe estar en el dict de params del UPDATE
+    assert "label" not in call_kwargs
+    # category y status sí deben estar
+    assert call_kwargs["cat"] == "food"
+    assert call_kwargs["status"] == "done"
+
+
+@pytest.mark.asyncio
+@patch("sky.worker.jobs.categorize.categorize_movements", new_callable=AsyncMock)
+@patch("sky.worker.jobs.categorize.get_engine")
 async def test_categorize_pending_job_db_error_counts_failed(
     mock_get_engine: MagicMock,
     mock_categorize: AsyncMock,

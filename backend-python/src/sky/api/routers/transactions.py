@@ -13,6 +13,7 @@ from sky.api.schemas.transactions import (
 )
 from sky.core.db import get_engine
 from sky.core.logging import get_logger
+from sky.domain.categorizer import merchant_display
 
 logger = get_logger("api.transactions")
 router = APIRouter(prefix="/api/transactions", tags=["transactions"])
@@ -75,9 +76,10 @@ async def list_transactions(
             description=str(r["description"] or ""),
             raw_description=str(r["raw_description"] or ""),
             date=r["date"],
-            bank_account_id=str(r["bank_account_id"]),
+            bank_account_id=str(r["bank_account_id"]) if r["bank_account_id"] is not None else None,
             movement_source=str(r["movement_source"] or ""),
             categorization_status=str(r["categorization_status"] or "pending"),
+            merchant=merchant_display(str(r["raw_description"]) if r["raw_description"] else None),
         )
         for r in rows
     ]

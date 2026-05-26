@@ -9,7 +9,7 @@ import { fmtK, fmtDate, catOf } from "../utils/format.js";
 
 export default function TxItem({ tx, onDelete, compact = false }) {
   const cat      = catOf(tx.category);
-  const isIncome = tx.category === "income" || tx.category === "transfer";
+  const isIncome = tx.amount > 0;
   const sign     = isIncome ? "+" : "-";
   const color    = isIncome ? "#22C55E" : C.red;
 
@@ -32,7 +32,7 @@ export default function TxItem({ tx, onDelete, compact = false }) {
           fontSize: 13, fontWeight: 600, color: C.textPrimary,
           overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
         }}>
-          {tx.description || tx.desc || cat.label}
+          {tx.merchant || cat.label}
         </div>
         <div style={{ fontSize: 11, color: C.textMuted, marginTop: 1 }}>
           {cat.label} · {fmtDate(tx.date ?? tx.created_at ?? "")}

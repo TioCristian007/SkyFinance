@@ -57,14 +57,12 @@ async def categorize_pending_job(ctx: dict[str, Any]) -> dict[str, Any]:
                     text("""
                         UPDATE public.transactions
                            SET category = :cat,
-                               description = :label,
                                categorization_status = :status
                          WHERE id = :id
                     """),
                     {
                         "id":     row["id"],
                         "cat":    item.category,
-                        "label":  item.label,
                         "status": new_status,
                     },
                 )
