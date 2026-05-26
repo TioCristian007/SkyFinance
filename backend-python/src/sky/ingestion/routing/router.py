@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from datetime import date
 
 from redis.asyncio import Redis
 
@@ -95,6 +96,7 @@ class IngestionRouter:
         credentials: BankCredentials | OAuthTokens,
         *,
         on_progress: ProgressCallback | None = None,
+        since: date | None = None,
     ) -> IngestionResult:
         """
         Intenta ingestar datos bancarios recorriendo la cadena de providers.
@@ -145,7 +147,9 @@ class IngestionRouter:
 
             try:
                 logger.info("trying_source", source_id=source_id, bank_id=bank_id)
-                result = await source.fetch(bank_id, credentials, on_progress=on_progress)
+                result = await source.fetch(
+                    bank_id, credentials, on_progress=on_progress, since=since
+                )
                 await cb.record_success()
                 logger.info(
                     "source_success",
