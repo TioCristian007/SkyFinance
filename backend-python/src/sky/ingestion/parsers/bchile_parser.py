@@ -15,24 +15,28 @@ import re
 from datetime import date, datetime
 
 
-def normalize_date(raw: str | int | None) -> date:
-    """Normaliza cualquier formato de fecha de BChile a date."""
+def normalize_date(raw: str | int | None) -> date | None:
+    """Normaliza cualquier formato de fecha de BChile a date.
+
+    Devuelve None si no puede parsear — nunca fecha sintética (date.today()).
+    El llamador decide qué hacer con None (fallback a otro campo o descartar el movimiento).
+    """
     if raw is None:
-        return date.today()
+        return None
 
     if isinstance(raw, int):
-        # Epoch millis
+        # Epoch millis → UTC
         try:
-            return datetime.fromtimestamp(raw / 1000).date()
+            return datetime.fromtimestamp(raw / 1000, tz=None).date()
         except Exception:
-            return date.today()
+            return None
 
     if not isinstance(raw, str):
-        return date.today()
+        return None
 
     s = raw.strip()
     if not s:
-        return date.today()
+        return None
 
     # ISO con T
     if "T" in s:
@@ -54,8 +58,7 @@ def normalize_date(raw: str | int | None) -> date:
         except ValueError:
             pass
 
-    # Fallback
-    return date.today()
+    return None
 
 
 def parse_amount(raw: str | int | float | None) -> int:

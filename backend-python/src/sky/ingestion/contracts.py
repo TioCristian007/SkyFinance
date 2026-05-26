@@ -182,6 +182,7 @@ class DataSource(ABC):
         credentials: BankCredentials | OAuthTokens,
         *,
         on_progress: ProgressCallback | None = None,
+        since: date | None = None,
     ) -> IngestionResult:
         """
         Ejecuta la ingesta y devuelve movimientos normalizados.
@@ -190,6 +191,7 @@ class DataSource(ABC):
             bank_id: identificador del banco (ej: 'bchile', 'falabella')
             credentials: credenciales descifradas
             on_progress: callback para reportar estado (2FA, login, etc.)
+            since: fecha mínima para sync incremental (None = backfill completo)
 
         Returns:
             IngestionResult con balance y movimientos canónicos.
@@ -253,20 +255,26 @@ def build_external_id(
     amount_clp: int,
     raw_description: str,
     movement_source: MovementSource = MovementSource.ACCOUNT,
+    *,
+    native_id: str | None = None,
+    balance: int | None = None,
 ) -> str:
     """
     Genera un external_id determinístico para deduplicación.
 
     INVARIANTE: la misma transacción real SIEMPRE produce el mismo id,
     sin importar qué source la trajo, cuántas veces se procese, ni
-    en qué orden. Esto resuelve BUG-1 del inventario de deuda.
+    en qué orden.
 
-    Usa SHA-256 de los inputs normalizados, primeros 16 hex chars.
+    Si el banco provee un identificador nativo (native_id), es la base
+    preferida — inmune a cambios de descripción o monto.
+    Sin native_id, el fallback incluye balance para máxima unicidad.
     """
-    # Normalizar raw_description: lowercase, strip, primeros 60 chars
-    desc_norm = raw_description.lower().strip()[:60]
-    date_str = occurred_at.isoformat()  # YYYY-MM-DD
-
-    raw = f"{bank_id}:{movement_source.value}:{date_str}:{amount_clp}:{desc_norm}"
-    h = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    if native_id:
+        basis = f"{bank_id}:native:{native_id}"
+    else:
+        desc_norm = raw_description.lower().strip()[:60]
+        date_str = occurred_at.isoformat()
+        basis = f"{bank_id}:{movement_source.value}:{date_str}:{amount_clp}:{desc_norm}:{balance}"
+    h = hashlib.sha256(basis.encode("utf-8")).hexdigest()
     return f"{bank_id}_{h[:16]}"

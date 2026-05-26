@@ -514,6 +514,8 @@ class BChileScraperSource(DataSource):
                 stop_paginating = False
                 for mov in movs_raw:
                     cm = self._cartola_to_canonical(mov, "bchile")
+                    if cm is None:
+                        continue
                     if since and cm.occurred_at < since:
                         stop_paginating = True
                         continue
@@ -539,6 +541,8 @@ class BChileScraperSource(DataSource):
                             break
                         for mov in nxt_movs:
                             cm = self._cartola_to_canonical(mov, "bchile")
+                            if cm is None:
+                                continue
                             if since and cm.occurred_at < since:
                                 stop_paginating = True
                                 break
@@ -584,8 +588,11 @@ class BChileScraperSource(DataSource):
                 no_fact = await self._api_post(
                     page, "tarjeta-credito-digital/movimientos-no-facturados", body
                 )
-                for mov in no_fact.get("listaMovNoFactur", []):
+                lista_mov = no_fact.get("listaMovNoFactur", [])
+                for mov in lista_mov:
                     cm = self._cc_unbilled_to_canonical(mov, "bchile")
+                    if cm is None:
+                        continue
                     if since and cm.occurred_at < since:
                         continue
                     movements.append(cm)
@@ -596,36 +603,51 @@ class BChileScraperSource(DataSource):
 
     # ── Conversión a CanonicalMovement ───────────────────────────────────────
 
-    def _cartola_to_canonical(self, mov: dict, bank_id: str) -> CanonicalMovement:
+    def _cartola_to_canonical(self, mov: dict, bank_id: str) -> CanonicalMovement | None:
         amount_raw = int(mov.get("monto", 0))
         amount = -abs(amount_raw) if mov.get("tipo") == "cargo" else abs(amount_raw)
         desc = (mov.get("descripcion") or "").strip()
-        occurred = normalize_date(mov.get("fechaContable"))
+        # fechaContable ("DD/MM/YYYY") es la fuente primaria; fechaContableMovimiento (epoch ms) como fallback.
+        occurred = normalize_date(mov.get("fechaContable")) or normalize_date(mov.get("fechaContableMovimiento"))
+        if occurred is None:
+            logger.warning("bchile_mov_invalid_date_skipped", mov_id=mov.get("id"))
+            return None
+        native_id = (mov.get("id") or "").strip() or None
+        balance_val = mov.get("saldo")
+        balance = int(balance_val) if balance_val is not None else None
         return CanonicalMovement(
-            external_id=build_external_id(bank_id, occurred, amount, desc, MovementSource.ACCOUNT),
+            external_id=build_external_id(
+                bank_id, occurred, amount, desc, MovementSource.ACCOUNT,
+                native_id=native_id, balance=balance,
+            ),
             amount_clp=amount,
             raw_description=desc,
             occurred_at=occurred,
             movement_source=MovementSource.ACCOUNT,
             source_kind=SourceKind.SCRAPER,
-            source_metadata={"balance_after": mov.get("saldo")},
+            source_metadata={"balance_after": balance, "native_id": native_id},
         )
 
-    def _cc_unbilled_to_canonical(self, mov: dict, bank_id: str) -> CanonicalMovement:
+    def _cc_unbilled_to_canonical(self, mov: dict, bank_id: str) -> CanonicalMovement | None:
         raw_amount = int(mov.get("montoCompra", 0))
         amount = -abs(raw_amount) if raw_amount > 0 else abs(raw_amount)
         desc = (mov.get("glosaTransaccion") or "").strip()
         occurred = normalize_date(mov.get("fechaTransaccionString"))
+        if occurred is None:
+            logger.warning("bchile_cc_mov_invalid_date_skipped", mov_id=mov.get("id"))
+            return None
+        native_id = (mov.get("id") or "").strip() or None
         return CanonicalMovement(
             external_id=build_external_id(
-                bank_id, occurred, amount, desc, MovementSource.CREDIT_CARD
+                bank_id, occurred, amount, desc, MovementSource.CREDIT_CARD,
+                native_id=native_id,
             ),
             amount_clp=amount,
             raw_description=desc,
             occurred_at=occurred,
             movement_source=MovementSource.CREDIT_CARD,
             source_kind=SourceKind.SCRAPER,
-            source_metadata={"status": "unbilled", "installments": mov.get("despliegueCuotas")},
+            source_metadata={"status": "unbilled", "installments": mov.get("despliegueCuotas"), "native_id": native_id},
         )
 
     def _deduplicate(self, movs: list[CanonicalMovement]) -> list[CanonicalMovement]:
