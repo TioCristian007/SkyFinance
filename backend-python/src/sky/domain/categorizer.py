@@ -67,7 +67,7 @@ CATEGORY_LABELS: dict[str, str] = {
 _RuleEntry = tuple[Any, str]
 
 _RULES: list[_RuleEntry] = [
-    (lambda d, a: a > 0 and re.search(r"^traspaso\s+de:", d, re.I) is not None,                        "income"),
+    (lambda d, a: a > 0 and re.search(r"^traspaso\s+de:", d, re.I) is not None,                        "transfer"),
     (lambda d, a: a > 0 and re.search(r"abono|remuner|sueldo|salario|honorario|liquidaci", d, re.I) is not None, "income"),
     (lambda d, a: a > 0 and re.search(r"devoluci[oó]n\s*(imp|sii)|reintegro", d, re.I) is not None,    "income"),
     (lambda d, a: a < 0 and re.search(r"^traspaso\s+a:", d, re.I) is not None,                         "transfer"),
@@ -114,6 +114,25 @@ def normalize_merchant(description: str) -> str:
     s = re.sub(r"[*_\-.]{2,}", " ", s)
     s = re.sub(r"\s{2,}", " ", s)
     return s.strip()[:60]
+
+
+_TRANSFER_PREFIX_RE = re.compile(
+    r"^(?:traspaso\s+(?:de|a)|transferencia\s+a):\s*",
+    re.IGNORECASE,
+)
+
+
+def merchant_display(raw_description: str | None) -> str | None:
+    """Nombre de comercio/contraparte para mostrar en UI (Title Case)."""
+    if not raw_description:
+        return None
+    s = raw_description.strip()
+    m = _TRANSFER_PREFIX_RE.match(s)
+    if m:
+        counterparty = s[m.end():].strip()
+        return counterparty.title() or None
+    key = normalize_merchant(s)
+    return key.title() or None
 
 
 def _key_variants(merchant_key: str) -> list[str]:

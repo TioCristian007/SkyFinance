@@ -4,8 +4,9 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 import anthropic
 from sqlalchemy import text
@@ -119,8 +120,9 @@ _CHALLENGE_STATUS_RE = re.compile(
 
 # ── Financial context builder ─────────────────────────────────────────────────
 
-async def _fetch_transactions(user_id: str, days: int = 30) -> list[dict[str, Any]]:
-    since = date.today() - timedelta(days=days)
+async def _fetch_transactions(user_id: str) -> list[dict[str, Any]]:
+    now_cl = datetime.now(ZoneInfo("America/Santiago"))
+    since = now_cl.date().replace(day=1)
     engine = get_engine()
     async with engine.connect() as conn:
         rs = await conn.execute(
@@ -195,7 +197,7 @@ CUÁNDO USARLAS:
 - Usuario tiene gasto alto en categoría o pide un desafío → propose_challenge relevante
 
 PERSONALIDAD: Profesional, directo, cercano. Fórmula: [dato real] + [emoción mínima] + [dirección].
-REGLAS: Español. Datos reales siempre. Máx 4 líneas. 1-2 emojis. Sin asesoría de inversión. Sin decisiones por el usuario."""
+REGLAS: Español de Chile, tuteo (usa 'tienes', 'puedes', 'quieres'; NUNCA voseo como 'tenés', 'podés', 'querés'). Datos reales siempre. Máx 4 líneas. 1-2 emojis. Sin asesoría de inversión. Sin decisiones por el usuario."""
 
 
 # ── Tool executor ─────────────────────────────────────────────────────────────
@@ -240,7 +242,7 @@ class MrMoney:
             else:
                 logger.error("mr_money_anthropic_failed", error=str(exc), exc_info=True)
             return ChatTextResponse(
-                text="Tuve un problema procesando tu consulta. ¿Podés repetir?"
+                text="Tuve un problema procesando tu consulta. ¿Puedes repetir?"
             )
 
     async def _try_local(
@@ -266,7 +268,7 @@ class MrMoney:
             challenges = await get_challenges(user_id)
             active = challenges.get("active", [])
             if not active:
-                return ChatTextResponse(text="No tenés desafíos activos por el momento.")
+                return ChatTextResponse(text="No tienes desafíos activos por el momento.")
             lines = [f"- {c['label']}" for c in active]
             return ChatTextResponse(text="Tus desafíos activos:\n" + "\n".join(lines))
 
@@ -398,4 +400,4 @@ class MrMoney:
         if proposals:
             return proposals[0]
 
-        return ChatTextResponse(text=result_text or "No pude procesar eso. ¿Podés reformular?")
+        return ChatTextResponse(text=result_text or "No pude procesar eso. ¿Puedes reformularlo?")

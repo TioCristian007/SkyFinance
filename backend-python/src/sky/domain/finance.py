@@ -57,7 +57,7 @@ def compute_summary(
         amount = int(tx.get("amount", 0))
         category = str(tx.get("category", "other"))
 
-        if amount > 0:
+        if amount > 0 and category == "income":
             income += amount
         elif amount < 0:
             abs_amount = abs(amount)
@@ -71,7 +71,7 @@ def compute_summary(
         balance=income - total_outflow,
         income=income,
         expenses=expenses,
-        savings_rate=compute_savings_rate(income, total_outflow),
+        savings_rate=compute_savings_rate(income, expenses),
         by_category=by_category,
         net_flow=income - total_outflow,
     )

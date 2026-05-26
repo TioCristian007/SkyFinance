@@ -150,8 +150,8 @@ class TestNonConsumptionExclusion:
         total_out = 200_000 + 100_000 + 50_000 + 50_000
         assert s.net_flow == 1_000_000 - total_out
         assert s.balance  == 1_000_000 - total_out
-        # savings_rate basada en total_outflow
-        assert abs(s.savings_rate - (1_000_000 - total_out) / 1_000_000) < 1e-9
+        # savings_rate basada en expenses (consumo), complementaria a spending_rate
+        assert abs(s.savings_rate - (1_000_000 - 200_000) / 1_000_000) < 1e-9
 
     def test_consumption_categories_unaffected(self) -> None:
         txs = [
@@ -164,6 +164,47 @@ class TestNonConsumptionExclusion:
         assert s.by_category == {"food": 80_000, "transport": 40_000}
         assert s.net_flow == 380_000
         assert s.balance  == 380_000
+
+
+class TestIncomeRealLogic:
+    """Solo positivos con category=='income' cuentan como ingreso (sprint P1-[2])."""
+
+    def test_positive_transfer_not_counted_as_income(self) -> None:
+        txs = [{"amount": 500_000, "category": "transfer"}]
+        s = compute_summary(txs)
+        assert s.income == 0
+        assert s.net_flow == 0
+        assert s.balance == 0
+
+    def test_traspaso_de_transfer_category_not_income(self) -> None:
+        """Simula que el categorizador ya marcó la tx como 'transfer'."""
+        txs = [
+            {"amount": 300_000, "category": "transfer"},
+            {"amount": 1_000_000, "category": "income"},
+        ]
+        s = compute_summary(txs)
+        assert s.income == 1_000_000
+        assert s.net_flow == 1_000_000
+
+    def test_savings_rate_uses_expenses_not_total_outflow(self) -> None:
+        """savings_rate es complementaria a spending_rate (misma base: expenses)."""
+        txs = [
+            {"amount": 1_000_000, "category": "income"},
+            {"amount": -300_000,  "category": "food"},
+            {"amount": -200_000,  "category": "transfer"},
+        ]
+        s = compute_summary(txs)
+        assert s.expenses == 300_000
+        # savings_rate = (income - expenses) / income = (1M - 300k) / 1M = 0.7
+        assert abs(s.savings_rate - 0.7) < 1e-9
+
+    def test_savings_and_spending_rates_are_complementary(self) -> None:
+        from sky.domain.finance import compute_savings_rate
+        income = 1_000_000
+        expenses = 400_000
+        sr = compute_savings_rate(income, expenses)
+        sp = expenses / income
+        assert abs(sr + sp - 1.0) < 1e-9
 
 
 class TestTopCategories:

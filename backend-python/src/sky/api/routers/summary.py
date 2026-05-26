@@ -1,8 +1,9 @@
 """sky.api.routers.summary — GET summary financiero del período."""
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text
@@ -10,7 +11,7 @@ from sqlalchemy import text
 from sky.api.deps import require_user_id
 from sky.core.db import get_engine
 from sky.core.logging import get_logger
-from sky.domain.finance import compute_summary
+from sky.domain.finance import NON_CONSUMPTION, compute_summary
 from sky.ingestion.sources import SUPPORTED_BANKS, account_type_for
 
 logger = get_logger("api.summary")
@@ -31,16 +32,19 @@ async def get_summary(
     El frontend (Sky.jsx) desestructura summaryRes.summary,
     summaryRes.profile y summaryRes.badges.allBadges.
     """
-    since = datetime.utcnow() - timedelta(days=days)
+    now_cl = datetime.now(ZoneInfo("America/Santiago"))
+    since: date = now_cl.date().replace(day=1)
     engine = get_engine()
 
     txs, bank_rows, profile_row = await _fetch_all(engine, user_id, since)
 
     fin = compute_summary(txs, period_days=days)
 
-    # ── Rates (0-100 integers, igual que Node) ───────────────────────────────
-    savings_rate = int(max(0, round(fin.savings_rate * 100)))
+    # ── Rates (0-100 integers, base = expenses/income consumo) ──────────────
+    # Ambas tasas usan la misma base (expenses = consumo), haciéndolas complementarias:
+    # spendingRate + savingsRate ≈ 100.
     spending_rate = int(max(0, round((fin.expenses / fin.income) * 100))) if fin.income > 0 else 0
+    savings_rate  = int(max(0, round(fin.savings_rate * 100)))
 
     # ── categoryTotals (dict category→amount, igual que Node) ────────────────
     category_totals: dict[str, int] = dict(fin.by_category)
@@ -86,14 +90,15 @@ async def get_summary(
 
     has_bank_accounts = len(bank_accounts) > 0
 
-    # income bancario: transacciones positivas vinculadas a una cuenta bancaria
-    bank_account_ids = {str(r["id"]) for r in bank_rows}
-    bank_income = sum(
-        int(tx.get("amount", 0))
-        for tx in txs
-        if int(tx.get("amount", 0)) > 0 and str(tx.get("bank_account_id", "")) in bank_account_ids
+    # Conteos para KPIs del dashboard (sobre el universo completo del mes, no las 20 últimas txs)
+    income_count = sum(1 for tx in txs if str(tx.get("category", "")) == "income")
+    expense_count = sum(
+        1 for tx in txs
+        if int(tx.get("amount", 0)) < 0
+        and str(tx.get("category", "")) not in NON_CONSUMPTION
     )
-    income_is_real = has_bank_accounts and bank_income > 0
+
+    income_is_real = has_bank_accounts and fin.income > 0
 
     # ── profile ──────────────────────────────────────────────────────────────
     display_name = "Usuario"
@@ -111,6 +116,8 @@ async def get_summary(
             "spendingRate":     spending_rate,
             "categoryTotals":   category_totals,
             "transactionCount": len(txs),
+            "incomeCount":      income_count,
+            "expenseCount":     expense_count,
             "topCategory":      top_cat,
             "period":           period,
             "currency":         "CLP",
@@ -139,7 +146,7 @@ async def get_summary(
 async def _fetch_all(
     engine: Any,
     user_id: str,
-    since: datetime,
+    since: date,
 ) -> tuple[list[dict[str, Any]], list[Any], dict[str, Any] | None]:
     """Queries paralelas: transactions + bank_accounts + profiles."""
     async with engine.connect() as conn:
@@ -154,7 +161,7 @@ async def _fetch_all(
 async def _run_queries(
     conn: Any,
     user_id: str,
-    since: datetime,
+    since: date,
 ) -> tuple[Any, Any, Any]:
     tx_rs = await conn.execute(
         text("""
@@ -163,8 +170,13 @@ async def _run_queries(
              WHERE user_id = :uid
                AND date >= :since
                AND categorization_status != 'pending'
+               AND (bank_account_id IS NULL
+                    OR bank_account_id IN (
+                        SELECT id FROM public.bank_accounts
+                         WHERE user_id = :uid AND status != 'disconnected'
+                    ))
         """),
-        {"uid": user_id, "since": since.date()},
+        {"uid": user_id, "since": since},
     )
     ba_rs = await conn.execute(
         text("""

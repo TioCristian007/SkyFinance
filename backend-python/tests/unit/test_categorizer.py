@@ -32,7 +32,7 @@ class TestNormalizeMerchant:
 
 class TestLayer1Rules:
     @pytest.mark.parametrize("desc,amount,expected", [
-        ("Traspaso de: Juan Perez", 50000, "income"),
+        ("Traspaso de: Juan Perez", 50000, "transfer"),
         ("ABONO REMUNERACION SUELDO", 800000, "income"),
         ("Traspaso a: Ahorro", -10000, "transfer"),
         ("Khipu", -5000, "transfer"),
