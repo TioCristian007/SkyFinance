@@ -173,6 +173,7 @@ async def _run_queries(
               FROM public.transactions
              WHERE user_id = :uid
                AND date >= :since
+               AND deleted_at IS NULL
                AND categorization_status != 'pending'
                AND (bank_account_id IS NULL
                     OR bank_account_id IN (
