@@ -229,6 +229,79 @@ async def test_sync_all_sources_failed_returns_failure_dict(
     mock_mark_error.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+@patch("sky.worker.banking_sync.try_advisory_lock")
+@patch("sky.worker.banking_sync._persist_movements", new_callable=AsyncMock)
+@patch("sky.worker.banking_sync._update_account_after_sync", new_callable=AsyncMock)
+@patch("sky.worker.banking_sync.get_engine")
+@patch("sky.worker.banking_sync.decrypt", side_effect=lambda x, _k: f"plain_{x}")
+async def test_sync_sets_status_syncing_at_start(
+    _decrypt: MagicMock,
+    mock_get_engine: MagicMock,
+    _update: AsyncMock,
+    mock_persist: AsyncMock,
+    mock_lock: MagicMock,
+    fake_router: MagicMock,
+    fake_arq_pool: MagicMock,
+) -> None:
+    """Al arrancar sync se setea status='syncing', no 'active' (P3)."""
+    mock_lock.return_value = _make_advisory_lock_cm(acquired=True)
+    mock_row = {
+        "id": "acc-uuid", "user_id": "user-uuid", "bank_id": "bchile",
+        "encrypted_rut": "enc_rut", "encrypted_pass": "enc_pass",
+        "sync_count": 0, "consecutive_errors": 0,
+    }
+    mock_get_engine.return_value = _make_engine_with_row(mock_row)
+    mock_persist.return_value = 0
+
+    await sync_bank_account(
+        router=fake_router,
+        bank_account_id="acc-uuid",
+        user_id="user-uuid",
+        arq_pool=fake_arq_pool,
+    )
+
+    # La segunda llamada a conn.execute (índice 1) es el UPDATE de status
+    conn = mock_get_engine.return_value.begin.return_value.__aenter__.return_value
+    update_sql = str(conn.execute.call_args_list[1][0][0])
+    assert "syncing" in update_sql
+    assert "active" not in update_sql.split("SET")[1].split("WHERE")[0]
+
+
+@pytest.mark.asyncio
+@patch("sky.worker.banking_sync.try_advisory_lock")
+@patch("sky.worker.banking_sync._mark_error", new_callable=AsyncMock)
+@patch("sky.worker.banking_sync.get_engine")
+@patch("sky.worker.banking_sync.decrypt", side_effect=lambda x, _k: f"plain_{x}")
+async def test_sync_unexpected_exception_marks_error_and_reraises(
+    _decrypt: MagicMock,
+    mock_get_engine: MagicMock,
+    mock_mark_error: AsyncMock,
+    mock_lock: MagicMock,
+    fake_router: MagicMock,
+    fake_arq_pool: MagicMock,
+) -> None:
+    """Excepción inesperada → _mark_error llamado, status nunca queda en 'syncing' (P3)."""
+    mock_lock.return_value = _make_advisory_lock_cm(acquired=True)
+    mock_row = {
+        "id": "acc-uuid", "user_id": "user-uuid", "bank_id": "bchile",
+        "encrypted_rut": "enc_rut", "encrypted_pass": "enc_pass",
+        "sync_count": 0, "consecutive_errors": 0,
+    }
+    mock_get_engine.return_value = _make_engine_with_row(mock_row)
+    fake_router.ingest = AsyncMock(side_effect=RuntimeError("fallo inesperado"))
+
+    with pytest.raises(RuntimeError, match="fallo inesperado"):
+        await sync_bank_account(
+            router=fake_router,
+            bank_account_id="acc-uuid",
+            user_id="user-uuid",
+            arq_pool=fake_arq_pool,
+        )
+
+    mock_mark_error.assert_awaited_once_with("acc-uuid", "Error inesperado de sincronización")
+
+
 # ── Tests de helpers puros ────────────────────────────────────────────────────
 
 class TestSanitizeError:

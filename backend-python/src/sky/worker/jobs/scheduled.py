@@ -51,7 +51,9 @@ async def scheduled_sync_job(ctx: dict[str, Any]) -> dict[str, Any]:
                 SELECT ba.id, ba.user_id, ba.consecutive_errors, ba.last_scheduled_at
                   FROM public.bank_accounts ba
                   JOIN public.profiles p ON p.id = ba.user_id
-                 WHERE ba.status IN ('active', 'error')
+                 WHERE (ba.status IN ('active', 'error')
+                        OR (ba.status = 'syncing'
+                            AND ba.updated_at < NOW() - INTERVAL '30 minutes'))
                    AND p.auto_sync_enabled = true
                    AND COALESCE(ba.consecutive_errors, 0) < :max_errors
                  ORDER BY ba.last_scheduled_at ASC NULLS FIRST

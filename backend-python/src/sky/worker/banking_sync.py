@@ -99,7 +99,7 @@ async def sync_bank_account(
             await conn.execute(
                 text("""
                     UPDATE public.bank_accounts
-                       SET status = 'active',
+                       SET status = 'syncing',
                            last_sync_error = NULL,
                            last_scheduled_at = NOW(),
                            updated_at = NOW()
@@ -114,90 +114,100 @@ async def sync_bank_account(
         creds = BankCredentials(rut=rut, password=password)
         bank_id = str(row["bank_id"])
 
-        await log_event(
-            action="sync.start",
-            user_id=user_id,
-            resource_type="bank_account",
-            resource_id=bank_account_id,
-            metadata={"bank_id": bank_id},
-        )
-
         try:
-            result = await router.ingest(bank_id=bank_id, user_id=user_id, credentials=creds)
-        except BankAuthError:
-            await _mark_error(bank_account_id, "Credenciales rechazadas por el banco")
-            sky_sync_total.labels(bank_id=bank_id, status="error").inc()
             await log_event(
-                action="sync.error",
+                action="sync.start",
                 user_id=user_id,
                 resource_type="bank_account",
                 resource_id=bank_account_id,
-                metadata={"bank_id": bank_id, "error_type": "AuthenticationError"},
+                metadata={"bank_id": bank_id},
             )
-            return {"success": False, "skipped": False, "error_type": "AuthenticationError", "bank_id": bank_id}
-        except AllSourcesFailedError as exc:
-            user_msg = _user_message_for_failure(exc)
-            await _mark_error(bank_account_id, user_msg)
-            sky_sync_total.labels(bank_id=bank_id, status="error").inc()
-            cause_type = type(exc.primary_cause).__name__ if exc.primary_cause else "unknown"
+
+            try:
+                result = await router.ingest(bank_id=bank_id, user_id=user_id, credentials=creds)
+            except BankAuthError:
+                await _mark_error(bank_account_id, "Credenciales rechazadas por el banco")
+                sky_sync_total.labels(bank_id=bank_id, status="error").inc()
+                await log_event(
+                    action="sync.error",
+                    user_id=user_id,
+                    resource_type="bank_account",
+                    resource_id=bank_account_id,
+                    metadata={"bank_id": bank_id, "error_type": "AuthenticationError"},
+                )
+                return {"success": False, "skipped": False, "error_type": "AuthenticationError", "bank_id": bank_id}
+            except AllSourcesFailedError as exc:
+                user_msg = _user_message_for_failure(exc)
+                await _mark_error(bank_account_id, user_msg)
+                sky_sync_total.labels(bank_id=bank_id, status="error").inc()
+                cause_type = type(exc.primary_cause).__name__ if exc.primary_cause else "unknown"
+                await log_event(
+                    action="sync.error",
+                    user_id=user_id,
+                    resource_type="bank_account",
+                    resource_id=bank_account_id,
+                    metadata={"bank_id": bank_id, "error_type": "AllSourcesFailedError", "cause_type": cause_type},
+                )
+                return {"success": False, "skipped": False, "error_type": "AllSourcesFailedError", "bank_id": bank_id}
+
+            inserted = await _persist_movements(
+                user_id=user_id,
+                bank_account_id=bank_account_id,
+                movements=result.movements,
+            )
+
+            await _update_account_after_sync(
+                bank_account_id=bank_account_id,
+                balance=result.balance.balance_clp if result.balance else None,
+                sync_count=int(row["sync_count"] or 0),
+            )
+
+            if settings.sync_aria_enabled and inserted > 0:
+                _task = asyncio.create_task(_track_aria_events(user_id, result.movements))
+                _aria_tasks.add(_task)
+                _task.add_done_callback(_aria_tasks.discard)
+
+            if inserted > 0:
+                await arq_pool.enqueue_job("categorize_pending_job")
+
+            elapsed_ms = int((datetime.now(UTC) - started_at).total_seconds() * 1000)
+            elapsed_s = elapsed_ms / 1000.0
+            sky_sync_duration.labels(
+                bank_id=bank_id, source_kind=result.source_kind.value
+            ).observe(elapsed_s)
+            sky_sync_total.labels(bank_id=bank_id, status="success").inc()
+            logger.info(
+                "sync_completed",
+                bank_account_id=bank_account_id, bank_id=bank_id,
+                new_transactions=inserted, elapsed_ms=elapsed_ms,
+            )
+
             await log_event(
-                action="sync.error",
+                action="sync.success",
                 user_id=user_id,
                 resource_type="bank_account",
                 resource_id=bank_account_id,
-                metadata={"bank_id": bank_id, "error_type": "AllSourcesFailedError", "cause_type": cause_type},
+                metadata={"bank_id": bank_id, "new_transactions": inserted, "elapsed_ms": elapsed_ms},
             )
-            return {"success": False, "skipped": False, "error_type": "AllSourcesFailedError", "bank_id": bank_id}
+
+            return {
+                "success": True,
+                "new_transactions": inserted,
+                "balance": result.balance.balance_clp if result.balance else None,
+                "bank_id": bank_id,
+                "elapsed_ms": elapsed_ms,
+            }
+
+        except Exception:
+            # Excepción inesperada (no BankAuthError/AllSourcesFailedError que ya manejan
+            # su propio _mark_error y retornan). Garantiza que el status no quede en 'syncing'.
+            try:
+                await _mark_error(bank_account_id, "Error inesperado de sincronización")
+            except Exception:
+                logger.warning("failed_to_mark_error_after_unexpected_exc", bank_account_id=bank_account_id)
+            raise
         finally:
             del rut, password, creds
-
-        inserted = await _persist_movements(
-            user_id=user_id,
-            bank_account_id=bank_account_id,
-            movements=result.movements,
-        )
-
-        await _update_account_after_sync(
-            bank_account_id=bank_account_id,
-            balance=result.balance.balance_clp if result.balance else None,
-            sync_count=int(row["sync_count"] or 0),
-        )
-
-        if settings.sync_aria_enabled and inserted > 0:
-            _task = asyncio.create_task(_track_aria_events(user_id, result.movements))
-            _aria_tasks.add(_task)
-            _task.add_done_callback(_aria_tasks.discard)
-
-        if inserted > 0:
-            await arq_pool.enqueue_job("categorize_pending_job")
-
-        elapsed_ms = int((datetime.now(UTC) - started_at).total_seconds() * 1000)
-        elapsed_s = elapsed_ms / 1000.0
-        sky_sync_duration.labels(
-            bank_id=bank_id, source_kind=result.source_kind.value
-        ).observe(elapsed_s)
-        sky_sync_total.labels(bank_id=bank_id, status="success").inc()
-        logger.info(
-            "sync_completed",
-            bank_account_id=bank_account_id, bank_id=bank_id,
-            new_transactions=inserted, elapsed_ms=elapsed_ms,
-        )
-
-        await log_event(
-            action="sync.success",
-            user_id=user_id,
-            resource_type="bank_account",
-            resource_id=bank_account_id,
-            metadata={"bank_id": bank_id, "new_transactions": inserted, "elapsed_ms": elapsed_ms},
-        )
-
-        return {
-            "success": True,
-            "new_transactions": inserted,
-            "balance": result.balance.balance_clp if result.balance else None,
-            "bank_id": bank_id,
-            "elapsed_ms": elapsed_ms,
-        }
 
 
 async def _persist_movements(
