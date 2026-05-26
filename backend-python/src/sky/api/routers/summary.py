@@ -32,7 +32,11 @@ async def get_summary(
     El frontend (Sky.jsx) desestructura summaryRes.summary,
     summaryRes.profile y summaryRes.badges.allBadges.
     """
-    now_cl = datetime.now(ZoneInfo("America/Santiago"))
+    try:
+        now_cl = datetime.now(ZoneInfo("America/Santiago"))
+    except Exception:
+        logger.warning("tz_data_unavailable_falling_back_to_utc")
+        now_cl = datetime.now(UTC)
     since: date = now_cl.date().replace(day=1)
     engine = get_engine()
 

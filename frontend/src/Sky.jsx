@@ -361,46 +361,51 @@ export default function Sky({ userId, userEmail }) {
   useEffect(() => {
     async function init() {
       try {
-        const [summaryRes, txRes, chRes, goalsRes, bankAccRes] = await Promise.all([
+        const [summaryR, txR, chR, goalsR, bankAccR] = await Promise.allSettled([
           api.getSummary(),
           api.getTransactions(),
           api.getChallenges(),
           api.getGoals(),
-          api.getBankAccounts().catch(() => ({ accounts: [], totalBalance: 0 })),
+          api.getBankAccounts(),
         ]);
-        setSummary(summaryRes.summary);
-        setProfile(summaryRes.profile);
-        setAllBadges(summaryRes.badges.allBadges);
-        setTxs(txRes.transactions);
-        setChallenges(chRes);
-        setGoals(goalsRes.goals);
-        // Fuente única de verdad para cuentas bancarias:
-        // la llamada directa a /api/banking/accounts tiene prioridad
-        // (más fresca), con fallback a lo que embedió /api/summary.
-        const bankData = bankAccRes.accounts?.length
-          ? bankAccRes
-          : {
-              accounts:     summaryRes.summary.bankAccounts    || [],
-              totalBalance: summaryRes.summary.totalBankBalance || 0,
-            };
-        setBankBalances(bankData);
 
-        const hasBanks      = summaryRes.summary.hasBankAccounts;
-        const incomeIsReal  = summaryRes.summary.incomeIsReal;
-        const displayBal    = hasBanks
-          ? summaryRes.summary.totalBankBalance
-          : summaryRes.summary.balance;
-        const balLabel = hasBanks ? "en saldo bancario real" : "disponibles estimados";
-        const incomeLabel = incomeIsReal
-          ? `Ingresaste ${fmt(summaryRes.summary.income)} este mes.`
-          : `Tu ingreso estimado es ${fmt(summaryRes.summary.income)}/mes.`;
+        if (summaryR.status === "fulfilled") {
+          const s = summaryR.value;
+          setSummary(s.summary);
+          setProfile(s.profile);
+          setAllBadges(s.badges.allBadges);
+          const hasBanks     = s.summary.hasBankAccounts;
+          const incomeIsReal = s.summary.incomeIsReal;
+          const displayBal   = hasBanks ? s.summary.totalBankBalance : s.summary.balance;
+          const balLabel     = hasBanks ? "en saldo bancario real" : "disponibles estimados";
+          const incomeLabel  = incomeIsReal
+            ? `Ingresaste ${fmt(s.summary.income)} este mes.`
+            : `Tu ingreso estimado es ${fmt(s.summary.income)}/mes.`;
+          setMsgs([{
+            ...INITIAL_MESSAGE,
+            text: `Hola, ${s.profile.user.name}. Soy Mr. Money, tu asistente financiero.\n\nTienes ${fmt(displayBal)} ${balLabel}. ${incomeLabel} ¿En qué te ayudo hoy?`,
+          }]);
+        } else {
+          console.error("[Sky] getSummary error:", summaryR.reason?.message);
+        }
 
-        setMsgs([{
-          ...INITIAL_MESSAGE,
-          text: `Hola, ${summaryRes.profile.user.name}. Soy Mr. Money, tu asistente financiero.\n\nTienes ${fmt(displayBal)} ${balLabel}. ${incomeLabel} ¿En qué te ayudo hoy?`,
-        }]);
+        if (txR.status === "fulfilled")    setTxs(txR.value.transactions);
+        else console.error("[Sky] getTransactions error:", txR.reason?.message);
+
+        if (chR.status === "fulfilled")    setChallenges(chR.value);
+        else console.error("[Sky] getChallenges error:", chR.reason?.message);
+
+        if (goalsR.status === "fulfilled") setGoals(goalsR.value.goals);
+        else console.error("[Sky] getGoals error:", goalsR.reason?.message);
+
+        // Banco: resultado directo tiene prioridad; si falla usa lo embebido en summary
+        const bankDirect  = bankAccR.status === "fulfilled" ? bankAccR.value : null;
+        const bankFallback = summaryR.status === "fulfilled"
+          ? { accounts: summaryR.value.summary.bankAccounts || [], totalBalance: summaryR.value.summary.totalBankBalance || 0 }
+          : { accounts: [], totalBalance: 0 };
+        setBankBalances(bankDirect?.accounts?.length ? bankDirect : bankFallback);
       } catch (e) {
-        console.error("[Sky] init error:", e.message);
+        console.error("[Sky] init fatal:", e.message);
       } finally {
         setLoading(false);
       }
