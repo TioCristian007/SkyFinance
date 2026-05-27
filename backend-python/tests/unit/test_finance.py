@@ -213,8 +213,12 @@ class TestIncomeRealLogic:
             {"amount": -200_000, "category": "transfer"},
         ]
         # Con count_transfers_as_expense=False: excluidas sin importar el flag de income
-        s_on  = compute_summary(txs, count_transfers_as_income=True,  count_transfers_as_expense=False)
-        s_off = compute_summary(txs, count_transfers_as_income=False, count_transfers_as_expense=False)
+        s_on = compute_summary(
+            txs, count_transfers_as_income=True, count_transfers_as_expense=False
+        )
+        s_off = compute_summary(
+            txs, count_transfers_as_income=False, count_transfers_as_expense=False
+        )
         assert s_on.expenses  == 0
         assert s_off.expenses == 0
         assert s_on.net_flow  == -200_000
