@@ -233,7 +233,7 @@ Formato EXACTO (solo esto):
 async def _categorize_with_ai(merchant_keys: list[str]) -> dict[str, str]:
     if not merchant_keys:
         return {}
-    client = anthropic.AsyncAnthropic()
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
     try:
         resp = await client.messages.create(
             model=settings.categorize_anthropic_model,
