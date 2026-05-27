@@ -283,9 +283,9 @@ const TickerItem = ({ tx }) => {
   const isIncome = tx.amount > 0;
   const fmtK2 = (n) => {
     const a = Math.abs(n ?? 0);
-    if (a >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
-    if (a >= 1_000) return `$${Math.round(n / 1_000)}K`;
-    return `$${Math.round(n)}`;
+    if (a >= 1_000_000) return `$${(a / 1_000_000).toFixed(1)}M`;
+    if (a >= 1_000) return `$${Math.round(a / 1_000)}K`;
+    return `$${Math.round(a)}`;
   };
 
   return (
@@ -301,7 +301,7 @@ const TickerItem = ({ tx }) => {
       }} />
       <div style={{ flex: 1, overflow: "hidden" }}>
         <div style={{ fontSize: 13, color: "rgba(255,255,255,0.7)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          {tx.description ?? tx.category}
+          {tx.merchant || tx.category}
         </div>
       </div>
       <div style={{ fontSize: 13, fontWeight: 700, flexShrink: 0, color: isIncome ? P.green : "#FF6B6B", fontVariantNumeric: "tabular-nums" }}>
@@ -1389,8 +1389,13 @@ export default function Sky({ userId, userEmail }) {
             ══════════════════════════════ */}
             {tab === "expenses" && (() => {
               // Math.abs unifica montos negativos (banco) y positivos (manuales)
-              const filteredExpenses = filteredTxs.filter(t => t.category !== "income").reduce((s, t) => s + Math.abs(t.amount || 0), 0);
-              const filteredIncome2  = filteredTxs.filter(t => t.category === "income").reduce((s, t) => s + Math.abs(t.amount || 0), 0);
+              const _NON_CONSUMPTION = ["transfer", "savings", "debt_payment"];
+              const filteredIncome2 = filteredTxs
+                .filter(t => (t.amount||0) > 0 && (t.category === "income" || (countTransfersAsIncome && t.category === "transfer")))
+                .reduce((s, t) => s + (t.amount||0), 0);
+              const filteredExpenses = filteredTxs
+                .filter(t => (t.amount||0) < 0 && (!_NON_CONSUMPTION.includes(t.category) || (countTransfersAsExpense && t.category === "transfer")))
+                .reduce((s, t) => s + Math.abs(t.amount||0), 0);
 
               const banksInTxs = [...new Map(
                 dateBoundTxs.filter(t => t.bank_account_id).map(t => [t.bank_account_id, {
