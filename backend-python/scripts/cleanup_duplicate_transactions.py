@@ -52,30 +52,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
-import sys
 from datetime import date
 
-# ── Env check antes de importar sky ──────────────────────────────────────────
-_REQUIRED = (
-    "SUPABASE_URL",
-    "SUPABASE_ANON_KEY",
-    "SUPABASE_SERVICE_KEY",
-    "ANTHROPIC_API_KEY",
-    "BANK_ENCRYPTION_KEY",
-)
-for _var in _REQUIRED:
-    if not os.environ.get(_var):
-        print(f"ERROR: {_var} no está configurado en el entorno o .env", file=sys.stderr)
-        sys.exit(1)
+from arq import create_pool
+from arq.connections import RedisSettings
+from sqlalchemy import text
 
-from arq import create_pool  # noqa: E402
-from arq.connections import RedisSettings  # noqa: E402
-from sqlalchemy import text  # noqa: E402
-
-from sky.core.config import settings  # noqa: E402
-from sky.core.db import close_engine, get_engine  # noqa: E402
-from sky.core.logging import get_logger, setup_logging  # noqa: E402
+from sky.core.config import settings
+from sky.core.db import close_engine, get_engine
+from sky.core.logging import get_logger, setup_logging
 
 setup_logging(json_output=False)  # consola legible para uso interactivo
 logger = get_logger("cleanup_duplicates")
