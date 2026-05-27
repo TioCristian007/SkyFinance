@@ -72,4 +72,13 @@ async def categorize_pending_job(ctx: dict[str, Any]) -> dict[str, Any]:
                 failed += 1
 
     logger.info("categorize_batch_done", processed=succeeded, failed=failed)
+
+    # Si el batch estaba lleno, probablemente quedan pendientes.
+    # Re-encolar para drenar en cascada lote a lote hasta vaciar la cola.
+    if len(rows) >= settings.categorize_batch_size:
+        arq_pool = ctx.get("arq_pool")
+        if arq_pool is not None:
+            await arq_pool.enqueue_job("categorize_pending_job")
+            logger.info("categorize_requeued", batch_size=settings.categorize_batch_size)
+
     return {"processed": succeeded, "failed": failed}
