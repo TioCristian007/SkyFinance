@@ -120,12 +120,14 @@ _CHALLENGE_STATUS_RE = re.compile(
 
 # ── Financial context builder ─────────────────────────────────────────────────
 
-async def _fetch_profile_flag(user_id: str) -> bool:
+async def _fetch_profile_flags(user_id: str) -> tuple[bool, bool]:
+    """Devuelve (count_transfers_as_income, count_transfers_as_expense)."""
     engine = get_engine()
     async with engine.connect() as conn:
         rs = await conn.execute(
             text("""
-                SELECT COALESCE(count_transfers_as_income, true)
+                SELECT COALESCE(count_transfers_as_income,  true),
+                       COALESCE(count_transfers_as_expense, true)
                   FROM public.profiles
                  WHERE id = :uid
                  LIMIT 1
@@ -133,7 +135,9 @@ async def _fetch_profile_flag(user_id: str) -> bool:
             {"uid": user_id},
         )
         row = rs.fetchone()
-    return bool(row[0]) if row else True
+    if row:
+        return bool(row[0]), bool(row[1])
+    return True, True
 
 
 async def _fetch_transactions(user_id: str) -> list[dict[str, Any]]:
@@ -158,14 +162,19 @@ async def _build_financial_context(user_id: str) -> tuple[str, dict[str, Any]]:
     from sky.domain.challenges import get_challenges
     from sky.domain.goals import get_goals
 
-    txs, goals, challenges, count_transfers = await asyncio.gather(
+    txs, goals, challenges, profile_flags = await asyncio.gather(
         _fetch_transactions(user_id),
         get_goals(user_id),
         get_challenges(user_id),
-        _fetch_profile_flag(user_id),
+        _fetch_profile_flags(user_id),
     )
+    count_income, count_expense = profile_flags
 
-    summary = compute_summary(txs, count_transfers_as_income=count_transfers)
+    summary = compute_summary(
+        txs,
+        count_transfers_as_income=count_income,
+        count_transfers_as_expense=count_expense,
+    )
     cats = top_categories(summary.by_category, limit=5)
     active_chs = challenges.get("active", [])
 

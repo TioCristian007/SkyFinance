@@ -29,7 +29,7 @@ _VALID_CATEGORIES = {
 async def list_transactions(
     user_id: str = Depends(require_user_id),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=500),
     category: str | None = Query(None),
     bank_account_id: str | None = Query(None),
 ) -> TransactionListResponse:

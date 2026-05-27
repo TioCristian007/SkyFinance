@@ -45,7 +45,15 @@ async def get_summary(
     count_transfers = (
         bool(profile_row.get("count_transfers_as_income", True)) if profile_row else True
     )
-    fin = compute_summary(txs, period_days=days, count_transfers_as_income=count_transfers)
+    count_expense = (
+        bool(profile_row.get("count_transfers_as_expense", True)) if profile_row else True
+    )
+    fin = compute_summary(
+        txs,
+        period_days=days,
+        count_transfers_as_income=count_transfers,
+        count_transfers_as_expense=count_expense,
+    )
 
     # ── Rates (0-100 integers, base = expenses/income consumo) ──────────────
     # Ambas tasas usan la misma base (expenses = consumo), haciéndolas complementarias:
@@ -110,7 +118,10 @@ async def get_summary(
     expense_count = sum(
         1 for tx in txs
         if int(tx.get("amount", 0)) < 0
-        and str(tx.get("category", "")) not in NON_CONSUMPTION
+        and (
+            str(tx.get("category", "")) not in NON_CONSUMPTION
+            or (count_expense and str(tx.get("category", "")) == "transfer")
+        )
     )
 
     income_is_real = has_bank_accounts and fin.income > 0
@@ -141,6 +152,7 @@ async def get_summary(
             "totalBankBalance":          total_bank_balance,
             "hasBankAccounts":           has_bank_accounts,
             "countTransfersAsIncome":    count_transfers,
+            "countTransfersAsExpense":   count_expense,
         },
         "profile": {
             "user": {
@@ -208,7 +220,8 @@ async def _run_queries(
     prof_rs = await conn.execute(
         text("""
             SELECT display_name, points,
-                   COALESCE(count_transfers_as_income, true) AS count_transfers_as_income
+                   COALESCE(count_transfers_as_income,  true) AS count_transfers_as_income,
+                   COALESCE(count_transfers_as_expense, true) AS count_transfers_as_expense
               FROM public.profiles
              WHERE id = :uid
              LIMIT 1

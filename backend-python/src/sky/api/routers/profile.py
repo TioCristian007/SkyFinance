@@ -14,7 +14,8 @@ router = APIRouter(prefix="/api/profile", tags=["profile"])
 
 
 class ProfilePatch(BaseModel):
-    count_transfers_as_income: bool
+    count_transfers_as_income:  bool | None = None
+    count_transfers_as_expense: bool | None = None
 
 
 @router.patch("")
@@ -28,14 +29,25 @@ async def patch_profile(
         await conn.execute(
             text("""
                 UPDATE public.profiles
-                   SET count_transfers_as_income = :value
+                   SET count_transfers_as_income  = COALESCE(:income,  count_transfers_as_income),
+                       count_transfers_as_expense = COALESCE(:expense, count_transfers_as_expense)
                  WHERE id = :uid
             """),
-            {"value": body.count_transfers_as_income, "uid": user_id},
+            {
+                "income":  body.count_transfers_as_income,
+                "expense": body.count_transfers_as_expense,
+                "uid":     user_id,
+            },
         )
     logger.info(
         "profile_updated",
         user_id=user_id,
         count_transfers_as_income=body.count_transfers_as_income,
+        count_transfers_as_expense=body.count_transfers_as_expense,
     )
-    return {"count_transfers_as_income": body.count_transfers_as_income}
+    result: dict[str, object] = {}
+    if body.count_transfers_as_income is not None:
+        result["count_transfers_as_income"] = body.count_transfers_as_income
+    if body.count_transfers_as_expense is not None:
+        result["count_transfers_as_expense"] = body.count_transfers_as_expense
+    return result
