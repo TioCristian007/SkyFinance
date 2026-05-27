@@ -42,7 +42,10 @@ async def get_summary(
 
     txs, bank_rows, profile_row = await _fetch_all(engine, user_id, since)
 
-    fin = compute_summary(txs, period_days=days)
+    count_transfers = (
+        bool(profile_row.get("count_transfers_as_income", True)) if profile_row else True
+    )
+    fin = compute_summary(txs, period_days=days, count_transfers_as_income=count_transfers)
 
     # ── Rates (0-100 integers, base = expenses/income consumo) ──────────────
     # Ambas tasas usan la misma base (expenses = consumo), haciéndolas complementarias:
@@ -95,7 +98,15 @@ async def get_summary(
     has_bank_accounts = len(bank_accounts) > 0
 
     # Conteos para KPIs del dashboard (sobre el universo completo del mes, no las 20 últimas txs)
-    income_count = sum(1 for tx in txs if str(tx.get("category", "")) == "income")
+    income_count = sum(
+        1 for tx in txs
+        if str(tx.get("category", "")) == "income"
+        or (
+            count_transfers
+            and str(tx.get("category", "")) == "transfer"
+            and int(tx.get("amount", 0)) > 0
+        )
+    )
     expense_count = sum(
         1 for tx in txs
         if int(tx.get("amount", 0)) < 0
@@ -125,10 +136,11 @@ async def get_summary(
             "topCategory":      top_cat,
             "period":           period,
             "currency":         "CLP",
-            "incomeIsReal":     income_is_real,
-            "bankAccounts":     bank_accounts,
-            "totalBankBalance": total_bank_balance,
-            "hasBankAccounts":  has_bank_accounts,
+            "incomeIsReal":              income_is_real,
+            "bankAccounts":              bank_accounts,
+            "totalBankBalance":          total_bank_balance,
+            "hasBankAccounts":           has_bank_accounts,
+            "countTransfersAsIncome":    count_transfers,
         },
         "profile": {
             "user": {
@@ -195,7 +207,8 @@ async def _run_queries(
     )
     prof_rs = await conn.execute(
         text("""
-            SELECT display_name, points
+            SELECT display_name, points,
+                   COALESCE(count_transfers_as_income, true) AS count_transfers_as_income
               FROM public.profiles
              WHERE id = :uid
              LIMIT 1

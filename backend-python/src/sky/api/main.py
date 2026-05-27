@@ -34,6 +34,7 @@ from sky.api.routers import (
     goals,
     health,
     internal,
+    profile,
     simulate,
     summary,
     transactions,
@@ -165,6 +166,7 @@ def create_app() -> FastAPI:
     app.include_router(banking.router)
     app.include_router(transactions.router)
     app.include_router(summary.router)
+    app.include_router(profile.router)
     app.include_router(goals.router)
     app.include_router(challenges.router)
     app.include_router(simulate.router)

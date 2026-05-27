@@ -120,6 +120,22 @@ _CHALLENGE_STATUS_RE = re.compile(
 
 # ── Financial context builder ─────────────────────────────────────────────────
 
+async def _fetch_profile_flag(user_id: str) -> bool:
+    engine = get_engine()
+    async with engine.connect() as conn:
+        rs = await conn.execute(
+            text("""
+                SELECT COALESCE(count_transfers_as_income, true)
+                  FROM public.profiles
+                 WHERE id = :uid
+                 LIMIT 1
+            """),
+            {"uid": user_id},
+        )
+        row = rs.fetchone()
+    return bool(row[0]) if row else True
+
+
 async def _fetch_transactions(user_id: str) -> list[dict[str, Any]]:
     now_cl = datetime.now(ZoneInfo("America/Santiago"))
     since = now_cl.date().replace(day=1)
@@ -142,13 +158,14 @@ async def _build_financial_context(user_id: str) -> tuple[str, dict[str, Any]]:
     from sky.domain.challenges import get_challenges
     from sky.domain.goals import get_goals
 
-    txs, goals, challenges = await asyncio.gather(
+    txs, goals, challenges, count_transfers = await asyncio.gather(
         _fetch_transactions(user_id),
         get_goals(user_id),
         get_challenges(user_id),
+        _fetch_profile_flag(user_id),
     )
 
-    summary = compute_summary(txs)
+    summary = compute_summary(txs, count_transfers_as_income=count_transfers)
     cats = top_categories(summary.by_category, limit=5)
     active_chs = challenges.get("active", [])
 

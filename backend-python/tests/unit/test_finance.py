@@ -167,24 +167,56 @@ class TestNonConsumptionExclusion:
 
 
 class TestIncomeRealLogic:
-    """Solo positivos con category=='income' cuentan como ingreso (sprint P1-[2])."""
+    """Comportamiento de ingresos según el flag count_transfers_as_income."""
 
-    def test_positive_transfer_not_counted_as_income(self) -> None:
+    def test_positive_transfer_not_counted_when_flag_off(self) -> None:
         txs = [{"amount": 500_000, "category": "transfer"}]
-        s = compute_summary(txs)
+        s = compute_summary(txs, count_transfers_as_income=False)
         assert s.income == 0
         assert s.net_flow == 0
         assert s.balance == 0
 
-    def test_traspaso_de_transfer_category_not_income(self) -> None:
-        """Simula que el categorizador ya marcó la tx como 'transfer'."""
+    def test_positive_transfer_counted_when_flag_on(self) -> None:
+        txs = [{"amount": 500_000, "category": "transfer"}]
+        s = compute_summary(txs, count_transfers_as_income=True)
+        assert s.income == 500_000
+        assert s.net_flow == 500_000
+        assert s.balance == 500_000
+
+    def test_positive_transfer_counted_by_default(self) -> None:
+        txs = [{"amount": 300_000, "category": "transfer"}]
+        s = compute_summary(txs)
+        assert s.income == 300_000
+
+    def test_transfer_and_income_both_count_when_flag_on(self) -> None:
         txs = [
             {"amount": 300_000, "category": "transfer"},
             {"amount": 1_000_000, "category": "income"},
         ]
-        s = compute_summary(txs)
+        s = compute_summary(txs, count_transfers_as_income=True)
+        assert s.income == 1_300_000
+        assert s.net_flow == 1_300_000
+
+    def test_transfer_excluded_from_income_flag_off(self) -> None:
+        txs = [
+            {"amount": 300_000, "category": "transfer"},
+            {"amount": 1_000_000, "category": "income"},
+        ]
+        s = compute_summary(txs, count_transfers_as_income=False)
         assert s.income == 1_000_000
         assert s.net_flow == 1_000_000
+
+    def test_negative_transfer_unaffected_by_flag(self) -> None:
+        """Las transferencias salientes siguen excluidas de expenses sin importar el flag."""
+        txs = [
+            {"amount": -200_000, "category": "transfer"},
+        ]
+        s_on  = compute_summary(txs, count_transfers_as_income=True)
+        s_off = compute_summary(txs, count_transfers_as_income=False)
+        assert s_on.expenses  == 0
+        assert s_off.expenses == 0
+        assert s_on.net_flow  == -200_000
+        assert s_off.net_flow == -200_000
 
     def test_savings_rate_uses_expenses_not_total_outflow(self) -> None:
         """savings_rate es complementaria a spending_rate (misma base: expenses)."""
@@ -193,7 +225,8 @@ class TestIncomeRealLogic:
             {"amount": -300_000,  "category": "food"},
             {"amount": -200_000,  "category": "transfer"},
         ]
-        s = compute_summary(txs)
+        # Con flag ON: income sigue siendo 1M (la transfer saliente no afecta income)
+        s = compute_summary(txs, count_transfers_as_income=True)
         assert s.expenses == 300_000
         # savings_rate = (income - expenses) / income = (1M - 300k) / 1M = 0.7
         assert abs(s.savings_rate - 0.7) < 1e-9

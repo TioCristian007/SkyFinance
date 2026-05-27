@@ -40,6 +40,7 @@ def compute_summary(
     transactions: list[dict[str, Any]],
     *,
     period_days: int = 30,
+    count_transfers_as_income: bool = True,
 ) -> FinancialSummary:
     """
     Calcula summary a partir de lista de transacciones.
@@ -47,6 +48,10 @@ def compute_summary(
     Cada transacción: {"amount": int, "category": str}.
     amount > 0 = ingreso; amount < 0 = gasto.
     Paridad con financeService.js: expenses = sum(abs) donde category != "income".
+
+    count_transfers_as_income=True (default): transferencias entrantes (amount>0,
+    category=="transfer") también cuentan como ingreso. Transferencias salientes
+    siguen excluidas de expenses (NON_CONSUMPTION) independientemente del flag.
     """
     income = 0
     expenses = 0
@@ -57,7 +62,12 @@ def compute_summary(
         amount = int(tx.get("amount", 0))
         category = str(tx.get("category", "other"))
 
-        if amount > 0 and category == "income":
+        is_income_tx = amount > 0 and (
+            category == "income"
+            or (count_transfers_as_income and category == "transfer")
+        )
+
+        if is_income_tx:
             income += amount
         elif amount < 0:
             abs_amount = abs(amount)

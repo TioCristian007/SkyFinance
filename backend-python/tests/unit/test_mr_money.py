@@ -233,6 +233,11 @@ async def test_anthropic_failure_returns_canned_response(
 
 @pytest.mark.asyncio
 @patch(
+    "sky.domain.mr_money._fetch_profile_flag",
+    new_callable=AsyncMock,
+    return_value=True,
+)
+@patch(
     "sky.domain.challenges.get_challenges",
     new_callable=AsyncMock,
     return_value=_ACTIVE_CHALLENGES,
@@ -247,7 +252,7 @@ async def test_anthropic_failure_returns_canned_response(
     ],
 )
 async def test_build_financial_context_handles_dict_challenges(
-    mock_txs: AsyncMock, mock_goals: AsyncMock, mock_chs: AsyncMock
+    mock_txs: AsyncMock, mock_goals: AsyncMock, mock_chs: AsyncMock, mock_flag: AsyncMock
 ) -> None:
     """_build_financial_context no debe lanzar excepción con el shape real de get_challenges()."""
     ctx_text, raw = await _build_financial_context("user-reg-test")
