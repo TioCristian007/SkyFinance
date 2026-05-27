@@ -130,6 +130,11 @@ export async function deleteGoal(id) {
   return request(`/goals/${id}`, { method: "DELETE" });
 }
 
+// ── Profile ───────────────────────────────────────────────────────────────────
+export async function patchProfile(data) {
+  return request("/profile", { method: "PATCH", body: JSON.stringify(data) });
+}
+
 // ── Banking ───────────────────────────────────────────────────────────────────
 
 export async function getSupportedBanks() {

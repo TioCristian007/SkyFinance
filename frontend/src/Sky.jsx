@@ -353,6 +353,7 @@ export default function Sky({ userId, userEmail }) {
   const [pendingProposals,    setPendingProposals]    = useState([]);
   const [proposalLoadingId,   setProposalLoadingId]   = useState(null);
   const [initialSimType,      setInitialSimType]      = useState(null);
+  const [countTransfersAsIncome, setCountTransfersAsIncome] = useState(true);
 
   const bottomRef = useRef(null);
   const inputRef  = useRef(null);
@@ -374,6 +375,7 @@ export default function Sky({ userId, userEmail }) {
           setSummary(s.summary);
           setProfile(s.profile);
           setAllBadges(s.badges.allBadges);
+          setCountTransfersAsIncome(s.summary.countTransfersAsIncome ?? true);
           const hasBanks     = s.summary.hasBankAccounts;
           const incomeIsReal = s.summary.incomeIsReal;
           const displayBal   = hasBanks ? s.summary.totalBankBalance : s.summary.balance;
@@ -432,11 +434,25 @@ export default function Sky({ userId, userEmail }) {
       setSummary(res.summary);
       setProfile(res.profile);
       setAllBadges(res.badges.allBadges);
+      setCountTransfersAsIncome(res.summary.countTransfersAsIncome ?? true);
       if (res.badges.newBadges?.length) {
         res.badges.newBadges.forEach((b) => showToast(`🏅 Badge: ${b.label}!`, "gold"));
       }
     } catch (e) {
       console.error("[Sky] refreshSummary:", e.message);
+    }
+  };
+
+  // ── Ajustes de perfil ─────────────────────────────────────────────────────────
+  const handleToggleTransfersAsIncome = async (val) => {
+    setCountTransfersAsIncome(val);
+    try {
+      await api.patchProfile({ count_transfers_as_income: val });
+      await refreshSummary();
+    } catch (e) {
+      console.error("[Sky] patchProfile:", e.message);
+      setCountTransfersAsIncome(!val);
+      showToast("No se pudo guardar el ajuste", "red");
     }
   };
 
@@ -1191,6 +1207,43 @@ export default function Sky({ userId, userEmail }) {
                   <div style={{ fontSize: 13, fontWeight: 700, color: P.text, marginBottom: 14 }}>Colección de Badges</div>
                   <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
                     {allBadges.map(b => <BadgeItem key={b.id} badge={b} earned={b.earned} />)}
+                  </div>
+                </div>
+
+                {/* Ajustes de cálculo */}
+                <div style={{ background: P.surface, borderRadius: 14, padding: "18px 22px", border: `1px solid ${P.border}` }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: P.text, marginBottom: 14 }}>Ajustes de cálculo</div>
+                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 20 }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: P.text, marginBottom: 4 }}>
+                        Contar transferencias recibidas como ingreso
+                      </div>
+                      <div style={{ fontSize: 11, color: P.text3, lineHeight: 1.5 }}>
+                        {countTransfersAsIncome
+                          ? "Activado: tus transferencias recibidas cuentan como ingreso. Apágalo si recibes transferencias que no son tu sueldo o pagos."
+                          : "Desactivado: solo cuentan como ingreso las transacciones categorizadas como «Ingreso»."}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleToggleTransfersAsIncome(!countTransfersAsIncome)}
+                      title={countTransfersAsIncome ? "Desactivar" : "Activar"}
+                      style={{
+                        width: 44, height: 24, borderRadius: 12, border: "none",
+                        background: countTransfersAsIncome ? P.green : P.border2,
+                        position: "relative", cursor: "pointer", flexShrink: 0,
+                        transition: "background 0.2s",
+                        marginTop: 2,
+                      }}
+                    >
+                      <div style={{
+                        width: 18, height: 18, borderRadius: "50%",
+                        background: "#fff",
+                        position: "absolute", top: 3,
+                        left: countTransfersAsIncome ? 22 : 3,
+                        transition: "left 0.2s",
+                        boxShadow: "0 1px 3px rgba(0,0,0,0.25)",
+                      }} />
+                    </button>
                   </div>
                 </div>
               </div>
