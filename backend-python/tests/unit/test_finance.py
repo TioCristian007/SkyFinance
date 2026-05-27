@@ -118,7 +118,7 @@ class TestNonConsumptionExclusion:
 
     def test_transfer_excluded_from_expenses_and_by_category(self) -> None:
         txs = [{"amount": -30_000, "category": "transfer"}]
-        s = compute_summary(txs)
+        s = compute_summary(txs, count_transfers_as_expense=False)
         assert s.expenses == 0
         assert "transfer" not in s.by_category
 
@@ -135,6 +135,7 @@ class TestNonConsumptionExclusion:
         assert "debt_payment" not in s.by_category
 
     def test_non_consumption_counted_in_net_flow_and_balance(self) -> None:
+        # count_transfers_as_expense=False para aislar el comportamiento de NON_CONSUMPTION
         txs = [
             {"amount": 1_000_000, "category": "income"},
             {"amount": -200_000,  "category": "food"},
@@ -142,8 +143,8 @@ class TestNonConsumptionExclusion:
             {"amount":  -50_000,  "category": "savings"},
             {"amount":  -50_000,  "category": "debt_payment"},
         ]
-        s = compute_summary(txs)
-        # expenses solo cuenta consumo (food)
+        s = compute_summary(txs, count_transfers_as_expense=False)
+        # expenses solo cuenta consumo (food); transfer, savings, debt_payment excluidos
         assert s.expenses == 200_000
         assert set(s.by_category.keys()) == {"food"}
         # net_flow y balance cuentan TODOS los egresos
@@ -206,13 +207,14 @@ class TestIncomeRealLogic:
         assert s.income == 1_000_000
         assert s.net_flow == 1_000_000
 
-    def test_negative_transfer_unaffected_by_flag(self) -> None:
-        """Las transferencias salientes siguen excluidas de expenses sin importar el flag."""
+    def test_negative_transfer_unaffected_by_income_flag(self) -> None:
+        """El flag de ingresos no afecta si las transferencias salientes cuentan como gasto."""
         txs = [
             {"amount": -200_000, "category": "transfer"},
         ]
-        s_on  = compute_summary(txs, count_transfers_as_income=True)
-        s_off = compute_summary(txs, count_transfers_as_income=False)
+        # Con count_transfers_as_expense=False: excluidas sin importar el flag de income
+        s_on  = compute_summary(txs, count_transfers_as_income=True,  count_transfers_as_expense=False)
+        s_off = compute_summary(txs, count_transfers_as_income=False, count_transfers_as_expense=False)
         assert s_on.expenses  == 0
         assert s_off.expenses == 0
         assert s_on.net_flow  == -200_000
@@ -225,8 +227,8 @@ class TestIncomeRealLogic:
             {"amount": -300_000,  "category": "food"},
             {"amount": -200_000,  "category": "transfer"},
         ]
-        # Con flag ON: income sigue siendo 1M (la transfer saliente no afecta income)
-        s = compute_summary(txs, count_transfers_as_income=True)
+        # count_transfers_as_expense=False: la transfer saliente no afecta expenses ni savings_rate
+        s = compute_summary(txs, count_transfers_as_income=True, count_transfers_as_expense=False)
         assert s.expenses == 300_000
         # savings_rate = (income - expenses) / income = (1M - 300k) / 1M = 0.7
         assert abs(s.savings_rate - 0.7) < 1e-9
@@ -238,6 +240,86 @@ class TestIncomeRealLogic:
         sr = compute_savings_rate(income, expenses)
         sp = expenses / income
         assert abs(sr + sp - 1.0) < 1e-9
+
+
+class TestTransfersAsExpense:
+    """Comportamiento de transferencias salientes según count_transfers_as_expense."""
+
+    def test_outgoing_transfer_counts_as_expense_when_flag_on(self) -> None:
+        txs = [{"amount": -50_000, "category": "transfer"}]
+        s = compute_summary(txs, count_transfers_as_expense=True)
+        assert s.expenses == 50_000
+        assert s.by_category.get("transfer") == 50_000
+
+    def test_outgoing_transfer_excluded_when_flag_off(self) -> None:
+        txs = [{"amount": -50_000, "category": "transfer"}]
+        s = compute_summary(txs, count_transfers_as_expense=False)
+        assert s.expenses == 0
+        assert "transfer" not in s.by_category
+
+    def test_outgoing_transfer_counts_as_expense_by_default(self) -> None:
+        txs = [{"amount": -30_000, "category": "transfer"}]
+        s = compute_summary(txs)
+        assert s.expenses == 30_000
+
+    def test_savings_unaffected_by_expense_flag(self) -> None:
+        txs = [{"amount": -20_000, "category": "savings"}]
+        s = compute_summary(txs, count_transfers_as_expense=True)
+        assert s.expenses == 0
+        assert "savings" not in s.by_category
+
+    def test_debt_payment_unaffected_by_expense_flag(self) -> None:
+        txs = [{"amount": -15_000, "category": "debt_payment"}]
+        s = compute_summary(txs, count_transfers_as_expense=True)
+        assert s.expenses == 0
+        assert "debt_payment" not in s.by_category
+
+    def test_income_unaffected_by_expense_flag(self) -> None:
+        txs = [
+            {"amount": 1_000_000, "category": "income"},
+            {"amount": -50_000,   "category": "transfer"},
+        ]
+        s_on  = compute_summary(txs, count_transfers_as_expense=True)
+        s_off = compute_summary(txs, count_transfers_as_expense=False)
+        assert s_on.income  == 1_000_000
+        assert s_off.income == 1_000_000
+
+    def test_savings_rate_changes_with_expense_flag(self) -> None:
+        txs = [
+            {"amount": 1_000_000, "category": "income"},
+            {"amount": -300_000,  "category": "food"},
+            {"amount": -200_000,  "category": "transfer"},
+        ]
+        s_on  = compute_summary(txs, count_transfers_as_expense=True)
+        s_off = compute_summary(txs, count_transfers_as_expense=False)
+        assert s_on.expenses  == 500_000
+        assert s_off.expenses == 300_000
+        assert abs(s_on.savings_rate  - 0.5) < 1e-9
+        assert abs(s_off.savings_rate - 0.7) < 1e-9
+
+    def test_net_flow_unchanged_by_expense_flag(self) -> None:
+        """total_outflow (net_flow) nunca cambia; solo expenses y by_category."""
+        txs = [
+            {"amount": 1_000_000, "category": "income"},
+            {"amount": -200_000,  "category": "transfer"},
+        ]
+        s_on  = compute_summary(txs, count_transfers_as_expense=True)
+        s_off = compute_summary(txs, count_transfers_as_expense=False)
+        assert s_on.net_flow  == 800_000
+        assert s_off.net_flow == 800_000
+
+    def test_both_flags_independent(self) -> None:
+        txs = [
+            {"amount":  500_000, "category": "transfer"},
+            {"amount": -200_000, "category": "transfer"},
+        ]
+        s = compute_summary(txs, count_transfers_as_income=True, count_transfers_as_expense=True)
+        assert s.income   == 500_000
+        assert s.expenses == 200_000
+
+        s2 = compute_summary(txs, count_transfers_as_income=False, count_transfers_as_expense=False)
+        assert s2.income   == 0
+        assert s2.expenses == 0
 
 
 class TestTopCategories:

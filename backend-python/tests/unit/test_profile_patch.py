@@ -63,3 +63,36 @@ async def test_patch_profile_requires_auth() -> None:
 async def test_patch_profile_invalid_body(client: AsyncClient) -> None:
     resp = await client.patch("/api/profile", json={"count_transfers_as_income": "not_a_bool"})
     assert resp.status_code == 422
+
+
+async def test_patch_profile_count_transfers_as_expense(client: AsyncClient) -> None:
+    engine = _make_update_engine()
+    with patch("sky.api.routers.profile.get_engine", return_value=engine):
+        resp = await client.patch("/api/profile", json={"count_transfers_as_expense": False})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count_transfers_as_expense"] is False
+    assert "count_transfers_as_income" not in data
+
+
+async def test_patch_profile_both_flags(client: AsyncClient) -> None:
+    engine = _make_update_engine()
+    with patch("sky.api.routers.profile.get_engine", return_value=engine):
+        resp = await client.patch(
+            "/api/profile",
+            json={"count_transfers_as_income": True, "count_transfers_as_expense": False},
+        )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count_transfers_as_income"] is True
+    assert data["count_transfers_as_expense"] is False
+
+
+async def test_patch_profile_income_only_does_not_touch_expense_key(client: AsyncClient) -> None:
+    engine = _make_update_engine()
+    with patch("sky.api.routers.profile.get_engine", return_value=engine):
+        resp = await client.patch("/api/profile", json={"count_transfers_as_income": True})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count_transfers_as_income"] is True
+    assert "count_transfers_as_expense" not in data

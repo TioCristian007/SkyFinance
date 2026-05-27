@@ -233,9 +233,9 @@ async def test_anthropic_failure_returns_canned_response(
 
 @pytest.mark.asyncio
 @patch(
-    "sky.domain.mr_money._fetch_profile_flag",
+    "sky.domain.mr_money._fetch_profile_flags",
     new_callable=AsyncMock,
-    return_value=True,
+    return_value=(True, True),
 )
 @patch(
     "sky.domain.challenges.get_challenges",
