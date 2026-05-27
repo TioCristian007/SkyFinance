@@ -353,7 +353,8 @@ export default function Sky({ userId, userEmail }) {
   const [pendingProposals,    setPendingProposals]    = useState([]);
   const [proposalLoadingId,   setProposalLoadingId]   = useState(null);
   const [initialSimType,      setInitialSimType]      = useState(null);
-  const [countTransfersAsIncome, setCountTransfersAsIncome] = useState(true);
+  const [countTransfersAsIncome,  setCountTransfersAsIncome]  = useState(true);
+  const [countTransfersAsExpense, setCountTransfersAsExpense] = useState(true);
 
   const bottomRef = useRef(null);
   const inputRef  = useRef(null);
@@ -376,6 +377,7 @@ export default function Sky({ userId, userEmail }) {
           setProfile(s.profile);
           setAllBadges(s.badges.allBadges);
           setCountTransfersAsIncome(s.summary.countTransfersAsIncome ?? true);
+          setCountTransfersAsExpense(s.summary.countTransfersAsExpense ?? true);
           const hasBanks     = s.summary.hasBankAccounts;
           const incomeIsReal = s.summary.incomeIsReal;
           const displayBal   = hasBanks ? s.summary.totalBankBalance : s.summary.balance;
@@ -435,6 +437,7 @@ export default function Sky({ userId, userEmail }) {
       setProfile(res.profile);
       setAllBadges(res.badges.allBadges);
       setCountTransfersAsIncome(res.summary.countTransfersAsIncome ?? true);
+      setCountTransfersAsExpense(res.summary.countTransfersAsExpense ?? true);
       if (res.badges.newBadges?.length) {
         res.badges.newBadges.forEach((b) => showToast(`🏅 Badge: ${b.label}!`, "gold"));
       }
@@ -452,6 +455,18 @@ export default function Sky({ userId, userEmail }) {
     } catch (e) {
       console.error("[Sky] patchProfile:", e.message);
       setCountTransfersAsIncome(!val);
+      showToast("No se pudo guardar el ajuste", "red");
+    }
+  };
+
+  const handleToggleTransfersAsExpense = async (val) => {
+    setCountTransfersAsExpense(val);
+    try {
+      await api.patchProfile({ count_transfers_as_expense: val });
+      await refreshSummary();
+    } catch (e) {
+      console.error("[Sky] patchProfile:", e.message);
+      setCountTransfersAsExpense(!val);
       showToast("No se pudo guardar el ajuste", "red");
     }
   };
@@ -499,6 +514,17 @@ export default function Sky({ userId, userEmail }) {
       setTxs((prev) => prev.filter((t) => t.id !== id));
       await refreshSummary();
     } catch (e) { console.error("[Sky] deleteTx:", e.message); }
+  };
+
+  const recategorizeTx = async (id, category) => {
+    try {
+      await api.patchTransaction(id, category);
+      setTxs((prev) => prev.map((t) => t.id === id ? { ...t, category } : t));
+      await refreshSummary();
+    } catch (e) {
+      console.error("[Sky] recategorizeTx:", e.message);
+      showToast("No se pudo recategorizar", "red");
+    }
   };
 
   // ── Desafíos ──────────────────────────────────────────────────────────────────
@@ -1213,37 +1239,72 @@ export default function Sky({ userId, userEmail }) {
                 {/* Ajustes de cálculo */}
                 <div style={{ background: P.surface, borderRadius: 14, padding: "18px 22px", border: `1px solid ${P.border}` }}>
                   <div style={{ fontSize: 13, fontWeight: 700, color: P.text, marginBottom: 14 }}>Ajustes de cálculo</div>
-                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 20 }}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: P.text, marginBottom: 4 }}>
-                        Contar transferencias recibidas como ingreso
+                  <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+
+                    {/* Toggle ingresos */}
+                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 20 }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: P.text, marginBottom: 4 }}>
+                          Contar transferencias recibidas como ingreso
+                        </div>
+                        <div style={{ fontSize: 11, color: P.text3, lineHeight: 1.5 }}>
+                          {countTransfersAsIncome
+                            ? "Activado: las transferencias que recibís cuentan como ingreso del mes."
+                            : "Desactivado: solo cuentan como ingreso las transacciones categorizadas como «Ingreso»."}
+                        </div>
                       </div>
-                      <div style={{ fontSize: 11, color: P.text3, lineHeight: 1.5 }}>
-                        {countTransfersAsIncome
-                          ? "Activado: tus transferencias recibidas cuentan como ingreso. Apágalo si recibes transferencias que no son tu sueldo o pagos."
-                          : "Desactivado: solo cuentan como ingreso las transacciones categorizadas como «Ingreso»."}
-                      </div>
+                      <button
+                        onClick={() => handleToggleTransfersAsIncome(!countTransfersAsIncome)}
+                        title={countTransfersAsIncome ? "Desactivar" : "Activar"}
+                        style={{
+                          width: 44, height: 24, borderRadius: 12, border: "none",
+                          background: countTransfersAsIncome ? P.green : P.border2,
+                          position: "relative", cursor: "pointer", flexShrink: 0,
+                          transition: "background 0.2s", marginTop: 2,
+                        }}
+                      >
+                        <div style={{
+                          width: 18, height: 18, borderRadius: "50%", background: "#fff",
+                          position: "absolute", top: 3,
+                          left: countTransfersAsIncome ? 22 : 3,
+                          transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.25)",
+                        }} />
+                      </button>
                     </div>
-                    <button
-                      onClick={() => handleToggleTransfersAsIncome(!countTransfersAsIncome)}
-                      title={countTransfersAsIncome ? "Desactivar" : "Activar"}
-                      style={{
-                        width: 44, height: 24, borderRadius: 12, border: "none",
-                        background: countTransfersAsIncome ? P.green : P.border2,
-                        position: "relative", cursor: "pointer", flexShrink: 0,
-                        transition: "background 0.2s",
-                        marginTop: 2,
-                      }}
-                    >
-                      <div style={{
-                        width: 18, height: 18, borderRadius: "50%",
-                        background: "#fff",
-                        position: "absolute", top: 3,
-                        left: countTransfersAsIncome ? 22 : 3,
-                        transition: "left 0.2s",
-                        boxShadow: "0 1px 3px rgba(0,0,0,0.25)",
-                      }} />
-                    </button>
+
+                    <div style={{ height: 1, background: P.border }} />
+
+                    {/* Toggle gastos */}
+                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 20 }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: P.text, marginBottom: 4 }}>
+                          Contar transferencias enviadas como gasto
+                        </div>
+                        <div style={{ fontSize: 11, color: P.text3, lineHeight: 1.5 }}>
+                          {countTransfersAsExpense
+                            ? "Activado: el dinero que transferís a otros cuenta como gasto del mes."
+                            : "Desactivado: las transferencias enviadas no afectan tus gastos ni tu tasa de ahorro."}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleToggleTransfersAsExpense(!countTransfersAsExpense)}
+                        title={countTransfersAsExpense ? "Desactivar" : "Activar"}
+                        style={{
+                          width: 44, height: 24, borderRadius: 12, border: "none",
+                          background: countTransfersAsExpense ? P.green : P.border2,
+                          position: "relative", cursor: "pointer", flexShrink: 0,
+                          transition: "background 0.2s", marginTop: 2,
+                        }}
+                      >
+                        <div style={{
+                          width: 18, height: 18, borderRadius: "50%", background: "#fff",
+                          position: "absolute", top: 3,
+                          left: countTransfersAsExpense ? 22 : 3,
+                          transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.25)",
+                        }} />
+                      </button>
+                    </div>
+
                   </div>
                 </div>
               </div>
@@ -1471,12 +1532,39 @@ export default function Sky({ userId, userEmail }) {
                               {/* Descripción + meta info */}
                               <div style={{ flex: 1, minWidth: 0 }}>
                                 <div style={{ fontSize: 13, fontWeight: 600, color: P.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                                  {tx.description ?? tx.desc ?? cat.label}
+                                  {tx.merchant || cat.label}
                                 </div>
                                 <div style={{ fontSize: 11, color: P.text3, marginTop: 2, display: "flex", gap: 5, alignItems: "center", flexWrap: "nowrap" }}>
-                                  <span style={{ background: `${cat.color}14`, color: cat.color, borderRadius: 4, padding: "1px 6px", fontWeight: 600, fontSize: 10, flexShrink: 0 }}>
-                                    {cat.label}
-                                  </span>
+                                  <select
+                                    value={catKey}
+                                    onChange={(e) => recategorizeTx(tx.id, e.target.value)}
+                                    style={{
+                                      fontSize: 10, fontWeight: 600, color: cat.color,
+                                      background: `${cat.color}14`, borderRadius: 4,
+                                      padding: "1px 4px", border: "none",
+                                      cursor: "pointer", flexShrink: 0,
+                                      fontFamily: "inherit",
+                                    }}
+                                  >
+                                    {[
+                                      ["income",        "Ingreso"],
+                                      ["food",          "Alimentación"],
+                                      ["transport",     "Transporte"],
+                                      ["housing",       "Vivienda"],
+                                      ["health",        "Salud"],
+                                      ["entertainment", "Entretención"],
+                                      ["shopping",      "Compras"],
+                                      ["utilities",     "Servicios"],
+                                      ["subscriptions", "Suscripciones"],
+                                      ["education",     "Educación"],
+                                      ["travel",        "Viajes"],
+                                      ["banking_fee",   "Comisiones"],
+                                      ["transfer",      "Transferencia"],
+                                      ["debt_payment",  "Cuotas"],
+                                      ["savings",       "Ahorro"],
+                                      ["other",         "Otros"],
+                                    ].map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                                  </select>
                                   <span style={{ flexShrink: 0 }}>{dateDisplay}</span>
                                   {bankName && <span style={{ flexShrink: 0, color: P.text3 }}>· {bankName}</span>}
                                 </div>

@@ -75,12 +75,19 @@ export async function getSummary() {
 }
 
 // ── Transactions ──────────────────────────────────────────────────────────────
-export async function getTransactions() {
-  return request("/transactions");
+export async function getTransactions({ page = 1, page_size = 200 } = {}) {
+  return request(`/transactions?page=${page}&page_size=${page_size}`);
 }
 
 export async function addTransaction(tx) {
   return request("/transactions", { method: "POST", body: JSON.stringify(tx) });
+}
+
+export async function patchTransaction(id, category) {
+  return request(`/transactions/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ category }),
+  });
 }
 
 export async function deleteTransaction(id) {
