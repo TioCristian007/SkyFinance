@@ -677,7 +677,7 @@ export default function Sky({ userId, userEmail }) {
   const $ = privacyMode ? { filter: "blur(9px)", userSelect: "none", transition: "filter 0.2s" } : {};
 
   const filteredTxs = dateBoundTxs.filter(tx => {
-    const typeOk = txFilter === "all" ? true : txFilter === "income" ? tx.category === "income" : tx.category !== "income";
+    const typeOk = txFilter === "all" ? true : txFilter === "income" ? tx.amount > 0 : tx.amount < 0;
     const bankOk = bankFilter === "all" ? true : tx.bank_account_id === bankFilter;
     return typeOk && bankOk;
   });
@@ -1401,7 +1401,7 @@ export default function Sky({ userId, userEmail }) {
                 <div style={{ display: "flex", gap: 16, padding: "16px 24px", height: "calc(100vh - 58px)", overflow: "hidden", animation: "fadeUp 0.22s ease" }}>
 
                   {/* ── Columna media: filtros + donut ── */}
-                  <div style={{ width: 340, flexShrink: 0, display: "flex", flexDirection: "column", gap: 10, height: "100%" }}>
+                  <div style={{ width: 340, flexShrink: 0, display: "flex", flexDirection: "column", gap: 10, alignSelf: "flex-start" }}>
 
                     {/* Filtros — una fila: Período | Tipo */}
                     <div style={{ background: P.surface, borderRadius: 12, padding: "10px 14px", border: `1px solid ${P.border}`, flexShrink: 0 }}>
@@ -1438,8 +1438,8 @@ export default function Sky({ userId, userEmail }) {
                       )}
                     </div>
 
-                    {/* Donut — ocupa el espacio restante */}
-                    <div style={{ flex: 1, background: P.surface, borderRadius: 14, border: `1px solid ${P.border}`, display: "flex", flexDirection: "column", padding: "16px 20px", minHeight: 0 }}>
+                    {/* Donut — altura natural, no se estira */}
+                    <div style={{ background: P.surface, borderRadius: 14, border: `1px solid ${P.border}`, padding: "16px 20px" }}>
                       <CategoryDonut
                         transactions={donutTxs}
                         selectedCategory={selectedCategory}
