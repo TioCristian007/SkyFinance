@@ -7,33 +7,35 @@ import { useState } from "react";
 import { CATEGORIES, getCategory } from "../data/categories.js";
 import { fmt } from "../utils/format.js";
 
-// ── Paleta con máximo contraste entre tonos contiguos ────────────────────────
+// ── Paleta con máximo contraste entre tonos contiguos, un solo verde ─────────
 const SKY_DONUT_PALETTE = [
-  '#00C853', // Sky green signature
+  '#00C853', // Sky green signature (único verde)
   '#0D1B2A', // navy core
   '#FFD600', // amarillo cálido
   '#7C3AED', // púrpura vivo
   '#06B6D4', // cyan brillante
   '#FF6B6B', // coral
-  '#1ABC9C', // turquesa
+  '#3B82F6', // azul brillante
   '#F59E0B', // ámbar
-  '#84CC16', // lima
+  '#EC4899', // rosa
   '#1E3A5F', // navy medio
 ];
-const OTHERS_COLOR = '#94A3B8';
+const OTHERS_COLOR = '#94A3B8'; // gris slate — siempre para el bucket "Otros"
 
-// Mapping estable key → color (order alfabético → no varía con el monto del período)
+// Mapping estable key → color (orden alfabético → no varía con el monto del período)
 const SORTED_KEYS = [...CATEGORIES.map(c => c.key)].sort();
 const CATEGORY_COLOR = Object.fromEntries(
   SORTED_KEYS.map((key, i) => [key, SKY_DONUT_PALETTE[i % SKY_DONUT_PALETTE.length]])
 );
 
 function sliceColor(key) {
+  if (key === "other") return OTHERS_COLOR;
   return CATEGORY_COLOR[key] ?? OTHERS_COLOR;
 }
 
-const CIRC   = 2 * Math.PI * 80;  // ≈ 502.65
-const GAP_PX = 2.5;               // separación entre slices en unidades de viewBox
+const CIRC   = 2 * Math.PI * 80;
+const STROKE = 16;  // banca estrecha para que el redondeo no exija tanto
+const GAP_PX = 2.5; // separación visual entre slices
 
 function buildSlices(transactions, isIncome) {
   const filtered = isIncome
@@ -43,10 +45,20 @@ function buildSlices(transactions, isIncome) {
   const total = filtered.reduce((s, t) => s + Math.abs(t.amount ?? 0), 0);
   if (total === 0) return { total: 0, slices: [] };
 
-  const groups = {};
+  const rawGroups = {};
   for (const tx of filtered) {
     const key = tx.category ?? "other";
-    groups[key] = (groups[key] ?? 0) + Math.abs(tx.amount ?? 0);
+    rawGroups[key] = (rawGroups[key] ?? 0) + Math.abs(tx.amount ?? 0);
+  }
+
+  // Categorías con pct < 2% se agrupan en "other" para evitar slices clamped
+  const groups = {};
+  for (const [key, value] of Object.entries(rawGroups)) {
+    if (value / total < 0.02) {
+      groups["other"] = (groups["other"] ?? 0) + value;
+    } else {
+      groups[key] = (groups[key] ?? 0) + value;
+    }
   }
 
   const sorted = Object.entries(groups).sort((a, b) => b[1] - a[1]);
@@ -56,12 +68,16 @@ function buildSlices(transactions, isIncome) {
     total,
     slices: sorted.map(([key, value]) => {
       const fullArc = (value / total) * CIRC;
-      const drawArc = Math.max(fullArc - GAP_PX, 0.5); // mín 0.5 para que slices chicos no desaparezcan
+      // round cap extiende STROKE visual al slice (STROKE/2 a cada lado).
+      // Restar STROKE compensa esa extensión; restar GAP_PX da la separación entre slices.
+      // Resultado visual: arc - GAP_PX (misma fidelidad que butt sin compensación).
+      const drawArc = Math.max(fullArc - STROKE - GAP_PX, 0.5);
       const start   = cum;
-      cum += fullArc; // avanza con el arco completo → el gap queda natural
+      cum += fullArc;
       return {
         key, value,
         label: getCategory(key).label,
+        icon:  getCategory(key).icon,
         color: sliceColor(key),
         drawArc, start,
         pct: value / total,
@@ -87,7 +103,7 @@ export default function CategoryDonut({ transactions, selectedCategory, onSelect
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, padding: "28px 0" }}>
         <div style={{ position: "relative", width: "100%", maxWidth: 280 }}>
           <svg viewBox="0 0 200 200" style={{ width: "100%", height: "auto", display: "block" }}>
-            <circle cx={100} cy={100} r={80} fill="none" stroke="#E8ECF0" strokeWidth={24} />
+            <circle cx={100} cy={100} r={80} fill="none" stroke="#E8ECF0" strokeWidth={STROKE} />
           </svg>
           <div style={{
             position: "absolute", inset: 0,
@@ -104,6 +120,7 @@ export default function CategoryDonut({ transactions, selectedCategory, onSelect
   const active      = hovered ?? selectedCategory;
   const activeSlice = active ? slices.find(s => s.key === active) : null;
   const showActive  = Boolean(activeSlice);
+  const isSingleSlice = slices.length === 1;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
@@ -112,35 +129,49 @@ export default function CategoryDonut({ transactions, selectedCategory, onSelect
       <div style={{ position: "relative", width: "100%", maxWidth: 320 }}>
         <svg viewBox="0 0 200 200" style={{ width: "100%", height: "auto", display: "block" }}>
           {/* Track */}
-          <circle cx={100} cy={100} r={80} fill="none" stroke="#E4EAF1" strokeWidth={28} />
-          {/* Slices */}
-          <g transform="rotate(-90 100 100)">
-            {slices.map(s => {
-              const isSelected = selectedCategory === s.key;
-              const isHovered  = hovered === s.key;
-              const fat        = isSelected || isHovered;
-              return (
-                <circle
-                  key={s.key}
-                  cx={100} cy={100} r={80}
-                  fill="none"
-                  stroke={s.color}
-                  strokeWidth={fat ? 28 : 24}
-                  strokeLinecap="butt"
-                  strokeDasharray={`${s.drawArc} ${CIRC - s.drawArc}`}
-                  strokeDashoffset={-s.start}
-                  opacity={selectedCategory && !isSelected ? 0.35 : 1}
-                  style={{
-                    transition: "stroke-width 200ms ease-out, opacity 250ms ease, stroke-dasharray 400ms ease-out, stroke-dashoffset 400ms ease-out",
-                    cursor: "pointer",
-                  }}
-                  onClick={() => onSelectCategory(selectedCategory === s.key ? null : s.key)}
-                  onMouseEnter={() => setHovered(s.key)}
-                  onMouseLeave={() => setHovered(null)}
-                />
-              );
-            })}
-          </g>
+          <circle cx={100} cy={100} r={80} fill="none" stroke="#E4EAF1" strokeWidth={STROKE} />
+
+          {isSingleSlice ? (
+            // Un solo slice = 100%: anillo completo, sin gaps ni caps
+            <circle
+              cx={100} cy={100} r={80}
+              fill="none"
+              stroke={slices[0].color}
+              strokeWidth={STROKE}
+              style={{ cursor: "pointer" }}
+              onClick={() => onSelectCategory(selectedCategory === slices[0].key ? null : slices[0].key)}
+              onMouseEnter={() => setHovered(slices[0].key)}
+              onMouseLeave={() => setHovered(null)}
+            />
+          ) : (
+            <g transform="rotate(-90 100 100)">
+              {slices.map(s => {
+                const isSelected = selectedCategory === s.key;
+                const isHovered  = hovered === s.key;
+                const fat        = isSelected || isHovered;
+                return (
+                  <circle
+                    key={s.key}
+                    cx={100} cy={100} r={80}
+                    fill="none"
+                    stroke={s.color}
+                    strokeWidth={fat ? STROKE + 4 : STROKE}
+                    strokeLinecap="round"
+                    strokeDasharray={`${s.drawArc} ${CIRC - s.drawArc}`}
+                    strokeDashoffset={-s.start}
+                    opacity={selectedCategory && !isSelected ? 0.35 : 1}
+                    style={{
+                      transition: "stroke-width 200ms ease-out, opacity 250ms ease, stroke-dasharray 400ms ease-out, stroke-dashoffset 400ms ease-out",
+                      cursor: "pointer",
+                    }}
+                    onClick={() => onSelectCategory(selectedCategory === s.key ? null : s.key)}
+                    onMouseEnter={() => setHovered(s.key)}
+                    onMouseLeave={() => setHovered(null)}
+                  />
+                );
+              })}
+            </g>
+          )}
         </svg>
 
         {/* Texto central: dos capas con cross-fade */}
@@ -162,25 +193,34 @@ export default function CategoryDonut({ transactions, selectedCategory, onSelect
             </div>
             <div style={{ fontSize: 11, color: "#A0AAB4", marginTop: 4 }}>{centerLabel}</div>
           </div>
-          {/* Activo (hover / seleccionado) */}
+
+          {/* Activo (hover / seleccionado): emoji + label + monto · % */}
           <div style={{
-            position: "absolute", textAlign: "center", padding: "0 44px",
+            position: "absolute", textAlign: "center", padding: "0 40px",
             opacity: showActive ? 1 : 0, transition: "opacity 250ms ease",
+            width: "100%",
           }}>
             {activeSlice && (
               <>
                 <div style={{
-                  fontSize: 13, fontWeight: 600, color: activeSlice.color, lineHeight: 1.2,
-                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  gap: 4, lineHeight: 1.2, overflow: "hidden",
                 }}>
-                  {activeSlice.label}
+                  <span style={{ fontSize: 24, flexShrink: 0 }}>{activeSlice.icon}</span>
+                  <span style={{
+                    fontSize: 18, fontWeight: 600, color: activeSlice.color,
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                  }}>
+                    {activeSlice.label}
+                  </span>
                 </div>
                 <div style={{
-                  fontSize: 16, fontWeight: 400, color: "#0D1B2A",
-                  lineHeight: 1.2, marginTop: 3, fontVariantNumeric: "tabular-nums",
+                  fontSize: 22, fontWeight: 400, color: "#0D1B2A",
+                  lineHeight: 1.2, marginTop: 4, fontVariantNumeric: "tabular-nums",
+                  whiteSpace: "nowrap",
                 }}>
                   {fmt(activeSlice.value)}
-                  <span style={{ fontSize: 12, color: "#A0AAB4", marginLeft: 4 }}>
+                  <span style={{ fontSize: 14, color: "#A0AAB4", marginLeft: 4 }}>
                     · {Math.round(activeSlice.pct * 100)}%
                   </span>
                 </div>
