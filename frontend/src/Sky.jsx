@@ -322,6 +322,7 @@ export default function Sky({ userId, userEmail }) {
   const [bankFilter,        setBankFilter]        = useState("all");
   const [dateFilter,        setDateFilter]        = useState("mes-actual"); // "mes-actual" | "ultimos-30"
   const [selectedCategory,  setSelectedCategory]  = useState(null);
+  const [sortBy,            setSortBy]            = useState("fecha-desc"); // "fecha-desc"|"fecha-asc"|"monto-desc"|"monto-asc"|"nombre-asc"|"nombre-desc"
   const [privacyMode,  setPrivacyMode]  = useState(false);
   const [simMode,      setSimMode]      = useState("quick");
   const [activeSim,    setActiveSim]    = useState(null);
@@ -1388,6 +1389,21 @@ export default function Sky({ userId, userEmail }) {
                 ? filteredTxs.filter(t => t.category === selectedCategory)
                 : filteredTxs;
 
+              // Lista con ordenamiento aplicado después del filtro de categoría
+              const sortedTxs = [...catFilteredTxs].sort((a, b) => {
+                const [sKey, dir] = sortBy.split("-");
+                let diff = 0;
+                if (sKey === "fecha") {
+                  const toDate = t => new Date((t.date ?? t.created_at ?? "") + ((t.date ?? t.created_at ?? "").length === 10 ? "T12:00:00" : ""));
+                  diff = toDate(a) - toDate(b);
+                } else if (sKey === "monto") {
+                  diff = Math.abs(a.amount ?? 0) - Math.abs(b.amount ?? 0);
+                } else if (sKey === "nombre") {
+                  diff = (a.merchant ?? "").localeCompare(b.merchant ?? "", "es-CL");
+                }
+                return dir === "desc" ? -diff : diff;
+              });
+
               // Handler de selección de categoría desde el donut
               const handleSelectCategory = (key) => {
                 setSelectedCategory(key);
@@ -1400,7 +1416,7 @@ export default function Sky({ userId, userEmail }) {
                 <div style={{ display: "flex", gap: 16, padding: "16px 24px", height: "calc(100vh - 58px)", overflow: "hidden", animation: "fadeUp 0.22s ease" }}>
 
                   {/* ── Columna media: filtros + donut ── */}
-                  <div style={{ width: 340, flexShrink: 0, display: "flex", flexDirection: "column", gap: 10, alignSelf: "flex-start" }}>
+                  <div style={{ width: 440, flexShrink: 0, display: "flex", flexDirection: "column", gap: 10, alignSelf: "flex-start" }}>
 
                     {/* Filtros — una fila: Período | Tipo */}
                     <div style={{ background: P.surface, borderRadius: 12, padding: "10px 14px", border: `1px solid ${P.border}`, flexShrink: 0 }}>
@@ -1454,9 +1470,25 @@ export default function Sky({ userId, userEmail }) {
                     {/* Header */}
                     <div style={{ padding: "11px 18px", borderBottom: `1px solid ${P.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
                       <div style={{ fontSize: 14, fontWeight: 700, color: P.text }}>Movimientos</div>
-                      <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: P.text }}>{catFilteredTxs.length} resultado{catFilteredTxs.length !== 1 ? "s" : ""}</span>
-                        <span style={{ fontSize: 12, color: P.text2, fontWeight: 600 }}>{dateLabel}</span>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        {/* Chips de ordenamiento */}
+                        <div style={{ display: "flex", gap: 3 }}>
+                          {[["fecha", "Fecha"], ["monto", "Cantidad"], ["nombre", "Nombre"]].map(([sKey, sLabel]) => {
+                            const [base, dir] = sortBy.split("-");
+                            const active = base === sKey;
+                            const arrow = active ? (dir === "desc" ? " ↓" : " ↑") : "";
+                            return (
+                              <button key={sKey}
+                                onClick={() => active
+                                  ? setSortBy(`${sKey}-${dir === "desc" ? "asc" : "desc"}`)
+                                  : setSortBy(`${sKey}-${sKey === "nombre" ? "asc" : "desc"}`)
+                                }
+                                style={{ padding: "4px 8px", borderRadius: 7, border: "none", fontSize: 10, fontWeight: 600, background: active ? P.navy : P.bg, color: active ? "#fff" : P.text3, cursor: "pointer", transition: "all 0.15s" }}
+                              >{sLabel}{arrow}</button>
+                            );
+                          })}
+                        </div>
+                        <span style={{ fontSize: 12, color: P.text2, fontWeight: 600 }}>{catFilteredTxs.length} · {dateLabel}</span>
                       </div>
                     </div>
 
@@ -1489,7 +1521,7 @@ export default function Sky({ userId, userEmail }) {
                           {txs.length === 0 ? "Conecta un banco para ver movimientos" : "Sin movimientos en este período"}
                         </div>
                       ) : (
-                        catFilteredTxs.map(tx => {
+                        sortedTxs.map(tx => {
                           const isIncome = tx.amount > 0;
                           const catKey   = tx.category ?? "other";
                           const cat      = getCategory(catKey);

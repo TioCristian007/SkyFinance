@@ -10,33 +10,37 @@
 //        Las 7 categorías originales mantienen keys idénticas (no rompe datos).
 //
 // Orden: de mayor a menor frecuencia esperada en usuario promedio chileno.
+//
+// donutColor: color exclusivo por categoría en el donut de distribución.
+//   Asignados para máximo contraste entre categorías que típicamente coexisten.
+//   Sin colisiones — cada categoría tiene su propio tono.
 
 export const CATEGORIES = [
   // ── Alta frecuencia ────────────────────────────────────────────────────────
-  { key: "food",          label: "Comida",           icon: "🍔", color: "#7B1FA2", bg: "#F3E5F5" },
-  { key: "transport",     label: "Transporte",        icon: "🚌", color: "#F57C00", bg: "#FFF3E0" },
-  { key: "shopping",      label: "Compras",           icon: "🛍️", color: "#C62828", bg: "#FFEBEE" },
-  { key: "subscriptions", label: "Suscripciones",     icon: "📱", color: "#00838F", bg: "#E0F7FA" },
-  { key: "entertainment", label: "Entretención",      icon: "🎮", color: "#AD1457", bg: "#FCE4EC" },
+  { key: "food",          label: "Comida",           icon: "🍔", color: "#7B1FA2", bg: "#F3E5F5", donutColor: "#06B6D4"  },
+  { key: "transport",     label: "Transporte",        icon: "🚌", color: "#F57C00", bg: "#FFF3E0", donutColor: "#FF6B6B"  },
+  { key: "shopping",      label: "Compras",           icon: "🛍️", color: "#C62828", bg: "#FFEBEE", donutColor: "#7C3AED"  },
+  { key: "subscriptions", label: "Suscripciones",     icon: "📱", color: "#00838F", bg: "#E0F7FA", donutColor: "#FFD600"  },
+  { key: "entertainment", label: "Entretención",      icon: "🎮", color: "#AD1457", bg: "#FCE4EC", donutColor: "#EC4899"  },
 
   // ── Servicios esenciales ───────────────────────────────────────────────────
-  { key: "utilities",     label: "Servicios básicos", icon: "💡", color: "#F9A825", bg: "#FFFDE7" },
-  { key: "housing",       label: "Vivienda",          icon: "🏠", color: "#1565C0", bg: "#E3F2FD" },
-  { key: "health",        label: "Salud",             icon: "💊", color: "#2E7D32", bg: "#E8F5E9" },
+  { key: "utilities",     label: "Servicios básicos", icon: "💡", color: "#F9A825", bg: "#FFFDE7", donutColor: "#0D1B2A"  },
+  { key: "housing",       label: "Vivienda",          icon: "🏠", color: "#1565C0", bg: "#E3F2FD", donutColor: "#00C853"  },
+  { key: "health",        label: "Salud",             icon: "💊", color: "#2E7D32", bg: "#E8F5E9", donutColor: "#F59E0B"  },
 
   // ── Finanzas personales ────────────────────────────────────────────────────
-  { key: "debt_payment",  label: "Cuotas y créditos", icon: "💳", color: "#4527A0", bg: "#EDE7F6" },
-  { key: "savings",       label: "Ahorro",            icon: "🏦", color: "#00695C", bg: "#E0F2F1" },
-  { key: "insurance",     label: "Seguros",           icon: "🛡️", color: "#37474F", bg: "#ECEFF1" },
-  { key: "transfer",      label: "Transferencia",     icon: "↔️",  color: "#5D4037", bg: "#EFEBE9" },
-  { key: "banking_fee",   label: "Comisión bancaria", icon: "🏛️", color: "#78909C", bg: "#F5F5F5" },
+  { key: "debt_payment",  label: "Cuotas y créditos", icon: "💳", color: "#4527A0", bg: "#EDE7F6", donutColor: "#475569"  },
+  { key: "savings",       label: "Ahorro",            icon: "🏦", color: "#00695C", bg: "#E0F2F1", donutColor: "#1E3A5F"  },
+  { key: "insurance",     label: "Seguros",           icon: "🛡️", color: "#37474F", bg: "#ECEFF1", donutColor: "#92400E"  },
+  { key: "transfer",      label: "Transferencia",     icon: "↔️",  color: "#5D4037", bg: "#EFEBE9", donutColor: "#3B82F6"  },
+  { key: "banking_fee",   label: "Comisión bancaria", icon: "🏛️", color: "#78909C", bg: "#F5F5F5", donutColor: "#64748B"  },
 
   // ── Inversión y desarrollo ─────────────────────────────────────────────────
-  { key: "education",     label: "Educación",         icon: "📚", color: "#1B5E20", bg: "#F1F8E9" },
-  { key: "income",        label: "Ingreso",           icon: "💰", color: "#33691E", bg: "#F9FBE7" },
+  { key: "education",     label: "Educación",         icon: "📚", color: "#1B5E20", bg: "#F1F8E9", donutColor: "#6B21A8"  },
+  { key: "income",        label: "Ingreso",           icon: "💰", color: "#33691E", bg: "#F9FBE7", donutColor: "#16A34A"  },
 
   // ── Fallback ───────────────────────────────────────────────────────────────
-  { key: "other",         label: "Otros",             icon: "📦", color: "#6B7A8D", bg: "#F0F2F5" },
+  { key: "other",         label: "Otros",             icon: "📦", color: "#6B7A8D", bg: "#F0F2F5", donutColor: "#94A3B8"  },
 ];
 
 // ── Helpers ────────────────────────────────────────────────────────────────────

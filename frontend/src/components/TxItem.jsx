@@ -1,8 +1,8 @@
 // components/TxItem.jsx
 // Fila de una transacción.
 //
-// FIX: antes mostraba "-" hardcodeado para TODOS los items, incluyendo ingresos.
-// Ahora: income → verde con "+", el resto → rojo con "-".
+// Ingresos → verde Sky "#00C853" con "+". Gastos → color texto principal (neutro).
+// Rojo reservado para estados de error; el gasto habitual no debe generar alarma visual.
 
 import { C } from "../data/colors.js";
 import { fmt, fmtDate, catOf } from "../utils/format.js";
@@ -13,7 +13,7 @@ export default function TxItem({ tx, onDelete, compact = false }) {
   const bankMeta = getBankMeta(tx.bank_name);
   const isIncome = tx.amount > 0;
   const sign     = isIncome ? "+" : "-";
-  const color    = isIncome ? "#22C55E" : C.red;
+  const color    = isIncome ? "#00C853" : C.textPrimary;
 
   return (
     <div style={{

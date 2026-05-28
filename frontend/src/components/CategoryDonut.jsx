@@ -4,38 +4,16 @@
 // Solo el click propaga selectedCategory hacia arriba.
 
 import { useState } from "react";
-import { CATEGORIES, getCategory } from "../data/categories.js";
+import { getCategory } from "../data/categories.js";
 import { fmt } from "../utils/format.js";
 
-// ── Paleta con máximo contraste entre tonos contiguos, un solo verde ─────────
-const SKY_DONUT_PALETTE = [
-  '#00C853', // Sky green signature (único verde)
-  '#0D1B2A', // navy core
-  '#FFD600', // amarillo cálido
-  '#7C3AED', // púrpura vivo
-  '#06B6D4', // cyan brillante
-  '#FF6B6B', // coral
-  '#3B82F6', // azul brillante
-  '#F59E0B', // ámbar
-  '#EC4899', // rosa
-  '#1E3A5F', // navy medio
-];
-const OTHERS_COLOR = '#94A3B8'; // gris slate — siempre para el bucket "Otros"
-
-// Mapping estable key → color (orden alfabético → no varía con el monto del período)
-const SORTED_KEYS = [...CATEGORIES.map(c => c.key)].sort();
-const CATEGORY_COLOR = Object.fromEntries(
-  SORTED_KEYS.map((key, i) => [key, SKY_DONUT_PALETTE[i % SKY_DONUT_PALETTE.length]])
-);
+const CIRC   = 2 * Math.PI * 80;
+const STROKE = 16;
+const GAP_PX = 8;  // gap visual entre slices (8 = STROKE/2 → sin solapamiento de caps)
 
 function sliceColor(key) {
-  if (key === "other") return OTHERS_COLOR;
-  return CATEGORY_COLOR[key] ?? OTHERS_COLOR;
+  return getCategory(key).donutColor ?? '#94A3B8';
 }
-
-const CIRC   = 2 * Math.PI * 80;
-const STROKE = 16;  // banca estrecha para que el redondeo no exija tanto
-const GAP_PX = 2.5; // separación visual entre slices
 
 function buildSlices(transactions, isIncome) {
   const filtered = isIncome
@@ -68,14 +46,14 @@ function buildSlices(transactions, isIncome) {
     total,
     slices: sorted.map(([key, value]) => {
       const fullArc = (value / total) * CIRC;
-      // round cap extiende STROKE visual al slice (STROKE/2 a cada lado).
-      // Restar STROKE compensa esa extensión; restar GAP_PX da la separación entre slices.
-      // Resultado visual: arc - GAP_PX (misma fidelidad que butt sin compensación).
+      // round cap extiende STROKE visual (STROKE/2 a cada lado).
+      // Restar STROKE compensa; GAP_PX da la separación entre slices.
+      // gap visual final = GAP_PX; visualArc = fullArc - GAP_PX (fidelidad preservada).
       const drawArc = Math.max(fullArc - STROKE - GAP_PX, 0.5);
       const start   = cum;
-      cum += fullArc;
+      cum += fullArc; // avance por arco completo — nunca por drawArc
       return {
-        key, value,
+        key, value, fullArc,
         label: getCategory(key).label,
         icon:  getCategory(key).icon,
         color: sliceColor(key),
@@ -126,29 +104,62 @@ export default function CategoryDonut({ transactions, selectedCategory, onSelect
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
 
       {/* SVG + texto central flotante */}
-      <div style={{ position: "relative", width: "100%", maxWidth: 320 }}>
+      <div style={{ position: "relative", width: "100%", maxWidth: 420 }}>
         <svg viewBox="0 0 200 200" style={{ width: "100%", height: "auto", display: "block" }}>
           {/* Track */}
           <circle cx={100} cy={100} r={80} fill="none" stroke="#E4EAF1" strokeWidth={STROKE} />
 
           {isSingleSlice ? (
-            // Un solo slice = 100%: anillo completo, sin gaps ni caps
-            <circle
-              cx={100} cy={100} r={80}
-              fill="none"
-              stroke={slices[0].color}
-              strokeWidth={STROKE}
-              style={{ cursor: "pointer" }}
-              onClick={() => onSelectCategory(selectedCategory === slices[0].key ? null : slices[0].key)}
-              onMouseEnter={() => setHovered(slices[0].key)}
-              onMouseLeave={() => setHovered(null)}
-            />
+            <>
+              {/* Hit area — disco transparente que cubre todo el anillo */}
+              <circle
+                cx={100} cy={100} r={88}
+                fill="transparent"
+                style={{ cursor: "pointer" }}
+                onClick={() => onSelectCategory(selectedCategory === slices[0].key ? null : slices[0].key)}
+                onMouseEnter={() => setHovered(slices[0].key)}
+                onMouseLeave={() => setHovered(null)}
+              />
+              {/* Visual ring */}
+              <circle
+                cx={100} cy={100} r={80}
+                fill="none"
+                stroke={slices[0].color}
+                strokeWidth={STROKE}
+                style={{ pointerEvents: "none" }}
+              />
+            </>
           ) : (
             <g transform="rotate(-90 100 100)">
+              {/* Wedge paths: invisibles, capturan hover en toda el área del slice
+                  (incluyendo el hueco central). Se renderizan ANTES que los arcos
+                  visuales para que queden debajo en z-order. */}
+              {slices.map(s => {
+                const aStart = s.start / 80;
+                const aEnd   = (s.start + s.fullArc) / 80;
+                const x1 = (100 + 80 * Math.cos(aStart)).toFixed(2);
+                const y1 = (100 + 80 * Math.sin(aStart)).toFixed(2);
+                const x2 = (100 + 80 * Math.cos(aEnd)).toFixed(2);
+                const y2 = (100 + 80 * Math.sin(aEnd)).toFixed(2);
+                const large = s.fullArc / 80 > Math.PI ? 1 : 0;
+                const d = `M 100 100 L ${x1} ${y1} A 80 80 0 ${large} 1 ${x2} ${y2} Z`;
+                return (
+                  <path
+                    key={`w-${s.key}`}
+                    d={d}
+                    fill="transparent"
+                    stroke="none"
+                    style={{ cursor: "pointer" }}
+                    onClick={() => onSelectCategory(selectedCategory === s.key ? null : s.key)}
+                    onMouseEnter={() => setHovered(s.key)}
+                    onMouseLeave={() => setHovered(null)}
+                  />
+                );
+              })}
+              {/* Arcos visuales: pointer-events none — los wedges capturan los eventos */}
               {slices.map(s => {
                 const isSelected = selectedCategory === s.key;
-                const isHovered  = hovered === s.key;
-                const fat        = isSelected || isHovered;
+                const fat        = isSelected || hovered === s.key;
                 return (
                   <circle
                     key={s.key}
@@ -161,12 +172,9 @@ export default function CategoryDonut({ transactions, selectedCategory, onSelect
                     strokeDashoffset={-s.start}
                     opacity={selectedCategory && !isSelected ? 0.35 : 1}
                     style={{
-                      transition: "stroke-width 200ms ease-out, opacity 250ms ease, stroke-dasharray 400ms ease-out, stroke-dashoffset 400ms ease-out",
-                      cursor: "pointer",
+                      transition: "stroke-width 200ms ease-out, opacity 250ms ease",
+                      pointerEvents: "none",
                     }}
-                    onClick={() => onSelectCategory(selectedCategory === s.key ? null : s.key)}
-                    onMouseEnter={() => setHovered(s.key)}
-                    onMouseLeave={() => setHovered(null)}
                   />
                 );
               })}
