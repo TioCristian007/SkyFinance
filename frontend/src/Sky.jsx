@@ -1391,7 +1391,6 @@ export default function Sky({ userId, userEmail }) {
               // Handler de selección de categoría desde el donut
               const handleSelectCategory = (key) => {
                 setSelectedCategory(key);
-                if (key !== null && txFilter !== "expense") setTxFilter("expense");
               };
 
               // Chip de categoría activa
@@ -1422,7 +1421,7 @@ export default function Sky({ userId, userEmail }) {
                           <div style={{ fontSize: 9, fontWeight: 700, color: P.text3, letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 5 }}>Tipo</div>
                           <div style={{ display: "flex", gap: 4 }}>
                             {[["all", "Todos"], ["expense", "Gastos"], ["income", "Ingr."]].map(([val, lbl]) => (
-                              <button key={val} onClick={() => { setTxFilter(val); if (val !== "expense") setSelectedCategory(null); }} style={{ flex: 1, padding: "6px 0", borderRadius: 7, border: "none", fontSize: 10, fontWeight: 600, background: txFilter === val ? P.navy : P.bg, color: txFilter === val ? "#fff" : P.text3, cursor: "pointer", transition: "all 0.15s" }}>{lbl}</button>
+                              <button key={val} onClick={() => { setTxFilter(val); setSelectedCategory(null); }} style={{ flex: 1, padding: "6px 0", borderRadius: 7, border: "none", fontSize: 10, fontWeight: 600, background: txFilter === val ? P.navy : P.bg, color: txFilter === val ? "#fff" : P.text3, cursor: "pointer", transition: "all 0.15s" }}>{lbl}</button>
                             ))}
                           </div>
                         </div>
@@ -1444,6 +1443,7 @@ export default function Sky({ userId, userEmail }) {
                         transactions={donutTxs}
                         selectedCategory={selectedCategory}
                         onSelectCategory={handleSelectCategory}
+                        tipoFilter={txFilter}
                       />
                     </div>
                   </div>

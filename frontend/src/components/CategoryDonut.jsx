@@ -1,5 +1,5 @@
 // components/CategoryDonut.jsx
-// Donut de distribución de gastos por categoría. SVG nativo, sin librerías.
+// Donut de distribución de gastos/ingresos por categoría. SVG nativo, sin librerías.
 // Hover es estado local — no genera re-renders en el padre.
 // Solo el click propaga selectedCategory hacia arriba.
 
@@ -7,22 +7,22 @@ import { useState } from "react";
 import { CATEGORIES, getCategory } from "../data/categories.js";
 import { fmt } from "../utils/format.js";
 
-// ── Paleta Sky: navy → verde (10 tonos) ─────────────────────────────────────
+// ── Paleta con máximo contraste entre tonos contiguos ────────────────────────
 const SKY_DONUT_PALETTE = [
-  '#0D1B2A', // navy core
-  '#1E3A5F', // navy medio
-  '#2A5C8A', // azul océano
-  '#1B7A8C', // petróleo
-  '#00897B', // teal oscuro
-  '#00B894', // verde-teal
   '#00C853', // Sky green signature
-  '#4CD964', // verde brillante
-  '#7BE495', // verde menta
-  '#B8F0C8', // verde muy claro
+  '#0D1B2A', // navy core
+  '#FFD600', // amarillo cálido
+  '#7C3AED', // púrpura vivo
+  '#06B6D4', // cyan brillante
+  '#FF6B6B', // coral
+  '#1ABC9C', // turquesa
+  '#F59E0B', // ámbar
+  '#84CC16', // lima
+  '#1E3A5F', // navy medio
 ];
 const OTHERS_COLOR = '#94A3B8';
 
-// Mapping estable key → color del palette (ordenado alfabético → no varía por monto)
+// Mapping estable key → color (order alfabético → no varía con el monto del período)
 const SORTED_KEYS = [...CATEGORIES.map(c => c.key)].sort();
 const CATEGORY_COLOR = Object.fromEntries(
   SORTED_KEYS.map((key, i) => [key, SKY_DONUT_PALETTE[i % SKY_DONUT_PALETTE.length]])
@@ -32,32 +32,38 @@ function sliceColor(key) {
   return CATEGORY_COLOR[key] ?? OTHERS_COLOR;
 }
 
-const CIRC = 2 * Math.PI * 80;  // ≈ 502.65
+const CIRC   = 2 * Math.PI * 80;  // ≈ 502.65
+const GAP_PX = 2.5;               // separación entre slices en unidades de viewBox
 
-function buildSlices(transactions) {
-  const expenses = transactions.filter(t => (t.amount ?? 0) < 0);
-  const total    = expenses.reduce((s, t) => s + Math.abs(t.amount ?? 0), 0);
+function buildSlices(transactions, isIncome) {
+  const filtered = isIncome
+    ? transactions.filter(t => (t.amount ?? 0) > 0)
+    : transactions.filter(t => (t.amount ?? 0) < 0);
+
+  const total = filtered.reduce((s, t) => s + Math.abs(t.amount ?? 0), 0);
   if (total === 0) return { total: 0, slices: [] };
 
   const groups = {};
-  for (const tx of expenses) {
+  for (const tx of filtered) {
     const key = tx.category ?? "other";
     groups[key] = (groups[key] ?? 0) + Math.abs(tx.amount ?? 0);
   }
 
   const sorted = Object.entries(groups).sort((a, b) => b[1] - a[1]);
+
   let cum = 0;
   return {
     total,
     slices: sorted.map(([key, value]) => {
-      const arc   = (value / total) * CIRC;
-      const start = cum;
-      cum += arc;
+      const fullArc = (value / total) * CIRC;
+      const drawArc = Math.max(fullArc - GAP_PX, 0.5); // mín 0.5 para que slices chicos no desaparezcan
+      const start   = cum;
+      cum += fullArc; // avanza con el arco completo → el gap queda natural
       return {
         key, value,
         label: getCategory(key).label,
         color: sliceColor(key),
-        arc, start,
+        drawArc, start,
         pct: value / total,
       };
     }),
@@ -66,9 +72,14 @@ function buildSlices(transactions) {
 
 // ── Componente ───────────────────────────────────────────────────────────────
 
-export default function CategoryDonut({ transactions, selectedCategory, onSelectCategory }) {
+export default function CategoryDonut({ transactions, selectedCategory, onSelectCategory, tipoFilter }) {
   const [hovered, setHovered] = useState(null);
-  const { total, slices } = buildSlices(transactions);
+
+  const isIncome    = tipoFilter === "income";
+  const centerLabel = isIncome ? "ingresos" : "gastos";
+  const emptyMsg    = isIncome ? "Sin ingresos en este período 🌱" : "Aún sin gastos este mes 🌱";
+
+  const { total, slices } = buildSlices(transactions, isIncome);
 
   // Estado vacío
   if (total === 0) {
@@ -85,7 +96,7 @@ export default function CategoryDonut({ transactions, selectedCategory, onSelect
             <span style={{ fontSize: 36 }}>🌱</span>
           </div>
         </div>
-        <span style={{ fontSize: 13, color: "#8A96A8" }}>Aún sin gastos este mes</span>
+        <span style={{ fontSize: 13, color: "#8A96A8" }}>{emptyMsg}</span>
       </div>
     );
   }
@@ -115,8 +126,8 @@ export default function CategoryDonut({ transactions, selectedCategory, onSelect
                   fill="none"
                   stroke={s.color}
                   strokeWidth={fat ? 28 : 24}
-                  strokeLinecap="round"
-                  strokeDasharray={`${s.arc} ${CIRC - s.arc}`}
+                  strokeLinecap="butt"
+                  strokeDasharray={`${s.drawArc} ${CIRC - s.drawArc}`}
                   strokeDashoffset={-s.start}
                   opacity={selectedCategory && !isSelected ? 0.35 : 1}
                   style={{
@@ -140,10 +151,8 @@ export default function CategoryDonut({ transactions, selectedCategory, onSelect
         }}>
           {/* Reposo */}
           <div style={{
-            position: "absolute", textAlign: "center",
-            padding: "0 56px",
-            opacity: showActive ? 0 : 1,
-            transition: "opacity 250ms ease",
+            position: "absolute", textAlign: "center", padding: "0 56px",
+            opacity: showActive ? 0 : 1, transition: "opacity 250ms ease",
           }}>
             <div style={{
               fontSize: 20, fontWeight: 600, color: "#0D1B2A",
@@ -151,20 +160,17 @@ export default function CategoryDonut({ transactions, selectedCategory, onSelect
             }}>
               {fmt(total)}
             </div>
-            <div style={{ fontSize: 11, color: "#A0AAB4", marginTop: 4 }}>gastos</div>
+            <div style={{ fontSize: 11, color: "#A0AAB4", marginTop: 4 }}>{centerLabel}</div>
           </div>
           {/* Activo (hover / seleccionado) */}
           <div style={{
-            position: "absolute", textAlign: "center",
-            padding: "0 44px",
-            opacity: showActive ? 1 : 0,
-            transition: "opacity 250ms ease",
+            position: "absolute", textAlign: "center", padding: "0 44px",
+            opacity: showActive ? 1 : 0, transition: "opacity 250ms ease",
           }}>
             {activeSlice && (
               <>
                 <div style={{
-                  fontSize: 13, fontWeight: 600,
-                  color: activeSlice.color, lineHeight: 1.2,
+                  fontSize: 13, fontWeight: 600, color: activeSlice.color, lineHeight: 1.2,
                   overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                 }}>
                   {activeSlice.label}
@@ -205,10 +211,7 @@ export default function CategoryDonut({ transactions, selectedCategory, onSelect
               transition: "background 0.15s",
             }}
           >
-            <span style={{
-              width: 7, height: 7, borderRadius: "50%",
-              background: s.color, flexShrink: 0,
-            }} />
+            <span style={{ width: 7, height: 7, borderRadius: "50%", background: s.color, flexShrink: 0 }} />
             <span style={{
               flex: 1, fontSize: 12, color: "#0D1B2A",
               overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
