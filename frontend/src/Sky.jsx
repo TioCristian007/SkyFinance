@@ -12,16 +12,16 @@
 import { useState, useRef, useEffect } from "react";
 import { fmt, fmtK, nowTime } from "./utils/format.js";
 import { getBankMeta } from "./data/banks.js";
+import { getCategory } from "./data/categories.js";
 import { BADGES } from "./data/challenges.js";
 import { QUICK_SIMS } from "./data/simulations.js";
 import * as api from "./services/api.js";
 import { setAccessToken } from "./services/api.js";
 import { signOut } from "./services/supabase.js";
 
-import DonutChart      from "./components/DonutChart.jsx";
 import CatBars         from "./components/CatBars.jsx";
 import TxItem          from "./components/TxItem.jsx";
-import AddTxForm       from "./components/AddTxForm.jsx";
+import CategoryDonut   from "./components/CategoryDonut.jsx";
 import GoalCard        from "./components/GoalCard.jsx";
 import AddGoalForm     from "./components/AddGoalForm.jsx";
 import AddSavingsModal from "./components/AddSavingsModal.jsx";
@@ -318,9 +318,10 @@ export default function Sky({ userId, userEmail }) {
   const [showAddGoal,  setShowAddGoal]  = useState(false);
   const [goalLoading,  setGoalLoading]  = useState(false);
   const [savingsTarget, setSavingsTarget] = useState(null);
-  const [txFilter,     setTxFilter]     = useState("all");
-  const [bankFilter,   setBankFilter]   = useState("all");
-  const [dateFilter,   setDateFilter]   = useState("mes-actual"); // "mes-actual" | "ultimos-30"
+  const [txFilter,          setTxFilter]          = useState("all");
+  const [bankFilter,        setBankFilter]        = useState("all");
+  const [dateFilter,        setDateFilter]        = useState("mes-actual"); // "mes-actual" | "ultimos-30"
+  const [selectedCategory,  setSelectedCategory]  = useState(null);
   const [privacyMode,  setPrivacyMode]  = useState(false);
   const [simMode,      setSimMode]      = useState("quick");
   const [activeSim,    setActiveSim]    = useState(null);
@@ -1365,15 +1366,6 @@ export default function Sky({ userId, userEmail }) {
                 MOVIMIENTOS
             ══════════════════════════════ */}
             {tab === "expenses" && (() => {
-              // Math.abs unifica montos negativos (banco) y positivos (manuales)
-              const _NON_CONSUMPTION = ["transfer", "savings", "debt_payment"];
-              const filteredIncome2 = filteredTxs
-                .filter(t => (t.amount||0) > 0 && (t.category === "income" || (countTransfersAsIncome && t.category === "transfer")))
-                .reduce((s, t) => s + (t.amount||0), 0);
-              const filteredExpenses = filteredTxs
-                .filter(t => (t.amount||0) < 0 && (!_NON_CONSUMPTION.includes(t.category) || (countTransfersAsExpense && t.category === "transfer")))
-                .reduce((s, t) => s + Math.abs(t.amount||0), 0);
-
               const banksInTxs = [...new Map(
                 dateBoundTxs.filter(t => t.bank_account_id).map(t => [t.bank_account_id, {
                   id:   t.bank_account_id,
@@ -1386,108 +1378,121 @@ export default function Sky({ userId, userEmail }) {
                 ? `1–${new Date().getDate()} de ${new Date().toLocaleString("es-CL", { month: "long" })}`
                 : "Últimos 30 días";
 
+              // Donut recibe txs filtradas por período y banco (pero NO por tipo)
+              const donutTxs = dateBoundTxs.filter(t =>
+                bankFilter === "all" || t.bank_account_id === bankFilter
+              );
+
+              // Lista: aplica además el filtro de categoría seleccionada
+              const catFilteredTxs = selectedCategory
+                ? filteredTxs.filter(t => t.category === selectedCategory)
+                : filteredTxs;
+
+              // Handler de selección de categoría desde el donut
+              const handleSelectCategory = (key) => {
+                setSelectedCategory(key);
+                if (key !== null && txFilter !== "expense") setTxFilter("expense");
+              };
+
+              // Chip de categoría activa
+              const activeCat = selectedCategory ? getCategory(selectedCategory) : null;
+
               return (
-                /* Layout de altura fija — ocupa exactamente el viewport disponible */
                 <div style={{ display: "flex", gap: 16, padding: "16px 24px", height: "calc(100vh - 58px)", overflow: "hidden", animation: "fadeUp 0.22s ease" }}>
 
-                  {/* ── Panel izquierdo: fijo, no scrollea ── */}
-                  <div style={{ width: 248, flexShrink: 0, display: "flex", flexDirection: "column", gap: 10, height: "100%", overflowY: "auto" }}>
+                  {/* ── Columna media: filtros + donut ── */}
+                  <div style={{ width: 340, flexShrink: 0, display: "flex", flexDirection: "column", gap: 10, height: "100%" }}>
 
-                    {/* Filtros arriba — siempre visibles al abrir */}
-                    <div style={{ background: P.surface, borderRadius: 12, padding: "12px 14px", border: `1px solid ${P.border}`, flexShrink: 0 }}>
-
-                      {/* Período */}
-                      <div style={{ fontSize: 10, fontWeight: 700, color: P.text3, letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 6 }}>Período</div>
-                      <div style={{ display: "flex", gap: 5, marginBottom: 10 }}>
-                        {[["mes-actual", "Mes actual"], ["ultimos-30", "Últimos 30d"]].map(([val, lbl]) => (
-                          <button key={val} onClick={() => setDateFilter(val)} style={{ flex: 1, padding: "7px 0", borderRadius: 7, border: "none", fontSize: 11, fontWeight: 600, background: dateFilter === val ? P.navy : P.bg, color: dateFilter === val ? "#fff" : P.text3, cursor: "pointer", transition: "all 0.15s" }}>{lbl}</button>
-                        ))}
-                      </div>
-
-                      {/* Tipo */}
-                      <div style={{ fontSize: 10, fontWeight: 700, color: P.text3, letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 6 }}>Tipo</div>
-                      <div style={{ display: "flex", gap: 5, marginBottom: banksInTxs.length > 1 ? 10 : 0 }}>
-                        {[["all", "Todos"], ["expense", "Gastos"], ["income", "Ingresos"]].map(([val, lbl]) => (
-                          <button key={val} onClick={() => setTxFilter(val)} style={{ flex: 1, padding: "7px 0", borderRadius: 7, border: "none", fontSize: 11, fontWeight: 600, background: txFilter === val ? P.navy : P.bg, color: txFilter === val ? "#fff" : P.text3, cursor: "pointer", transition: "all 0.15s" }}>{lbl}</button>
-                        ))}
-                      </div>
-
-                      {/* Banco */}
-                      {banksInTxs.length > 1 && (
-                        <>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: P.text3, letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 6 }}>Banco</div>
-                          <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                            <button onClick={() => setBankFilter("all")} style={{ padding: "5px 9px", borderRadius: 7, border: "none", fontSize: 11, fontWeight: 600, background: bankFilter === "all" ? P.navy : P.bg, color: bankFilter === "all" ? "#fff" : P.text3, cursor: "pointer" }}>Todos</button>
-                            {banksInTxs.map(b => (
-                              <button key={b.id} onClick={() => setBankFilter(b.id)} style={{ padding: "5px 9px", borderRadius: 7, border: "none", fontSize: 11, fontWeight: 600, background: bankFilter === b.id ? P.navy : P.bg, color: bankFilter === b.id ? "#fff" : P.text3, cursor: "pointer" }}>{b.shortCode}</button>
+                    {/* Filtros — una fila: Período | Tipo */}
+                    <div style={{ background: P.surface, borderRadius: 12, padding: "10px 14px", border: `1px solid ${P.border}`, flexShrink: 0 }}>
+                      <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                        {/* Período */}
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 9, fontWeight: 700, color: P.text3, letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 5 }}>Período</div>
+                          <div style={{ display: "flex", gap: 4 }}>
+                            {[["mes-actual", "Mes actual"], ["ultimos-30", "Últimos 30d"]].map(([val, lbl]) => (
+                              <button key={val} onClick={() => setDateFilter(val)} style={{ flex: 1, padding: "6px 0", borderRadius: 7, border: "none", fontSize: 10, fontWeight: 600, background: dateFilter === val ? P.navy : P.bg, color: dateFilter === val ? "#fff" : P.text3, cursor: "pointer", transition: "all 0.15s" }}>{lbl}</button>
                             ))}
                           </div>
-                        </>
+                        </div>
+                        {/* Separador */}
+                        <div style={{ width: 1, background: P.border, alignSelf: "stretch", margin: "0 2px" }} />
+                        {/* Tipo */}
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 9, fontWeight: 700, color: P.text3, letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 5 }}>Tipo</div>
+                          <div style={{ display: "flex", gap: 4 }}>
+                            {[["all", "Todos"], ["expense", "Gastos"], ["income", "Ingr."]].map(([val, lbl]) => (
+                              <button key={val} onClick={() => { setTxFilter(val); if (val !== "expense") setSelectedCategory(null); }} style={{ flex: 1, padding: "6px 0", borderRadius: 7, border: "none", fontSize: 10, fontWeight: 600, background: txFilter === val ? P.navy : P.bg, color: txFilter === val ? "#fff" : P.text3, cursor: "pointer", transition: "all 0.15s" }}>{lbl}</button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                      {/* Banco — solo si hay múltiples */}
+                      {banksInTxs.length > 1 && (
+                        <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 8, paddingTop: 8, borderTop: `1px solid ${P.border}` }}>
+                          <button onClick={() => setBankFilter("all")} style={{ padding: "4px 8px", borderRadius: 7, border: "none", fontSize: 10, fontWeight: 600, background: bankFilter === "all" ? P.navy : P.bg, color: bankFilter === "all" ? "#fff" : P.text3, cursor: "pointer" }}>Todos</button>
+                          {banksInTxs.map(b => (
+                            <button key={b.id} onClick={() => setBankFilter(b.id)} style={{ padding: "4px 8px", borderRadius: 7, border: "none", fontSize: 10, fontWeight: 600, background: bankFilter === b.id ? P.navy : P.bg, color: bankFilter === b.id ? "#fff" : P.text3, cursor: "pointer" }}>{b.shortCode}</button>
+                          ))}
+                        </div>
                       )}
                     </div>
 
-                    {/* Resumen del período */}
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7, flexShrink: 0 }}>
-                      {[
-                        ["Gastos",   <span style={$}>{fmtK(filteredExpenses)}</span>, P.red],
-                        ["Ingresos", <span style={$}>{fmtK(filteredIncome2)}</span>,  P.green],
-                        ["Registros", filteredTxs.length, P.text],
-                        ["Período",   dateLabel,           P.text3],
-                      ].map(([l, v, col]) => (
-                        <div key={l} style={{ background: P.surface, borderRadius: 10, padding: "9px 10px", border: `1px solid ${P.border}`, textAlign: "center" }}>
-                          <div style={{ fontSize: 13, fontWeight: 800, color: col, fontVariantNumeric: "tabular-nums" }}>{v}</div>
-                          <div style={{ fontSize: 10, color: P.text3, marginTop: 1 }}>{l}</div>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Agregar movimiento */}
-                    <div style={{ background: P.surface, borderRadius: 12, padding: "14px 16px", border: `1px solid ${P.border}` }}>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: P.text, marginBottom: 10 }}>Agregar manual</div>
-                      <AddTxForm onAdd={addTx} disabled={txLoading} />
+                    {/* Donut — ocupa el espacio restante */}
+                    <div style={{ flex: 1, background: P.surface, borderRadius: 14, border: `1px solid ${P.border}`, display: "flex", flexDirection: "column", padding: "16px 20px", minHeight: 0 }}>
+                      <CategoryDonut
+                        transactions={donutTxs}
+                        selectedCategory={selectedCategory}
+                        onSelectCategory={handleSelectCategory}
+                      />
                     </div>
                   </div>
 
-                  {/* ── Lista de movimientos: ocupa el resto de la altura ── */}
+                  {/* ── Lista de movimientos ── */}
                   <div style={{ flex: 1, background: P.surface, borderRadius: 14, border: `1px solid ${P.border}`, overflow: "hidden", display: "flex", flexDirection: "column", minWidth: 0, height: "100%" }}>
+
+                    {/* Header */}
                     <div style={{ padding: "11px 18px", borderBottom: `1px solid ${P.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
-                      <div style={{ fontSize: 14, fontWeight: 700, color: P.text }}>
-                        Movimientos <span style={{ fontWeight: 400, color: P.text3, fontSize: 12 }}>· {dateLabel}</span>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: P.text }}>Movimientos</div>
+                      <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: P.text }}>{catFilteredTxs.length} resultado{catFilteredTxs.length !== 1 ? "s" : ""}</span>
+                        <span style={{ fontSize: 12, color: P.text2, fontWeight: 600 }}>{dateLabel}</span>
                       </div>
-                      <div style={{ fontSize: 12, color: P.text3 }}>{filteredTxs.length} resultado{filteredTxs.length !== 1 ? "s" : ""}</div>
                     </div>
 
-                    {/* Lista con flex: 1 y overflowY: auto — se adapta al espacio disponible */}
+                    {/* Chip de categoría activa */}
+                    {activeCat && (
+                      <div style={{
+                        padding: "7px 18px", borderBottom: `1px solid ${P.border}`,
+                        display: "flex", alignItems: "center", gap: 8,
+                        background: `${activeCat.color}0C`, flexShrink: 0,
+                      }}>
+                        <span style={{ width: 8, height: 8, borderRadius: "50%", background: activeCat.color, flexShrink: 0 }} />
+                        <span style={{ flex: 1, fontSize: 12, color: P.text, fontWeight: 600 }}>
+                          {activeCat.label}
+                          <span style={{ fontWeight: 400, color: P.text3 }}>
+                            {" · "}{catFilteredTxs.length} movimiento{catFilteredTxs.length !== 1 ? "s" : ""}
+                            {" · "}{fmt(catFilteredTxs.reduce((s, t) => s + Math.abs(t.amount ?? 0), 0))}
+                          </span>
+                        </span>
+                        <button
+                          onClick={() => setSelectedCategory(null)}
+                          style={{ background: "none", border: "none", cursor: "pointer", color: P.text3, fontSize: 16, padding: "0 2px", lineHeight: 1 }}
+                        >×</button>
+                      </div>
+                    )}
+
+                    {/* Lista */}
                     <div style={{ flex: 1, overflowY: "auto" }}>
-                      {filteredTxs.length === 0 ? (
+                      {catFilteredTxs.length === 0 ? (
                         <div style={{ padding: "40px 20px", textAlign: "center", color: P.text3, fontSize: 13 }}>
-                          {txs.length === 0 ? "Sin transacciones aún. ¡Agrega la primera!" : "Sin movimientos en este período"}
+                          {txs.length === 0 ? "Conecta un banco para ver movimientos" : "Sin movimientos en este período"}
                         </div>
                       ) : (
-                        filteredTxs.map(tx => {
-                          // Categoría: usa los datos de categories.js para icono y label real
+                        catFilteredTxs.map(tx => {
                           const isIncome = tx.amount > 0;
                           const catKey   = tx.category ?? "other";
-                          // Colores y labels por categoría (inline para no depender de import aquí)
-                          const CAT_UI = {
-                            food: { icon: "🍔", label: "Comida", color: "#7B1FA2" },
-                            transport: { icon: "🚌", label: "Transporte", color: "#F57C00" },
-                            shopping: { icon: "🛍️", label: "Compras", color: "#C62828" },
-                            subscriptions: { icon: "📱", label: "Suscripciones", color: "#00838F" },
-                            entertainment: { icon: "🎮", label: "Entretención", color: "#AD1457" },
-                            utilities: { icon: "💡", label: "Servicios", color: "#F9A825" },
-                            housing: { icon: "🏠", label: "Vivienda", color: "#1565C0" },
-                            health: { icon: "💊", label: "Salud", color: "#2E7D32" },
-                            debt_payment: { icon: "💳", label: "Cuotas", color: "#4527A0" },
-                            savings: { icon: "🏦", label: "Ahorro", color: "#00695C" },
-                            insurance: { icon: "🛡️", label: "Seguros", color: "#37474F" },
-                            transfer: { icon: "↔️", label: "Transferencia", color: "#5D4037" },
-                            banking_fee: { icon: "🏛️", label: "Comisión", color: "#78909C" },
-                            education: { icon: "📚", label: "Educación", color: "#1B5E20" },
-                            income: { icon: "💰", label: "Ingreso", color: "#33691E" },
-                            other: { icon: "📦", label: "Otros", color: "#6B7A8D" },
-                          };
-                          const cat = CAT_UI[catKey] ?? CAT_UI.other;
+                          const cat      = getCategory(catKey);
                           const bankName = bankBalances.accounts?.find(a => a.id === tx.bank_account_id)?.bankName;
                           const bankMeta = getBankMeta(bankName);
                           const rawDate  = tx.date ?? tx.created_at ?? "";
@@ -1505,10 +1510,8 @@ export default function Sky({ userId, userEmail }) {
                               {/* Avatar banco */}
                               <div style={{
                                 width: 32, height: 32, borderRadius: "50%", flexShrink: 0,
-                                background: "#fff",
-                                border: "1px solid #E5E7EB",
-                                overflow: "hidden",
-                                display: "flex", alignItems: "center", justifyContent: "center",
+                                background: "#fff", border: "1px solid #E5E7EB",
+                                overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center",
                                 boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
                               }}>
                                 {bankMeta.logo ? (
@@ -1520,9 +1523,9 @@ export default function Sky({ userId, userEmail }) {
                                 )}
                               </div>
 
-                              {/* Descripción + meta info */}
+                              {/* Descripción + meta */}
                               <div style={{ flex: 1, minWidth: 0 }}>
-                                <div style={{ fontSize: 13, fontWeight: 600, color: P.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                <div title={tx.merchant || cat.label} style={{ fontSize: 13, fontWeight: 600, color: P.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                                   {tx.merchant || cat.label}
                                 </div>
                                 <div style={{ fontSize: 11, color: P.text3, marginTop: 2, display: "flex", gap: 5, alignItems: "center", flexWrap: "nowrap" }}>
@@ -1567,12 +1570,6 @@ export default function Sky({ userId, userEmail }) {
                                 <div style={{ fontSize: 13, fontWeight: 700, color: isIncome ? P.green : P.red, fontVariantNumeric: "tabular-nums", ...$ }}>
                                   {isIncome ? "+" : "−"}{fmt(Math.abs(tx.amount ?? 0))}
                                 </div>
-                                <button
-                                  onClick={() => deleteTx(tx.id)}
-                                  style={{ fontSize: 10, color: P.text3, background: "none", border: "none", cursor: "pointer", padding: 0, marginTop: 2 }}
-                                >
-                                  eliminar
-                                </button>
                               </div>
                             </div>
                           );

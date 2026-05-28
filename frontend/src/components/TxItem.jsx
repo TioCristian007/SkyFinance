@@ -49,10 +49,13 @@ export default function TxItem({ tx, onDelete, compact = false }) {
       </div>
 
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{
-          fontSize: 13, fontWeight: 600, color: C.textPrimary,
-          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-        }}>
+        <div
+          title={tx.merchant || cat.label}
+          style={{
+            fontSize: 13, fontWeight: 600, color: C.textPrimary,
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          }}
+        >
           {tx.merchant || cat.label}
         </div>
         <div style={{ fontSize: 11, color: C.textMuted, marginTop: 1 }}>
@@ -65,14 +68,6 @@ export default function TxItem({ tx, onDelete, compact = false }) {
         <div style={{ fontSize: 14, fontWeight: 700, color }}>
           {sign}{fmt(Math.abs(tx.amount ?? 0))}
         </div>
-        {onDelete && (
-          <button
-            onClick={() => onDelete(tx.id)}
-            style={{ fontSize: 10, color: C.textMuted, background: "none", border: "none", cursor: "pointer", padding: 0 }}
-          >
-            eliminar
-          </button>
-        )}
       </div>
     </div>
   );
