@@ -73,7 +73,7 @@ Monorepo. Estado **mayo 2026**: migración Python **completa y en producción**.
 
 **IA**: Anthropic Claude — **Sonnet 4.6** (Mr. Money) y **Haiku 4.5** (categorización capa 3). Solo desde el backend.
 
-**Procesos deployables (separación dura)**: la API nunca importa Playwright; solo el **worker** arranca el browser pool. Comparten Postgres y Redis. Servicios Railway: `sky-api-python`, `sky-worker-python`, `sky-cron-sync`, `Redis`, `SkyFinance` (frontend). ⚠️ Deuda B-6: `appealing-benevolence` (Node legacy) sigue online y duplicando datos — apagar urgente.
+**Procesos deployables (separación dura)**: la API nunca importa Playwright; solo el **worker** arranca el browser pool. Comparten Postgres y Redis. Servicios Railway: `sky-api-python`, `sky-worker-python`, `sky-cron-sync`, `Redis`, `SkyFinance` (frontend). ⚠️ Deuda B-6: `appealing-benevolence` (Node legacy) sigue online y duplicando datos — repo GitHub desconectado (2026-05-28), pendiente apagar el servicio Railway.
 
 ### Regla de oro
 ```
@@ -202,7 +202,7 @@ Fuente: **`docs/estado-del-arte/08_ESTADO_Y_DEUDA.md`** + `backend-python/docs/R
 | ✅ **B-3** | ~~Audit log roto en runtime~~ — **cerrado 2026-05-25** | `:detail::jsonb` rompía asyncpg con named params → 0 filas escritas. Corregido: `CAST(:detail AS jsonb)`. Test de regresión en `test_audit.py`. Pendiente: verificar runtime con Postgres staging (10 min). + vocabulario de event_type/outcome en `audit.py` reconciliado con la DB (cerrado 2026-05-27). |
 | ✅ **B-4** | ~~Balance post-disconnect~~ — **cerrado 2026-05-27** | cerrado 2026-05-27: summary filtra deleted_at + balance nunca cae a net_flow; KPI muestra '—' sin banco. |
 | **B-5** | Lentitud general | Sin profiling. **Medir antes de optimizar.** |
-| **B-6** | Backend Node legacy `appealing-benevolence` (Railway) online y duplicando datos en la Supabase compartida | Cada sync inserta movimientos con `external_id` en formato distinto al Python (`bchile_<6-base36>` vs `bchile_<16-hex>`) → la unique index no detecta colisión → duplicación garantizada. **APAGAR antes de cualquier limpieza adicional.** Detectado 2026-05-27. |
+| **B-6** | Backend Node legacy `appealing-benevolence` (Railway) online y duplicando datos en la Supabase compartida | Cada sync inserta movimientos con `external_id` en formato distinto al Python (`bchile_<6-base36>` vs `bchile_<16-hex>`) → la unique index no detecta colisión → duplicación garantizada. Repo GitHub desconectado 2026-05-28. **Pendiente: apagar el servicio Railway antes de cualquier limpieza adicional.** Detectado 2026-05-27. |
 
 ### Deuda abierta / infra
 - **P1-1**: `Sky.jsx` god-component (~1.600 LOC) — refactor frontend.
