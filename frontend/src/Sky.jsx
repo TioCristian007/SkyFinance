@@ -11,6 +11,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { fmt, fmtK, nowTime } from "./utils/format.js";
+import { getBankMeta } from "./data/banks.js";
 import { BADGES } from "./data/challenges.js";
 import { QUICK_SIMS } from "./data/simulations.js";
 import * as api from "./services/api.js";
@@ -47,24 +48,6 @@ const INITIAL_MESSAGE = {
   text: "Hola. Soy Mr. Money, tu asistente en Sky.\n\nCargando tu resumen financiero...",
 };
 
-// Bancos chilenos — colores institucionales reales + logos
-const BANK_META = {
-  "Banco Estado": { bg: "#D42B2B", abbr: "BE", logo: "/assets/banks/bancoestado.png" },
-  "Santander":    { bg: "#EC0000", abbr: "SA", logo: "/assets/banks/santander.png" },
-  "BCI":          { bg: "#F5F5F5", abbr: "BC", logo: "/assets/banks/bci.png", logoDark: true },
-  "Itaú":         { bg: "#F57F17", abbr: "IT", logo: null },
-  "Falabella":    { bg: "#2D6B2D", abbr: "FA", logo: "/assets/banks/falabella.png" },
-  "Scotiabank":   { bg: "#E65100", abbr: "SC", logo: null },
-  "BICE":         { bg: "#2E7D32", abbr: "BI", logo: null },
-  "de Chile":     { bg: "#1A237E", abbr: "CH", logo: "/assets/banks/banco-chile.png" },
-};
-
-const getBankMeta = (name = "") => {
-  for (const [k, v] of Object.entries(BANK_META)) {
-    if (name.includes(k)) return v;
-  }
-  return { bg: "#223650", abbr: name.slice(0, 2).toUpperCase() || "??", logo: null };
-};
 
 // Paleta de diseño
 const P = {
@@ -167,7 +150,7 @@ const StatusDot = ({ size = 6, color }) => (
 const BankLogo = ({ meta, size = 40, borderRadius = 10 }) => (
   <div style={{
     width: size, height: size, borderRadius,
-    background: meta.bg, display: "flex", alignItems: "center",
+    background: meta.color, display: "flex", alignItems: "center",
     justifyContent: "center", flexShrink: 0, overflow: "hidden",
   }}>
     {meta.logo ? (
@@ -178,13 +161,13 @@ const BankLogo = ({ meta, size = 40, borderRadius = 10 }) => (
         onError={e => {
           e.target.style.display = "none";
           e.target.parentNode.insertAdjacentHTML("beforeend",
-            `<span style="font-size:${Math.round(size * 0.28)}px;font-weight:800;color:#fff;letter-spacing:0.05em">${meta.abbr}</span>`
+            `<span style="font-size:${Math.round(size * 0.28)}px;font-weight:800;color:#fff;letter-spacing:0.05em">${meta.shortCode}</span>`
           );
         }}
       />
     ) : (
       <span style={{ fontSize: Math.round(size * 0.28), fontWeight: 800, color: "#fff", letterSpacing: "0.05em" }}>
-        {meta.abbr}
+        {meta.shortCode}
       </span>
     )}
   </div>
@@ -240,7 +223,7 @@ const BankCardCompact = ({ acc, total, blurred = false }) => {
         </div>
       </div>
       <div style={{ height: 3, background: "rgba(255,255,255,0.08)", borderRadius: 99, overflow: "hidden" }}>
-        <div style={{ height: "100%", width: `${pct}%`, background: meta.bg, opacity: 0.7, borderRadius: 99 }} />
+        <div style={{ height: "100%", width: `${pct}%`, background: meta.color, opacity: 0.7, borderRadius: 99 }} />
       </div>
     </div>
   );
@@ -281,12 +264,6 @@ const BankCardFull = ({ acc, blurred = false }) => {
 /** Ítem de movimiento en el ticker live */
 const TickerItem = ({ tx }) => {
   const isIncome = tx.amount > 0;
-  const fmtK2 = (n) => {
-    const a = Math.abs(n ?? 0);
-    if (a >= 1_000_000) return `$${(a / 1_000_000).toFixed(1)}M`;
-    if (a >= 1_000) return `$${Math.round(a / 1_000)}K`;
-    return `$${Math.round(a)}`;
-  };
 
   return (
     <div className="sky-bank-row" style={{
@@ -305,7 +282,7 @@ const TickerItem = ({ tx }) => {
         </div>
       </div>
       <div style={{ fontSize: 13, fontWeight: 700, flexShrink: 0, color: isIncome ? P.green : "#FF6B6B", fontVariantNumeric: "tabular-nums" }}>
-        {isIncome ? "+" : "−"}{fmtK2(tx.amount)}
+        {isIncome ? "+" : "−"}{fmt(Math.abs(tx.amount ?? 0))}
       </div>
     </div>
   );
@@ -1083,7 +1060,7 @@ export default function Sky({ userId, userEmail }) {
                                 </div>
                                 {/* Barra proporcional — muestra la distribución, no la magnitud */}
                                 <div style={{ height: 3, background: P.bg, borderRadius: 99, overflow: "hidden", marginTop: 5 }}>
-                                  <div style={{ height: "100%", width: `${pct}%`, background: meta.bg, opacity: 0.45, borderRadius: 99, transition: "width 0.9s ease" }} />
+                                  <div style={{ height: "100%", width: `${pct}%`, background: meta.color, opacity: 0.45, borderRadius: 99, transition: "width 0.9s ease" }} />
                                 </div>
                               </div>
                               <div style={{ textAlign: "right", flexShrink: 0 }}>
@@ -1150,7 +1127,7 @@ export default function Sky({ userId, userEmail }) {
                               {tx.merchant || tx.description || tx.category}
                             </div>
                             <div style={{ fontSize: 13, fontWeight: 700, color: isIncome ? P.green : P.text, fontVariantNumeric: "tabular-nums", ...$ }}>
-                              {isIncome ? "+" : "−"}{fmtK(Math.abs(tx.amount ?? 0))}
+                              {isIncome ? "+" : "−"}{fmt(Math.abs(tx.amount ?? 0))}
                             </div>
                           </div>
                         );
@@ -1401,7 +1378,7 @@ export default function Sky({ userId, userEmail }) {
                 dateBoundTxs.filter(t => t.bank_account_id).map(t => [t.bank_account_id, {
                   id:   t.bank_account_id,
                   name: bankBalances.accounts?.find(a => a.id === t.bank_account_id)?.bankName ?? "Banco",
-                  abbr: getBankMeta(bankBalances.accounts?.find(a => a.id === t.bank_account_id)?.bankName).abbr,
+                  shortCode: getBankMeta(bankBalances.accounts?.find(a => a.id === t.bank_account_id)?.bankName).shortCode,
                 }])
               ).values()];
 
@@ -1442,7 +1419,7 @@ export default function Sky({ userId, userEmail }) {
                           <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
                             <button onClick={() => setBankFilter("all")} style={{ padding: "5px 9px", borderRadius: 7, border: "none", fontSize: 11, fontWeight: 600, background: bankFilter === "all" ? P.navy : P.bg, color: bankFilter === "all" ? "#fff" : P.text3, cursor: "pointer" }}>Todos</button>
                             {banksInTxs.map(b => (
-                              <button key={b.id} onClick={() => setBankFilter(b.id)} style={{ padding: "5px 9px", borderRadius: 7, border: "none", fontSize: 11, fontWeight: 600, background: bankFilter === b.id ? P.navy : P.bg, color: bankFilter === b.id ? "#fff" : P.text3, cursor: "pointer" }}>{b.abbr}</button>
+                              <button key={b.id} onClick={() => setBankFilter(b.id)} style={{ padding: "5px 9px", borderRadius: 7, border: "none", fontSize: 11, fontWeight: 600, background: bankFilter === b.id ? P.navy : P.bg, color: bankFilter === b.id ? "#fff" : P.text3, cursor: "pointer" }}>{b.shortCode}</button>
                             ))}
                           </div>
                         </>
@@ -1512,6 +1489,7 @@ export default function Sky({ userId, userEmail }) {
                           };
                           const cat = CAT_UI[catKey] ?? CAT_UI.other;
                           const bankName = bankBalances.accounts?.find(a => a.id === tx.bank_account_id)?.bankName;
+                          const bankMeta = getBankMeta(bankName);
                           const rawDate  = tx.date ?? tx.created_at ?? "";
                           const dateDisplay = rawDate
                             ? new Date(rawDate + (rawDate.length === 10 ? "T12:00:00" : "")).toLocaleDateString("es-CL", { day: "numeric", month: "short" })
@@ -1524,14 +1502,22 @@ export default function Sky({ userId, userEmail }) {
                               borderBottom: `1px solid ${P.border}`,
                               transition: "background 0.1s",
                             }}>
-                              {/* Icono de categoría */}
+                              {/* Avatar banco */}
                               <div style={{
-                                width: 34, height: 34, borderRadius: 9, flexShrink: 0,
-                                background: `${cat.color}18`,
+                                width: 32, height: 32, borderRadius: "50%", flexShrink: 0,
+                                background: "#fff",
+                                border: "1px solid #E5E7EB",
+                                overflow: "hidden",
                                 display: "flex", alignItems: "center", justifyContent: "center",
-                                fontSize: 15,
+                                boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
                               }}>
-                                {cat.icon}
+                                {bankMeta.logo ? (
+                                  <img src={bankMeta.logo} alt={bankMeta.name} style={{ width: "100%", height: "100%", objectFit: "contain", padding: 2 }} />
+                                ) : (
+                                  <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: bankMeta.color }}>
+                                    {bankMeta.shortCode}
+                                  </span>
+                                )}
                               </div>
 
                               {/* Descripción + meta info */}
@@ -1540,6 +1526,7 @@ export default function Sky({ userId, userEmail }) {
                                   {tx.merchant || cat.label}
                                 </div>
                                 <div style={{ fontSize: 11, color: P.text3, marginTop: 2, display: "flex", gap: 5, alignItems: "center", flexWrap: "nowrap" }}>
+                                  <span style={{ fontSize: 12, flexShrink: 0 }}>{cat.icon}</span>
                                   <select
                                     value={catKey}
                                     onChange={(e) => recategorizeTx(tx.id, e.target.value)}
@@ -1578,7 +1565,7 @@ export default function Sky({ userId, userEmail }) {
                               {/* Monto */}
                               <div style={{ textAlign: "right", flexShrink: 0 }}>
                                 <div style={{ fontSize: 13, fontWeight: 700, color: isIncome ? P.green : P.red, fontVariantNumeric: "tabular-nums", ...$ }}>
-                                  {isIncome ? "+" : "−"}{fmtK(Math.abs(tx.amount ?? 0))}
+                                  {isIncome ? "+" : "−"}{fmt(Math.abs(tx.amount ?? 0))}
                                 </div>
                                 <button
                                   onClick={() => deleteTx(tx.id)}

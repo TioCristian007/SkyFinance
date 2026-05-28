@@ -5,10 +5,12 @@
 // Ahora: income → verde con "+", el resto → rojo con "-".
 
 import { C } from "../data/colors.js";
-import { fmtK, fmtDate, catOf } from "../utils/format.js";
+import { fmt, fmtDate, catOf } from "../utils/format.js";
+import { getBankMeta } from "../data/banks.js";
 
 export default function TxItem({ tx, onDelete, compact = false }) {
   const cat      = catOf(tx.category);
+  const bankMeta = getBankMeta(tx.bank_name);
   const isIncome = tx.amount > 0;
   const sign     = isIncome ? "+" : "-";
   const color    = isIncome ? "#22C55E" : C.red;
@@ -20,11 +22,30 @@ export default function TxItem({ tx, onDelete, compact = false }) {
       borderBottom: `1px solid ${C.border}`,
     }}>
       <div style={{
-        width: 38, height: 38, borderRadius: 12, background: cat.bg,
+        width: 32, height: 32, borderRadius: "50%",
+        background: "#fff",
+        border: "1px solid #E5E7EB",
+        overflow: "hidden",
         display: "flex", alignItems: "center", justifyContent: "center",
-        fontSize: 17, flexShrink: 0,
+        flexShrink: 0,
+        boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
       }}>
-        {cat.icon}
+        {bankMeta.logo ? (
+          <img
+            src={bankMeta.logo}
+            alt={bankMeta.name}
+            style={{ width: "100%", height: "100%", objectFit: "contain", padding: 2 }}
+          />
+        ) : (
+          <span style={{
+            fontSize: 9, fontWeight: 800, color: "#fff",
+            width: "100%", height: "100%",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            background: bankMeta.color,
+          }}>
+            {bankMeta.shortCode}
+          </span>
+        )}
       </div>
 
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -35,14 +56,14 @@ export default function TxItem({ tx, onDelete, compact = false }) {
           {tx.merchant || cat.label}
         </div>
         <div style={{ fontSize: 11, color: C.textMuted, marginTop: 1 }}>
-          {cat.label} · {fmtDate(tx.date ?? tx.created_at ?? "")}
+          {cat.icon} {cat.label} · {fmtDate(tx.date ?? tx.created_at ?? "")}
           {tx.bank_name && <span> · {tx.bank_name}</span>}
         </div>
       </div>
 
       <div style={{ textAlign: "right", flexShrink: 0 }}>
         <div style={{ fontSize: 14, fontWeight: 700, color }}>
-          {sign}{fmtK(Math.abs(tx.amount ?? 0))}
+          {sign}{fmt(Math.abs(tx.amount ?? 0))}
         </div>
         {onDelete && (
           <button
