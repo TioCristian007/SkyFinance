@@ -73,7 +73,7 @@ Monorepo. Estado **mayo 2026**: migración Python **completa y en producción**.
 
 **IA**: Anthropic Claude — **Sonnet 4.6** (Mr. Money) y **Haiku 4.5** (categorización capa 3). Solo desde el backend.
 
-**Procesos deployables (separación dura)**: la API nunca importa Playwright; solo el **worker** arranca el browser pool. Comparten Postgres y Redis. Servicios Railway: `sky-api-python`, `sky-worker-python`, `sky-cron-sync`, `Redis`, `SkyFinance` (frontend). Deuda: `appealing-benevolence` (Node legacy) sigue online — decomisionar.
+**Procesos deployables (separación dura)**: la API nunca importa Playwright; solo el **worker** arranca el browser pool. Comparten Postgres y Redis. Servicios Railway: `sky-api-python`, `sky-worker-python`, `sky-cron-sync`, `Redis`, `SkyFinance` (frontend). ⚠️ Deuda B-6: `appealing-benevolence` (Node legacy) sigue online y duplicando datos — apagar urgente.
 
 ### Regla de oro
 ```
@@ -199,16 +199,17 @@ Fuente: **`docs/estado-del-arte/08_ESTADO_Y_DEUDA.md`** + `backend-python/docs/R
 |---|---|---|
 | **B-1** | Scraping bloqueado desde datacenter (anti-bot Incapsula en BChile) | Funciona desde IP residencial, no desde Railway. Stealth básico agregado (2026-05-25): `--disable-blink-features=AutomationControlled`, UA realista, `navigator.webdriver=undefined`, palancas `browser_headless`/`scraper_debug_capture`. No garantizado vs Incapsula sofisticado. Crítico arquitectónico → refuerza tesis SFA. |
 | **B-2** | Scraper BCI roto — dominio cambiado | `portalpersonas.bci.cl` ya no resuelve. Requiere rework (sprint propio). |
-| ✅ **B-3** | ~~Audit log roto en runtime~~ — **cerrado 2026-05-25** | `:detail::jsonb` rompía asyncpg con named params → 0 filas escritas. Corregido: `CAST(:detail AS jsonb)`. Test de regresión en `test_audit.py`. Pendiente: verificar runtime con Postgres staging (10 min). |
-| **B-4** | Balance post-disconnect | Corregido en `BankConnect.jsx`: `handleDisconnect` ya llama `onSyncComplete?.()`. Pendiente QA visual. |
+| ✅ **B-3** | ~~Audit log roto en runtime~~ — **cerrado 2026-05-25** | `:detail::jsonb` rompía asyncpg con named params → 0 filas escritas. Corregido: `CAST(:detail AS jsonb)`. Test de regresión en `test_audit.py`. Pendiente: verificar runtime con Postgres staging (10 min). + vocabulario de event_type/outcome en `audit.py` reconciliado con la DB (cerrado 2026-05-27). |
+| ✅ **B-4** | ~~Balance post-disconnect~~ — **cerrado 2026-05-27** | cerrado 2026-05-27: summary filtra deleted_at + balance nunca cae a net_flow; KPI muestra '—' sin banco. |
 | **B-5** | Lentitud general | Sin profiling. **Medir antes de optimizar.** |
+| **B-6** | Backend Node legacy `appealing-benevolence` (Railway) online y duplicando datos en la Supabase compartida | Cada sync inserta movimientos con `external_id` en formato distinto al Python (`bchile_<6-base36>` vs `bchile_<16-hex>`) → la unique index no detecta colisión → duplicación garantizada. **APAGAR antes de cualquier limpieza adicional.** Detectado 2026-05-27. |
 
 ### Deuda abierta / infra
 - **P1-1**: `Sky.jsx` god-component (~1.600 LOC) — refactor frontend.
-- Decomisionar `appealing-benevolence` (Node legacy) · limpiar `api-v2.skyfinanzas.com` (502, leftover canary) · warm standby Fly.io (DR Railway).
+- Limpiar `api-v2.skyfinanzas.com` (502, leftover canary) · warm standby Fly.io (DR Railway).
 
 ### Prioridades sugeridas
-1. **Prep pitch BCI** (objetivo de negocio inmediato) · 2. **B-3** verificación runtime audit · 3. **B-2** rework BCI · 4. **B-1** anti-bot · 5. **B-5** performance · 6. limpiar infra legacy.
+1. **Apagar `appealing-benevolence` en Railway** (B-6, urgente; corta la duplicación de datos en prod). · 2. **Prep pitch BCI** (2026-05-28). · 3. **B-2** rework BCI scraper. · 4. **B-1** anti-bot Incapsula. · 5. **B-5** performance (medir antes de optimizar). · 6. Sync de `docs/estado-del-arte/08` con saga Tanda 1-4.
 
 ---
 
@@ -352,5 +353,7 @@ No confundir con las 13 fases técnicas (ya cerradas).
 ---
 
 ## 📅 Última actualización
+
+`2026-05-27` · Saga de números: idempotencia con id nativo BChile + fallback con saldo, ventana mes calendario, audit_log vocabulario reconciliado, tzdata pinneado, toggles simétricos transfer→ingreso/gasto (default ON, principio contable), cleanup + categorize self-drain. Detectado y documentado el double-write de Node legacy (B-6). Migraciones aplicadas: 006 (`bank_accounts.status`), 007 (`count_transfers_as_income`), 008 (`count_transfers_as_expense`). Lint E501 pendiente en `tests/unit/test_finance.py:216-217`.
 
 `2026-05-23` · Reescrito para reflejar que la **migración Python está completa y en producción** (las 13 fases cerradas, Node archivado). Alineado con `docs/ESTADO_DEL_ARTE.md`. El v5 PDF sigue siendo la fuente doctrinal/legal; su Parte II quedará reescrita cuando se reactualice el registro INAPI.
