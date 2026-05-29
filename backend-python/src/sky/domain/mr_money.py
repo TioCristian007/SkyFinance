@@ -11,7 +11,12 @@ from zoneinfo import ZoneInfo
 import anthropic
 from sqlalchemy import text
 
-from sky.api.schemas.chat import ChatTextResponse, NavigationResponse, ProposeChallenge
+from sky.api.schemas.chat import (
+    ChatTextResponse,
+    ChatTurn,
+    NavigationResponse,
+    ProposeChallenge,
+)
 from sky.core.config import settings
 from sky.core.db import get_engine
 from sky.core.logging import get_logger
@@ -243,6 +248,40 @@ def _execute_compute_projection(tool_input: dict[str, Any]) -> str:
     })
 
 
+# ── History helpers ───────────────────────────────────────────────────────────
+
+_MAX_HISTORY_TURNS  = 20
+_MAX_HISTORY_TOKENS = 6000   # estimado a 4 chars/token
+_CHARS_PER_TOKEN    = 4
+
+
+def _trim_history(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Trunca la lista FIFO hasta _MAX_HISTORY_TURNS y ~_MAX_HISTORY_TOKENS estimados."""
+    trimmed = turns[-_MAX_HISTORY_TURNS:]
+    total_chars = sum(len(t.get("content", "")) for t in trimmed)
+    while trimmed and total_chars > _MAX_HISTORY_TOKENS * _CHARS_PER_TOKEN:
+        removed = trimmed.pop(0)
+        total_chars -= len(removed.get("content", ""))
+    return trimmed
+
+
+async def _fetch_history_from_db(user_id: str) -> list[dict[str, Any]]:
+    """Lee los últimos _MAX_HISTORY_TURNS turnos de mr_money_messages para el usuario."""
+    engine = get_engine()
+    async with engine.connect() as conn:
+        rs = await conn.execute(
+            text("""
+                SELECT role, content
+                  FROM public.mr_money_messages
+                 WHERE user_id = :uid
+                 ORDER BY created_at ASC
+                 LIMIT :lim
+            """),
+            {"uid": user_id, "lim": _MAX_HISTORY_TURNS},
+        )
+        return [{"role": r["role"], "content": r["content"]} for r in rs.mappings().all()]
+
+
 # ── MrMoney class ─────────────────────────────────────────────────────────────
 
 class MrMoney:
@@ -250,13 +289,14 @@ class MrMoney:
         self,
         user_id: str,
         message: str,
+        history: list[ChatTurn] | None = None,
     ) -> ChatTextResponse | ProposeChallenge | NavigationResponse:
         local = await self._try_local(user_id, message)
         if local is not None:
             return local
 
         try:
-            return await self._call_anthropic(user_id, message)
+            return await self._call_anthropic(user_id, message, history)
         except Exception as exc:
             if isinstance(exc, (anthropic.AuthenticationError, anthropic.APIStatusError)):
                 logger.error(
@@ -304,11 +344,20 @@ class MrMoney:
         self,
         user_id: str,
         message: str,
+        history: list[ChatTurn] | None = None,
     ) -> ChatTextResponse | ProposeChallenge | NavigationResponse:
         context_text, raw = await _build_financial_context(user_id)
         system_prompt = _build_system_prompt(context_text)
 
-        messages: list[dict[str, Any]] = [{"role": "user", "content": message}]
+        # Si el cliente envía history explícito, lo usamos tal cual (sin consulta DB).
+        # Si envía None, cargamos desde DB para garantizar continuidad entre sesiones.
+        if history is not None:
+            prior_turns = [{"role": t.role, "content": t.content} for t in history]
+        else:
+            prior_turns = await _fetch_history_from_db(user_id)
+
+        prior_turns = _trim_history(prior_turns)
+        messages: list[dict[str, Any]] = [*prior_turns, {"role": "user", "content": message}]
 
         resp = await _get_client().messages.create(
             model=settings.mr_money_model,

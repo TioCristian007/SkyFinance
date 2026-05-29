@@ -99,6 +99,10 @@ export async function sendChat(message, history = []) {
   return request("/chat", { method: "POST", body: JSON.stringify({ message, history }) });
 }
 
+export async function getChatHistory(limit = 20) {
+  return request(`/chat/history?limit=${limit}`, { method: "GET" });
+}
+
 // ── Challenges ────────────────────────────────────────────────────────────────
 export async function getChallenges() {
   return request("/challenges");

@@ -335,8 +335,9 @@ export default function Sky({ userId, userEmail }) {
   const [countTransfersAsIncome,  setCountTransfersAsIncome]  = useState(true);
   const [countTransfersAsExpense, setCountTransfersAsExpense] = useState(true);
 
-  const bottomRef = useRef(null);
-  const inputRef  = useRef(null);
+  const bottomRef       = useRef(null);
+  const inputRef        = useRef(null);
+  const chatHydratedRef = useRef(false);
 
   // ── Carga inicial ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -399,6 +400,24 @@ export default function Sky({ userId, userEmail }) {
   useEffect(() => {
     if (tab === "chat") bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, typing, tab]);
+
+  // Hidrata el historial de Mr. Money la primera vez que el usuario entra al tab
+  useEffect(() => {
+    if (tab !== "chat" || chatHydratedRef.current || messages.length > 1) return;
+    chatHydratedRef.current = true;
+    api.getChatHistory(20).then((turns) => {
+      if (!turns || !turns.length) return;
+      setMsgs((prev) => {
+        const prior = turns.map((t) => ({
+          id: t.created_at,
+          role: t.role === "user" ? "user" : "bot",
+          text: t.content,
+          time: new Date(t.created_at).toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" }),
+        }));
+        return [...prior, ...prev];
+      });
+    }).catch((e) => console.warn("[Sky] getChatHistory:", e.message));
+  }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
   const showToast = (msg, type = "green") => {

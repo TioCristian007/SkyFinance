@@ -1,14 +1,20 @@
 """sky.api.schemas.chat — Schemas Pydantic de Mr. Money."""
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
+
+
+class ChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(..., min_length=1, max_length=4000)
 
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
     context_hint: str | None = None  # "challenges", "goals", etc. para routing local
+    history: list[ChatTurn] | None = Field(default=None, max_length=20)
 
 
 class ChatTextResponse(BaseModel):

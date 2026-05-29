@@ -6,8 +6,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from sky.api.schemas.chat import ChatTextResponse, NavigationResponse, ProposeChallenge
-from sky.domain.mr_money import MrMoney, _build_financial_context
+from sky.api.schemas.chat import (
+    ChatTextResponse,
+    ChatTurn,
+    NavigationResponse,
+    ProposeChallenge,
+)
+from sky.domain.mr_money import MrMoney, _build_financial_context, _trim_history
 
 _USER = "user-mm-1"
 _CONTEXT = ("=== CONTEXTO FINANCIERO ===\nRESUMEN: ...", {"summary": MagicMock(), "goals": []})
@@ -135,9 +140,10 @@ async def test_challenge_status_with_active(
 
 @pytest.mark.asyncio
 @patch("sky.domain.mr_money._build_financial_context", new_callable=AsyncMock, return_value=_CONTEXT)
+@patch("sky.domain.mr_money._fetch_history_from_db", new_callable=AsyncMock, return_value=[])
 @patch("sky.domain.mr_money._get_client")
 async def test_financial_question_calls_anthropic(
-    mock_get_client: MagicMock, mock_ctx: AsyncMock
+    mock_get_client: MagicMock, mock_fetch_db: AsyncMock, mock_ctx: AsyncMock
 ) -> None:
     mock_client = AsyncMock()
     mock_client.messages.create = AsyncMock(return_value=_make_text_response("Gastas $200.000 en comida."))
@@ -151,9 +157,10 @@ async def test_financial_question_calls_anthropic(
 
 @pytest.mark.asyncio
 @patch("sky.domain.mr_money._build_financial_context", new_callable=AsyncMock, return_value=_CONTEXT)
+@patch("sky.domain.mr_money._fetch_history_from_db", new_callable=AsyncMock, return_value=[])
 @patch("sky.domain.mr_money._get_client")
 async def test_propose_challenge_no_db_write(
-    mock_get_client: MagicMock, mock_ctx: AsyncMock
+    mock_get_client: MagicMock, mock_fetch_db: AsyncMock, mock_ctx: AsyncMock
 ) -> None:
     mock_client = AsyncMock()
 
@@ -179,9 +186,10 @@ async def test_propose_challenge_no_db_write(
 
 @pytest.mark.asyncio
 @patch("sky.domain.mr_money._build_financial_context", new_callable=AsyncMock, return_value=_CONTEXT)
+@patch("sky.domain.mr_money._fetch_history_from_db", new_callable=AsyncMock, return_value=[])
 @patch("sky.domain.mr_money._get_client")
 async def test_compute_projection_tool_executes_domain(
-    mock_get_client: MagicMock, mock_ctx: AsyncMock
+    mock_get_client: MagicMock, mock_fetch_db: AsyncMock, mock_ctx: AsyncMock
 ) -> None:
     mock_client = AsyncMock()
 
@@ -215,9 +223,10 @@ async def test_compute_projection_tool_executes_domain(
 
 @pytest.mark.asyncio
 @patch("sky.domain.mr_money._build_financial_context", new_callable=AsyncMock, return_value=_CONTEXT)
+@patch("sky.domain.mr_money._fetch_history_from_db", new_callable=AsyncMock, return_value=[])
 @patch("sky.domain.mr_money._get_client")
 async def test_anthropic_failure_returns_canned_response(
-    mock_get_client: MagicMock, mock_ctx: AsyncMock
+    mock_get_client: MagicMock, mock_fetch_db: AsyncMock, mock_ctx: AsyncMock
 ) -> None:
     mock_client = AsyncMock()
     mock_client.messages.create = AsyncMock(side_effect=Exception("API timeout"))
@@ -261,3 +270,93 @@ async def test_build_financial_context_handles_dict_challenges(
     # Verifica que se usó c['label'], no c['title']
     assert "Sin Uber 7 días" in ctx_text
     assert isinstance(raw, dict)
+
+
+# ── History: history del cliente vs DB ───────────────────────────────────────
+
+@pytest.mark.asyncio
+@patch("sky.domain.mr_money._build_financial_context", new_callable=AsyncMock, return_value=_CONTEXT)
+@patch("sky.domain.mr_money._fetch_history_from_db", new_callable=AsyncMock)
+@patch("sky.domain.mr_money._get_client")
+async def test_respond_with_client_history_does_not_call_db(
+    mock_get_client: MagicMock,
+    mock_fetch_db: AsyncMock,
+    mock_ctx: AsyncMock,
+) -> None:
+    """Si el cliente manda history explícito, NO se consulta la DB."""
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(return_value=_make_text_response("Bien."))
+    mock_get_client.return_value = mock_client
+
+    history = [ChatTurn(role="user", content="hola"), ChatTurn(role="assistant", content="Hola!")]
+    await MrMoney().respond(_USER, "¿cuánto gasté?", history=history)
+
+    mock_fetch_db.assert_not_called()
+    # El primer mensaje enviado a Anthropic debe incluir los turnos previos
+    call_kwargs = mock_client.messages.create.call_args.kwargs
+    msgs_sent = call_kwargs["messages"]
+    assert msgs_sent[0] == {"role": "user", "content": "hola"}
+    assert msgs_sent[1] == {"role": "assistant", "content": "Hola!"}
+    assert msgs_sent[-1]["content"] == "¿cuánto gasté?"
+
+
+@pytest.mark.asyncio
+@patch("sky.domain.mr_money._build_financial_context", new_callable=AsyncMock, return_value=_CONTEXT)
+@patch(
+    "sky.domain.mr_money._fetch_history_from_db",
+    new_callable=AsyncMock,
+    return_value=[
+        {"role": "user",      "content": "¿cuánto gasté ayer?"},
+        {"role": "assistant", "content": "Gastaste $20.000."},
+    ],
+)
+@patch("sky.domain.mr_money._get_client")
+async def test_respond_with_none_history_calls_db(
+    mock_get_client: MagicMock,
+    mock_fetch_db: AsyncMock,
+    mock_ctx: AsyncMock,
+) -> None:
+    """Si history es None, se debe consultar la DB y usar esos turnos."""
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(return_value=_make_text_response("Bien."))
+    mock_get_client.return_value = mock_client
+
+    await MrMoney().respond(_USER, "¿y este mes?", history=None)
+
+    mock_fetch_db.assert_called_once_with(_USER)
+    call_kwargs = mock_client.messages.create.call_args.kwargs
+    msgs_sent = call_kwargs["messages"]
+    assert msgs_sent[0] == {"role": "user", "content": "¿cuánto gasté ayer?"}
+    assert msgs_sent[-1]["content"] == "¿y este mes?"
+
+
+# ── _trim_history ─────────────────────────────────────────────────────────────
+
+def test_trim_history_caps_at_20_turns() -> None:
+    turns = [{"role": "user", "content": f"msg {i}"} for i in range(25)]
+    result = _trim_history(turns)
+    assert len(result) <= 20
+    # Debe conservar los más recientes (FIFO)
+    assert result[-1]["content"] == "msg 24"
+
+
+def test_trim_history_cuts_by_token_estimate() -> None:
+    # Cada turno tiene 6001*4 chars → supera el límite de 6000 tokens estimados
+    big_content = "x" * (6001 * 4)
+    turns = [
+        {"role": "user", "content": big_content},
+        {"role": "assistant", "content": "ok"},
+    ]
+    result = _trim_history(turns)
+    # El primer turno enorme debe haber sido descartado
+    assert all(t["content"] != big_content for t in result)
+
+
+def test_trim_history_empty_returns_empty() -> None:
+    assert _trim_history([]) == []
+
+
+def test_trim_history_under_limit_unchanged() -> None:
+    turns = [{"role": "user", "content": "hola"}, {"role": "assistant", "content": "Hola!"}]
+    result = _trim_history(turns)
+    assert result == turns
