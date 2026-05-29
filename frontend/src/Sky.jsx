@@ -1598,7 +1598,7 @@ export default function Sky({ userId, userEmail }) {
 
                               {/* Monto */}
                               <div style={{ textAlign: "right", flexShrink: 0 }}>
-                                <div style={{ fontSize: 13, fontWeight: 700, color: isIncome ? P.green : P.red, fontVariantNumeric: "tabular-nums", ...$ }}>
+                                <div style={{ fontSize: 13, fontWeight: 700, color: isIncome ? P.green : P.text, fontVariantNumeric: "tabular-nums", ...$ }}>
                                   {isIncome ? "+" : "−"}{fmt(Math.abs(tx.amount ?? 0))}
                                 </div>
                               </div>
