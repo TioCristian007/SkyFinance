@@ -1416,7 +1416,7 @@ export default function Sky({ userId, userEmail }) {
                 <div style={{ display: "flex", gap: 16, padding: "16px 24px", height: "calc(100vh - 58px)", overflow: "hidden", animation: "fadeUp 0.22s ease" }}>
 
                   {/* ── Columna media: filtros + donut ── */}
-                  <div style={{ width: 440, flexShrink: 0, display: "flex", flexDirection: "column", gap: 10, alignSelf: "flex-start" }}>
+                  <div style={{ flex: "0 0 480px", display: "flex", flexDirection: "column", gap: 10, alignSelf: "flex-start" }}>
 
                     {/* Filtros — una fila: Período | Tipo */}
                     <div style={{ background: P.surface, borderRadius: 12, padding: "10px 14px", border: `1px solid ${P.border}`, flexShrink: 0 }}>
@@ -1465,30 +1465,29 @@ export default function Sky({ userId, userEmail }) {
                   </div>
 
                   {/* ── Lista de movimientos ── */}
-                  <div style={{ flex: 1, maxWidth: 360, background: P.surface, borderRadius: 14, border: `1px solid ${P.border}`, overflow: "hidden", display: "flex", flexDirection: "column", minWidth: 0, height: "100%" }}>
+                  <div style={{ flex: "1 1 auto", background: P.surface, borderRadius: 14, border: `1px solid ${P.border}`, overflow: "hidden", display: "flex", flexDirection: "column", minWidth: 0, height: "100%" }}>
 
-                    {/* Header */}
-                    <div style={{ padding: "11px 18px", borderBottom: `1px solid ${P.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
-                      <div style={{ fontSize: 20, fontWeight: 600, color: P.text }}>Movimientos</div>
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        {/* Chips de ordenamiento */}
-                        <div style={{ display: "flex", gap: 3 }}>
-                          {[["fecha", "Fecha"], ["monto", "Cantidad"], ["nombre", "Nombre"]].map(([sKey, sLabel]) => {
-                            const [base, dir] = sortBy.split("-");
-                            const active = base === sKey;
-                            const arrow = active ? (dir === "desc" ? " ↓" : " ↑") : "";
-                            return (
-                              <button key={sKey}
-                                onClick={() => active
-                                  ? setSortBy(`${sKey}-${dir === "desc" ? "asc" : "desc"}`)
-                                  : setSortBy(`${sKey}-${sKey === "nombre" ? "asc" : "desc"}`)
-                                }
-                                style={{ padding: "4px 8px", borderRadius: 7, border: "none", fontSize: 13, fontWeight: 600, background: active ? P.navy : P.bg, color: active ? "#fff" : P.text3, cursor: "pointer", transition: "all 0.15s" }}
-                              >{sLabel}{arrow}</button>
-                            );
-                          })}
-                        </div>
-                        <span style={{ fontSize: 12, color: P.text2, fontWeight: 600 }}>{catFilteredTxs.length} · {dateLabel}</span>
+                    {/* Header — dos filas: título+conteo / chips sort */}
+                    <div style={{ padding: "12px 18px 8px", borderBottom: `1px solid ${P.border}`, flexShrink: 0 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                        <div style={{ fontSize: 20, fontWeight: 600, color: P.text }}>Movimientos</div>
+                        <span style={{ fontSize: 13, color: P.text2, fontWeight: 400 }}>{catFilteredTxs.length} · {dateLabel}</span>
+                      </div>
+                      <div style={{ display: "flex", gap: 3, marginTop: 10 }}>
+                        {[["fecha", "Fecha"], ["monto", "Cantidad"], ["nombre", "Nombre"]].map(([sKey, sLabel]) => {
+                          const [base, dir] = sortBy.split("-");
+                          const active = base === sKey;
+                          const arrow = active ? (dir === "desc" ? " ↓" : " ↑") : "";
+                          return (
+                            <button key={sKey}
+                              onClick={() => active
+                                ? setSortBy(`${sKey}-${dir === "desc" ? "asc" : "desc"}`)
+                                : setSortBy(`${sKey}-${sKey === "nombre" ? "asc" : "desc"}`)
+                              }
+                              style={{ padding: "4px 8px", borderRadius: 7, border: "none", fontSize: 13, fontWeight: 600, background: active ? P.navy : P.bg, color: active ? "#fff" : P.text3, cursor: "pointer", transition: "all 0.15s" }}
+                            >{sLabel}{arrow}</button>
+                          );
+                        })}
                       </div>
                     </div>
 

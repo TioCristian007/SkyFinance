@@ -7,9 +7,11 @@ import { useState } from "react";
 import { getCategory } from "../data/categories.js";
 import { fmt } from "../utils/format.js";
 
-const CIRC   = 2 * Math.PI * 80;
-const STROKE = 16;
-const GAP_PX = 10; // gap visual entre slices; con linecap round y STROKE=16 garantiza separación visible
+const R       = 80;
+const CIRC    = 2 * Math.PI * R;   // ≈ 502.65
+const STROKE  = 14;
+const GAP_PX  = 8;
+const MIN_PCT = 0.05; // < 5% → se fusiona en "otros"; umbral de solape ≈ (14+8)/502.65 ≈ 4.37%
 
 function sliceColor(key) {
   return getCategory(key).donutColor ?? '#94A3B8';
@@ -23,41 +25,45 @@ function buildSlices(transactions, isIncome) {
   const total = filtered.reduce((s, t) => s + Math.abs(t.amount ?? 0), 0);
   if (total === 0) return { total: 0, slices: [] };
 
+  // Agrupar por categoría
   const rawGroups = {};
   for (const tx of filtered) {
     const key = tx.category ?? "other";
     rawGroups[key] = (rawGroups[key] ?? 0) + Math.abs(tx.amount ?? 0);
   }
 
-  // Categorías con pct < 2% se agrupan en "other" para evitar slices clamped
-  const groups = {};
+  // Separar visible (≥ MIN_PCT) de las que van a "otros"
+  const visible = {};
+  let othersSum = 0;
   for (const [key, value] of Object.entries(rawGroups)) {
-    if (value / total < 0.02) {
-      groups["other"] = (groups["other"] ?? 0) + value;
+    if (value / total >= MIN_PCT) {
+      visible[key] = (visible[key] ?? 0) + value;
     } else {
-      groups[key] = (groups[key] ?? 0) + value;
+      othersSum += value;
     }
   }
+  if (othersSum > 0) {
+    visible["other"] = (visible["other"] ?? 0) + othersSum;
+  }
 
-  const sorted = Object.entries(groups).sort((a, b) => b[1] - a[1]);
+  const sorted = Object.entries(visible).sort((a, b) => b[1] - a[1]);
 
-  let cum = 0;
+  // Calcular geometría SVG exactamente: cumulativeArc += arc (real), nunca por adjustedArc
+  let cumulativeArc = 0;
   return {
     total,
     slices: sorted.map(([key, value]) => {
-      const fullArc = (value / total) * CIRC;
-      // round cap extiende STROKE visual (STROKE/2 a cada lado).
-      // Restar STROKE compensa; GAP_PX da la separación entre slices.
-      // gap visual final = GAP_PX; visualArc = fullArc - GAP_PX (fidelidad preservada).
-      const drawArc = Math.max(fullArc - STROKE - GAP_PX, 0.5);
-      const start   = cum;
-      cum += fullArc; // avance por arco completo — nunca por drawArc
+      const arc         = (value / total) * CIRC;
+      const adjustedArc = Math.max(arc - STROKE - GAP_PX, 0.5);
+      const dasharray   = `${adjustedArc} ${CIRC - adjustedArc}`;
+      const dashoffset  = -cumulativeArc;
+      cumulativeArc += arc;
       return {
-        key, value, fullArc,
+        key, value, arc,
         label: getCategory(key).label,
         icon:  getCategory(key).icon,
         color: sliceColor(key),
-        drawArc, start,
+        dasharray, dashoffset,
         pct: value / total,
       };
     }),
@@ -81,7 +87,7 @@ export default function CategoryDonut({ transactions, selectedCategory, onSelect
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, padding: "28px 0" }}>
         <div style={{ position: "relative", width: "100%", maxWidth: 280 }}>
           <svg viewBox="0 0 200 200" style={{ width: "100%", height: "auto", display: "block" }}>
-            <circle cx={100} cy={100} r={80} fill="none" stroke="#E8ECF0" strokeWidth={STROKE} />
+            <circle cx={100} cy={100} r={R} fill="none" stroke="#E8ECF0" strokeWidth={STROKE} />
           </svg>
           <div style={{
             position: "absolute", inset: 0,
@@ -107,13 +113,13 @@ export default function CategoryDonut({ transactions, selectedCategory, onSelect
       <div style={{ position: "relative", width: "100%", maxWidth: 420 }}>
         <svg viewBox="0 0 200 200" style={{ width: "100%", height: "auto", display: "block" }}>
           {/* Track */}
-          <circle cx={100} cy={100} r={80} fill="none" stroke="#E4EAF1" strokeWidth={STROKE} />
+          <circle cx={100} cy={100} r={R} fill="none" stroke="#E4EAF1" strokeWidth={STROKE} />
 
           {isSingleSlice ? (
             <>
-              {/* Hit area — disco transparente que cubre todo el anillo */}
+              {/* Hit area — disco transparente que cubre el anillo */}
               <circle
-                cx={100} cy={100} r={88}
+                cx={100} cy={100} r={R + STROKE / 2}
                 fill="transparent"
                 style={{ cursor: "pointer" }}
                 onClick={() => onSelectCategory(selectedCategory === slices[0].key ? null : slices[0].key)}
@@ -122,7 +128,7 @@ export default function CategoryDonut({ transactions, selectedCategory, onSelect
               />
               {/* Visual ring */}
               <circle
-                cx={100} cy={100} r={80}
+                cx={100} cy={100} r={R}
                 fill="none"
                 stroke={slices[0].color}
                 strokeWidth={STROKE}
@@ -131,18 +137,16 @@ export default function CategoryDonut({ transactions, selectedCategory, onSelect
             </>
           ) : (
             <g transform="rotate(-90 100 100)">
-              {/* Wedge paths: invisibles, capturan hover en toda el área del slice
-                  (incluyendo el hueco central). Se renderizan ANTES que los arcos
-                  visuales para que queden debajo en z-order. */}
+              {/* Wedge paths: invisibles, capturan hover en toda el área del slice */}
               {slices.map(s => {
-                const aStart = s.start / 80;
-                const aEnd   = (s.start + s.fullArc) / 80;
-                const x1 = (100 + 80 * Math.cos(aStart)).toFixed(2);
-                const y1 = (100 + 80 * Math.sin(aStart)).toFixed(2);
-                const x2 = (100 + 80 * Math.cos(aEnd)).toFixed(2);
-                const y2 = (100 + 80 * Math.sin(aEnd)).toFixed(2);
-                const large = s.fullArc / 80 > Math.PI ? 1 : 0;
-                const d = `M 100 100 L ${x1} ${y1} A 80 80 0 ${large} 1 ${x2} ${y2} Z`;
+                const aStart = -s.dashoffset / R;
+                const aEnd   = (-s.dashoffset + s.arc) / R;
+                const x1 = (100 + R * Math.cos(aStart)).toFixed(2);
+                const y1 = (100 + R * Math.sin(aStart)).toFixed(2);
+                const x2 = (100 + R * Math.cos(aEnd)).toFixed(2);
+                const y2 = (100 + R * Math.sin(aEnd)).toFixed(2);
+                const large = s.arc / R > Math.PI ? 1 : 0;
+                const d = `M 100 100 L ${x1} ${y1} A ${R} ${R} 0 ${large} 1 ${x2} ${y2} Z`;
                 return (
                   <path
                     key={`w-${s.key}`}
@@ -156,20 +160,20 @@ export default function CategoryDonut({ transactions, selectedCategory, onSelect
                   />
                 );
               })}
-              {/* Arcos visuales: pointer-events none — los wedges capturan los eventos */}
+              {/* Arcos visuales: pointer-events none */}
               {slices.map(s => {
                 const isSelected = selectedCategory === s.key;
                 const fat        = isSelected || hovered === s.key;
                 return (
                   <circle
                     key={s.key}
-                    cx={100} cy={100} r={80}
+                    cx={100} cy={100} r={R}
                     fill="none"
                     stroke={s.color}
                     strokeWidth={fat ? STROKE + 4 : STROKE}
                     strokeLinecap="round"
-                    strokeDasharray={`${s.drawArc} ${CIRC - s.drawArc}`}
-                    strokeDashoffset={-s.start}
+                    strokeDasharray={s.dasharray}
+                    strokeDashoffset={s.dashoffset}
                     opacity={selectedCategory && !isSelected ? 0.35 : 1}
                     style={{
                       transition: "stroke-width 200ms ease-out, opacity 250ms ease",
