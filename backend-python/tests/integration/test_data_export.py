@@ -165,8 +165,10 @@ def _make_worker_engine(req_row: tuple | None, *, fail_update: bool = False) -> 
     update_result = MagicMock()
     update_result.rowcount = 1
 
+    # 1 req SELECT + 5 dataset SELECTs + 1 perfil_cualitativo
     conn_read = AsyncMock()
-    conn_read.execute = AsyncMock(side_effect=[req_result, empty, empty, empty, empty, empty])
+    _reads = [req_result, empty, empty, empty, empty, empty, empty]
+    conn_read.execute = AsyncMock(side_effect=_reads)
     ctx_read = MagicMock()
     ctx_read.__aenter__ = AsyncMock(return_value=conn_read)
     ctx_read.__aexit__ = AsyncMock(return_value=False)
@@ -225,7 +227,8 @@ async def test_export_job_excludes_encrypted_fields() -> None:
     empty.fetchall.return_value = []
 
     conn = AsyncMock()
-    conn.execute = AsyncMock(side_effect=[txn_result, empty, empty, empty, empty])
+    # 5 dataset SELECTs (txns, goals, challenges, badges, audit) + 1 perfil_cualitativo
+    conn.execute = AsyncMock(side_effect=[txn_result, empty, empty, empty, empty, empty])
     ctx = MagicMock()
     ctx.__aenter__ = AsyncMock(return_value=conn)
     ctx.__aexit__ = AsyncMock(return_value=False)

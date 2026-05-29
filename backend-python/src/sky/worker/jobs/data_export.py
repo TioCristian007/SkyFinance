@@ -189,12 +189,33 @@ async def _collect_user_data(engine: Any, user_id: str) -> dict[str, list[dict[s
         )
         audit_log = [dict(row._mapping) for row in audit_result.fetchall()]
 
+        # perfil cualitativo privado (Ley 19.628 art 11: el usuario recibe TODOS sus datos)
+        profile_result = await conn.execute(
+            text("""
+                SELECT savings_mindset, savings_mindset_conf,
+                       risk_tolerance, risk_tolerance_conf,
+                       financial_volatility, financial_volatility_conf,
+                       goal_orientation, goal_orientation_conf,
+                       stress_baseline, stress_current, emotional_volatility,
+                       last_emotion, last_emotion_at,
+                       motivation_primary, motivation_primary_conf,
+                       recurring_blockers, protective_behaviors,
+                       updates_count, first_observed_at, last_updated_at
+                FROM public.user_financial_profile
+                WHERE user_id = :uid
+            """),
+            {"uid": user_id},
+        )
+        profile_row = profile_result.fetchone()
+        perfil_cualitativo = [dict(profile_row._mapping)] if profile_row else []
+
     return {
-        "transactions": _serialize(transactions),
-        "goals": _serialize(goals),
-        "challenge_states": _serialize(challenge_states),
-        "earned_badges": _serialize(earned_badges),
-        "audit_log": _serialize(audit_log),
+        "transactions":      _serialize(transactions),
+        "goals":             _serialize(goals),
+        "challenge_states":  _serialize(challenge_states),
+        "earned_badges":     _serialize(earned_badges),
+        "audit_log":         _serialize(audit_log),
+        "perfil_cualitativo": _serialize(perfil_cualitativo),
     }
 
 
