@@ -24,6 +24,7 @@ from sky.worker.jobs.audit_purge import audit_purge_job
 from sky.worker.jobs.categorize import categorize_pending_job
 from sky.worker.jobs.data_export import process_export_request_job
 from sky.worker.jobs.scheduled import scheduled_sync_job
+from sky.worker.jobs.snapshot_profiles import snapshot_profiles_job
 from sky.worker.jobs.sync import sync_all_user_accounts_job, sync_bank_account_job
 
 logger = get_logger("worker")
@@ -81,11 +82,13 @@ class WorkerSettings:
         scheduled_sync_job,
         audit_purge_job,                     # Fase 12: daily 03:00 UTC
         process_export_request_job,          # Fase 12: data export Ley 19.628
+        snapshot_profiles_job,               # ARIA-quali: lunes 06:00 UTC (03:00 Santiago)
     ]
 
     cron_jobs = [
         cron(scheduled_sync_job, minute=5),              # cada hora a los :05
         cron(audit_purge_job, hour=3, minute=0),         # daily 03:00 UTC
+        cron(snapshot_profiles_job, weekday=0, hour=6, minute=0),  # lunes 06:00 UTC
     ]
 
     queue_name = "sky:default"
@@ -94,5 +97,5 @@ class WorkerSettings:
     keep_result = 3600  # resultados en Redis por 1h
     # Errores terminales (BankAuthError, AllSourcesFailedError) retornan dict de fallo
     # sin re-lanzar, por lo que ARQ no los reintenta. max_tries=2 protege solo ante
-    # errores inesperados (DB blip, etc.) — un scrape con 2FA como máximo se repite 1 vez.
+    # errores inesperados (DB blip, etc.) — un scrape con 2FA se repite 1 vez máximo.
     max_tries = 2
