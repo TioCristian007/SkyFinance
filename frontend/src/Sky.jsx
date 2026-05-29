@@ -475,7 +475,7 @@ export default function Sky({ userId, userEmail }) {
     setMsgs((prev) => [...prev, { id: Date.now(), role: "user", text: text.trim(), time: nowTime() }]);
     setInput(""); setTyping(true); setApiErr(false);
     try {
-      const result = await api.sendChat(text, messages);
+      const result = await api.sendChat(text);
       addBotMsg(result.reply);
       if (result.proposals?.length) setPendingProposals((prev) => [...prev, ...result.proposals]);
       if (result.navigations?.length) {

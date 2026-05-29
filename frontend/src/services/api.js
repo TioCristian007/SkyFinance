@@ -95,8 +95,8 @@ export async function deleteTransaction(id) {
 }
 
 // ── Chat ──────────────────────────────────────────────────────────────────────
-export async function sendChat(message, history = []) {
-  return request("/chat", { method: "POST", body: JSON.stringify({ message, history }) });
+export async function sendChat(message) {
+  return request("/chat", { method: "POST", body: JSON.stringify({ message }) });
 }
 
 export async function getChatHistory(limit = 20) {
