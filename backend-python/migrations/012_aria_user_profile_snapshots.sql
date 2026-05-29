@@ -25,4 +25,11 @@ CREATE TABLE IF NOT EXISTS aria.user_profile_snapshots (
 CREATE INDEX IF NOT EXISTS idx_ups_period_region
   ON aria.user_profile_snapshots (observed_period, region);
 
--- aria.* es service_role only. No se agrega RLS pública (schema aria excluido de RLS por diseño).
+-- aria.* es service_role only. RLS explícita para honrar doctrina §18 y
+-- silenciar el warning de Supabase Studio. service_role bypassa RLS por
+-- configuración (rolbypassrls=true); anon/authenticated quedan bloqueados.
+ALTER TABLE aria.user_profile_snapshots ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS ups_service_only ON aria.user_profile_snapshots;
+CREATE POLICY ups_service_only ON aria.user_profile_snapshots
+  FOR ALL USING (false) WITH CHECK (false);
