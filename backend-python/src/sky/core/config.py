@@ -122,6 +122,15 @@ class Settings(BaseSettings):
     # Ajustable sin redeploy si un banco contractualmente exige retención mayor.
     audit_log_retention_days: int = 90
 
+    # ── ARIA-quali v1 — perfil cualitativo + snapshot ────────────────────────
+    # emotion_inference_premium_only: si True, la tool infer_emotional_state solo
+    # se registra para usuarios premium. Como profiles.tier no existe aún (deuda),
+    # todos los usuarios son tratados como free → tool deshabilitada en prod hasta
+    # que se cablee tier.
+    emotion_inference_premium_only: bool = True
+    profile_snapshot_k_anon_min:    int  = 5   # subir a 10 al cruzar 500 usuarios
+    profile_snapshot_jitter_days:   int  = 3
+
     @field_validator(
         "anthropic_api_key", "supabase_service_key", "bank_encryption_key", "database_url",
         mode="before",

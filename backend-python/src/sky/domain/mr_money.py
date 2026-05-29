@@ -27,6 +27,17 @@ from sky.domain.simulations import compute_projection
 
 logger = get_logger("mr_money")
 
+# ── Emotion detection constants ───────────────────────────────────────────────
+
+_VALID_EMOTIONS = frozenset({
+    "alivio", "ansiedad", "frustración", "orgullo",
+    "vergüenza", "esperanza", "tristeza", "neutro", "otro",
+})
+
+_VALID_SIGNAL_KINDS = frozenset({
+    "disclosure", "venting", "progress", "regression", "inquiry",
+})
+
 # ── Anthropic client (singleton) ──────────────────────────────────────────────
 
 _client: anthropic.AsyncAnthropic | None = None
@@ -97,7 +108,97 @@ MR_MONEY_TOOLS: list[dict[str, Any]] = [
         },
         "cache_control": {"type": "ephemeral"},  # cache all tools up to this point
     },
+    {
+        "name": "read_profile",
+        "description": (
+            "Lee el perfil cualitativo aprendido del usuario. "
+            "Úsala cuando necesites recordar la mentalidad, estrés o motivaciones ya detectadas."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "update_profile_dimension",
+        "description": (
+            "Actualiza una dimensión del perfil cualitativo del usuario cuando detectas evidencia FUERTE "
+            "(patrón claro, no especulación). Úsala con moderación — solo cuando el usuario revela algo "
+            "consistente y concreto sobre su mentalidad, motivación o actitud financiera. "
+            "Dimensiones válidas: savings_mindset, risk_tolerance, goal_orientation, motivation_primary, "
+            "stress_baseline, recurring_blockers, protective_behaviors."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "dimension": {
+                    "type": "string",
+                    "description": "Nombre de la dimensión a actualizar.",
+                },
+                "value": {
+                    "description": "Nuevo valor (string, int o lista según la dimensión).",
+                },
+                "confidence": {
+                    "type": "number",
+                    "description": "Confianza 0.0–1.0 basada en la evidencia del mensaje.",
+                },
+                "evidence": {
+                    "type": "string",
+                    "description": "Texto libre que justifica la actualización (va a logs, NO al perfil).",
+                },
+            },
+            "required": ["dimension", "value", "confidence", "evidence"],
+        },
+    },
 ]
+
+# Tools solo para usuarios premium (infer_emotional_state).
+# Se agregan dinámicamente en _build_tools_for_user().
+_EMOTION_TOOL: dict[str, Any] = {
+    "name": "infer_emotional_state",
+    "description": (
+        "Infiere el estado emocional del usuario a partir de su mensaje. "
+        "Úsala al cerrar cada turno cuando detectes una emoción clara. "
+        "No la menciones al usuario — es transparente."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "emotion": {
+                "type": "string",
+                "enum": sorted(_VALID_EMOTIONS),
+                "description": "Emoción principal detectada.",
+            },
+            "intensity": {
+                "type": "integer",
+                "description": "Intensidad 0 (mínima) a 10 (máxima).",
+            },
+            "signal_kind": {
+                "type": "string",
+                "enum": sorted(_VALID_SIGNAL_KINDS),
+                "description": "Tipo de señal: disclosure, venting, progress, regression, inquiry.",
+            },
+        },
+        "required": ["emotion", "intensity", "signal_kind"],
+    },
+}
+
+# ── Premium gate ─────────────────────────────────────────────────────────────
+
+async def _is_premium_user(user_id: str) -> bool:
+    """Devuelve True si el usuario tiene tier premium.
+
+    profiles.tier no existe aún (deuda documentada en 08_ESTADO_Y_DEUDA.md).
+    Mientras, todos los usuarios son tratados como free → retorna False.
+    Cuando se agregue la columna tier, reemplazar esta implementación.
+    """
+    # TODO: leer profiles.tier cuando exista la columna
+    return not settings.emotion_inference_premium_only
+
+
+def _build_tools_for_user(is_premium: bool) -> list[dict[str, Any]]:
+    """Construye la lista de tools según el tier del usuario."""
+    if is_premium:
+        return [*MR_MONEY_TOOLS, _EMOTION_TOOL]
+    return MR_MONEY_TOOLS
+
 
 # ── Local patterns (resolved without Anthropic) ───────────────────────────────
 
@@ -165,13 +266,15 @@ async def _fetch_transactions(user_id: str) -> list[dict[str, Any]]:
 
 async def _build_financial_context(user_id: str) -> tuple[str, dict[str, Any]]:
     from sky.domain.challenges import get_challenges
+    from sky.domain.financial_profile import get_profile
     from sky.domain.goals import get_goals
 
-    txs, goals, challenges, profile_flags = await asyncio.gather(
+    txs, goals, challenges, profile_flags, fin_profile = await asyncio.gather(
         _fetch_transactions(user_id),
         get_goals(user_id),
         get_challenges(user_id),
         _fetch_profile_flags(user_id),
+        get_profile(user_id),
     )
     count_income, count_expense = profile_flags
 
@@ -207,18 +310,43 @@ async def _build_financial_context(user_id: str) -> tuple[str, dict[str, Any]]:
         f"DESAFÍOS ACTIVOS:\n{chs_text}"
     )
 
+    if fin_profile:
+        profile_lines: list[str] = []
+        if fin_profile.savings_mindset and (fin_profile.savings_mindset_conf or 0) >= 0.5:
+            profile_lines.append(f"  Mentalidad: {fin_profile.savings_mindset} (conf {fin_profile.savings_mindset_conf:.1f})")
+        if fin_profile.motivation_primary and (fin_profile.motivation_primary_conf or 0) >= 0.5:
+            profile_lines.append(f"  Motivación: {fin_profile.motivation_primary} (conf {fin_profile.motivation_primary_conf:.1f})")
+        if fin_profile.goal_orientation and (fin_profile.goal_orientation_conf or 0) >= 0.5:
+            profile_lines.append(f"  Horizonte: {fin_profile.goal_orientation}")
+        if fin_profile.risk_tolerance is not None:
+            profile_lines.append(f"  Tolerancia al riesgo: {fin_profile.risk_tolerance}/10")
+        if fin_profile.stress_baseline is not None:
+            profile_lines.append(f"  Estrés base: {fin_profile.stress_baseline}/10")
+        if fin_profile.stress_current is not None:
+            profile_lines.append(f"  Estrés actual: {fin_profile.stress_current}/10")
+        if fin_profile.last_emotion:
+            profile_lines.append(f"  Última emoción detectada: {fin_profile.last_emotion}")
+        if profile_lines:
+            context_text += "\nPERFIL APRENDIDO:\n" + "\n".join(profile_lines)
+
     return context_text, {"summary": summary, "goals": goals}
 
 
-def _build_system_prompt(context_text: str) -> str:
+def _build_system_prompt(context_text: str, is_premium: bool = False) -> str:
     catalog = "\n".join(f"  - {c['id']}: {c['label']} — {c['desc']}" for c in MOCK_CHALLENGES)
+    emotion_instructions = (
+        "\nEMOCIÓN (solo premium): Al cerrar cada turno, usa infer_emotional_state si detectas "
+        "una emoción clara. No lo menciones al usuario. Es transparente."
+        if is_premium else ""
+    )
     return f"""Eres Mr. Money, copiloto financiero de Sky.
 
 {context_text}
 
 HERRAMIENTAS (úsalas cuando corresponda):
-READ → compute_projection
+READ → compute_projection, read_profile
 WRITE (requieren aprobación del usuario) → propose_challenge
+PERFIL (solo con evidencia fuerte) → update_profile_dimension{emotion_instructions}
 
 CATÁLOGO DE DESAFÍOS (usa el challenge_id EXACTO en propose_challenge):
 {catalog}
@@ -226,12 +354,15 @@ CATÁLOGO DE DESAFÍOS (usa el challenge_id EXACTO en propose_challenge):
 CUÁNDO USARLAS:
 - Usuario pregunta plazos/proyecciones → compute_projection
 - Usuario tiene gasto alto en categoría o pide un desafío → propose_challenge relevante
+- Necesitas ver el perfil aprendido → read_profile
+- Usuario revela patrón claro sobre su mentalidad/motivación (no especular) → update_profile_dimension
 
+PERFIL: Actualiza solo cuando hay evidencia fuerte y consistente. No especules con una sola frase.
 PERSONALIDAD: Profesional, directo, cercano. Fórmula: [dato real] + [emoción mínima] + [dirección].
 REGLAS: Español de Chile, tuteo (usa 'tienes', 'puedes', 'quieres'; NUNCA voseo como 'tenés', 'podés', 'querés'). Datos reales siempre. Máx 4 líneas. 1-2 emojis. Sin asesoría de inversión. Sin decisiones por el usuario."""
 
 
-# ── Tool executor ─────────────────────────────────────────────────────────────
+# ── Tool executors ────────────────────────────────────────────────────────────
 
 def _execute_compute_projection(tool_input: dict[str, Any]) -> str:
     result = compute_projection(
@@ -246,6 +377,47 @@ def _execute_compute_projection(tool_input: dict[str, Any]) -> str:
         "final_amount":  result.final_amount,
         "rationale":     result.rationale,
     })
+
+
+async def _execute_read_profile(user_id: str) -> str:
+    from sky.domain.financial_profile import get_profile
+    profile = await get_profile(user_id)
+    if profile is None:
+        return json.dumps({"status": "no_profile_yet"})
+    return json.dumps(profile.model_dump(exclude_none=True), default=str)
+
+
+async def _execute_update_profile(user_id: str, inp: dict[str, Any]) -> str:
+    from sky.domain.financial_profile import upsert_profile_dimension
+    dimension = str(inp.get("dimension", ""))
+    value = inp.get("value")
+    confidence = float(inp.get("confidence", 0.5))
+    evidence = str(inp.get("evidence", ""))
+    logger.info(
+        "mr_money_profile_update",
+        user_id=user_id,
+        dimension=dimension,
+        confidence=confidence,
+        evidence=evidence[:200],
+    )
+    try:
+        await upsert_profile_dimension(user_id, dimension, value, confidence)
+        return json.dumps({"status": "updated", "dimension": dimension})
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+
+async def _execute_infer_emotion(user_id: str, inp: dict[str, Any]) -> str:
+    from sky.domain.financial_profile import apply_emotion_inference
+    emotion = str(inp.get("emotion", "neutro"))
+    intensity = min(10, max(0, int(inp.get("intensity", 5))))
+    signal_kind = str(inp.get("signal_kind", "inquiry"))
+    if emotion not in _VALID_EMOTIONS:
+        emotion = "otro"
+    if signal_kind not in _VALID_SIGNAL_KINDS:
+        signal_kind = "inquiry"
+    await apply_emotion_inference(user_id, emotion, intensity, signal_kind)
+    return json.dumps({"status": "recorded"})
 
 
 # ── History helpers ───────────────────────────────────────────────────────────
@@ -296,7 +468,8 @@ class MrMoney:
             return local
 
         try:
-            return await self._call_anthropic(user_id, message, history)
+            is_premium = await _is_premium_user(user_id)
+            return await self._call_anthropic(user_id, message, history, is_premium=is_premium)
         except Exception as exc:
             if isinstance(exc, (anthropic.AuthenticationError, anthropic.APIStatusError)):
                 logger.error(
@@ -345,9 +518,11 @@ class MrMoney:
         user_id: str,
         message: str,
         history: list[ChatTurn] | None = None,
+        is_premium: bool = False,
     ) -> ChatTextResponse | ProposeChallenge | NavigationResponse:
         context_text, raw = await _build_financial_context(user_id)
-        system_prompt = _build_system_prompt(context_text)
+        system_prompt = _build_system_prompt(context_text, is_premium=is_premium)
+        tools = _build_tools_for_user(is_premium)
 
         # Si el cliente envía history explícito, lo usamos tal cual (sin consulta DB).
         # Si envía None, cargamos desde DB para garantizar continuidad entre sesiones.
@@ -369,7 +544,7 @@ class MrMoney:
                     "cache_control": {"type": "ephemeral"},
                 }
             ],
-            tools=MR_MONEY_TOOLS,  # type: ignore[arg-type]
+            tools=tools,  # type: ignore[arg-type]
             messages=messages,  # type: ignore[arg-type]
         )
 
@@ -401,10 +576,10 @@ class MrMoney:
                     result_text += block.text + " "
 
                 elif block.type == "tool_use":
+                    inp_raw: dict[str, Any] = cast(dict[str, Any], block.input) if isinstance(block.input, dict) else {}
+
                     if block.name == "compute_projection":
-                        tool_output = _execute_compute_projection(
-                            cast(dict[str, Any], block.input) if isinstance(block.input, dict) else {}
-                        )
+                        tool_output = _execute_compute_projection(inp_raw)
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": block.id,
@@ -412,12 +587,11 @@ class MrMoney:
                         })
 
                     elif block.name == "propose_challenge":
-                        inp: dict[str, Any] = cast(dict[str, Any], block.input) if isinstance(block.input, dict) else {}
-                        cid = str(inp.get("challenge_id", ""))
+                        cid = str(inp_raw.get("challenge_id", ""))
                         if any(c["id"] == cid for c in MOCK_CHALLENGES):
                             proposals.append(ProposeChallenge(
                                 challenge_id=cid,
-                                reasoning=str(inp.get("reasoning", "")),
+                                reasoning=str(inp_raw.get("reasoning", "")),
                             ))
                             tool_results.append({
                                 "type": "tool_result",
@@ -430,6 +604,28 @@ class MrMoney:
                                 "tool_use_id": block.id,
                                 "content": json.dumps({"error": f"challenge_id inválido: {cid}"}),
                             })
+
+                    elif block.name == "read_profile":
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": await _execute_read_profile(user_id),
+                        })
+
+                    elif block.name == "update_profile_dimension":
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": await _execute_update_profile(user_id, inp_raw),
+                        })
+
+                    elif block.name == "infer_emotional_state":
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": await _execute_infer_emotion(user_id, inp_raw),
+                        })
+
                     else:
                         tool_results.append({
                             "type": "tool_result",
@@ -450,7 +646,7 @@ class MrMoney:
                         "cache_control": {"type": "ephemeral"},
                     }
                 ],
-                tools=MR_MONEY_TOOLS,  # type: ignore[arg-type]
+                tools=tools,  # type: ignore[arg-type]
                 messages=messages,  # type: ignore[arg-type]
             )
             logger.info(
