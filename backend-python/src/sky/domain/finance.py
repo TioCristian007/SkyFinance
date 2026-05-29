@@ -66,8 +66,7 @@ def compute_summary(
         category = str(tx.get("category", "other"))
 
         is_income_tx = amount > 0 and (
-            category == "income"
-            or (count_transfers_as_income and category == "transfer")
+            category != "transfer" or count_transfers_as_income
         )
 
         if is_income_tx:

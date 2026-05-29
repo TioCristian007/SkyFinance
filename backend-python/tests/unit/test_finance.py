@@ -326,6 +326,33 @@ class TestTransfersAsExpense:
         assert s2.expenses == 0
 
 
+class TestIncomeBySign:
+    """Regresión 2026-05-28: income se determina por signo del monto, no por categoría.
+
+    Bug: el predicado anterior requería category IN ('income','transfer'), descartando
+    positivos con categorías como 'other', 'food', 'health', etc. — ~$50K invisibles
+    entre sidebar y donut.
+    """
+
+    def test_income_includes_positive_with_non_income_category(self) -> None:
+        """Positivos con cualquier categoría cuentan como income (signo es la fuente de verdad)."""
+        txs = [
+            {"amount": 20_000, "category": "other"},
+            {"amount": 15_000, "category": "food"},
+            {"amount": 18_000, "category": "health"},
+        ]
+        s = compute_summary(txs, count_transfers_as_income=True)
+        assert s.income == 53_000
+
+    def test_income_transfer_respects_flag(self) -> None:
+        """Transfer entrante con flag=True suma; con flag=False no suma."""
+        txs = [{"amount": 30_000, "category": "transfer"}]
+        s_on  = compute_summary(txs, count_transfers_as_income=True)
+        s_off = compute_summary(txs, count_transfers_as_income=False)
+        assert s_on.income  == 30_000
+        assert s_off.income == 0
+
+
 class TestTopCategories:
     def test_empty_returns_empty(self) -> None:
         assert top_categories({}) == []
