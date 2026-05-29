@@ -889,8 +889,8 @@ export default function Sky({ userId, userEmail }) {
           {/* Topbar */}
           <div style={{ background: P.surface, borderBottom: `1px solid ${P.border}`, padding: "0 28px", height: 58, display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
             <div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: P.text, letterSpacing: "-0.2px" }}>{pageTitle}</div>
-              <div style={{ fontSize: 12, color: P.text3, marginTop: 1 }}>{pageSub}</div>
+              <div style={{ fontSize: 24, fontWeight: 600, color: P.text, letterSpacing: "-0.3px" }}>{pageTitle}</div>
+              <div style={{ fontSize: 14, color: P.text3, marginTop: 2, fontWeight: 400 }}>{pageSub}</div>
             </div>
           </div>
 
@@ -1423,10 +1423,10 @@ export default function Sky({ userId, userEmail }) {
                       <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
                         {/* Período */}
                         <div style={{ flex: 1 }}>
-                          <div style={{ fontSize: 9, fontWeight: 700, color: P.text3, letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 5 }}>Período</div>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: P.text3, letterSpacing: "0.05em", textTransform: "uppercase", marginBottom: 8 }}>Período</div>
                           <div style={{ display: "flex", gap: 4 }}>
                             {[["mes-actual", "Mes actual"], ["ultimos-30", "Últimos 30d"]].map(([val, lbl]) => (
-                              <button key={val} onClick={() => setDateFilter(val)} style={{ flex: 1, padding: "6px 0", borderRadius: 7, border: "none", fontSize: 10, fontWeight: 600, background: dateFilter === val ? P.navy : P.bg, color: dateFilter === val ? "#fff" : P.text3, cursor: "pointer", transition: "all 0.15s" }}>{lbl}</button>
+                              <button key={val} onClick={() => setDateFilter(val)} style={{ flex: 1, padding: "8px 4px", borderRadius: 7, border: "none", fontSize: 14, fontWeight: 400, background: dateFilter === val ? P.navy : P.bg, color: dateFilter === val ? "#fff" : P.text3, cursor: "pointer", transition: "all 0.15s" }}>{lbl}</button>
                             ))}
                           </div>
                         </div>
@@ -1434,10 +1434,10 @@ export default function Sky({ userId, userEmail }) {
                         <div style={{ width: 1, background: P.border, alignSelf: "stretch", margin: "0 2px" }} />
                         {/* Tipo */}
                         <div style={{ flex: 1 }}>
-                          <div style={{ fontSize: 9, fontWeight: 700, color: P.text3, letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 5 }}>Tipo</div>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: P.text3, letterSpacing: "0.05em", textTransform: "uppercase", marginBottom: 8 }}>Tipo</div>
                           <div style={{ display: "flex", gap: 4 }}>
-                            {[["all", "Todos"], ["expense", "Gastos"], ["income", "Ingr."]].map(([val, lbl]) => (
-                              <button key={val} onClick={() => { setTxFilter(val); setSelectedCategory(null); }} style={{ flex: 1, padding: "6px 0", borderRadius: 7, border: "none", fontSize: 10, fontWeight: 600, background: txFilter === val ? P.navy : P.bg, color: txFilter === val ? "#fff" : P.text3, cursor: "pointer", transition: "all 0.15s" }}>{lbl}</button>
+                            {[["all", "Todos"], ["expense", "Gastos"], ["income", "Ingresos"]].map(([val, lbl]) => (
+                              <button key={val} onClick={() => { setTxFilter(val); setSelectedCategory(null); }} style={{ flex: 1, padding: "8px 4px", borderRadius: 7, border: "none", fontSize: 14, fontWeight: 400, background: txFilter === val ? P.navy : P.bg, color: txFilter === val ? "#fff" : P.text3, cursor: "pointer", transition: "all 0.15s" }}>{lbl}</button>
                             ))}
                           </div>
                         </div>
@@ -1454,7 +1454,7 @@ export default function Sky({ userId, userEmail }) {
                     </div>
 
                     {/* Donut — altura natural, no se estira */}
-                    <div style={{ background: P.surface, borderRadius: 14, border: `1px solid ${P.border}`, padding: "16px 20px" }}>
+                    <div style={{ background: P.surface, borderRadius: 14, border: `1px solid ${P.border}`, padding: "12px 14px" }}>
                       <CategoryDonut
                         transactions={donutTxs}
                         selectedCategory={selectedCategory}
@@ -1465,11 +1465,11 @@ export default function Sky({ userId, userEmail }) {
                   </div>
 
                   {/* ── Lista de movimientos ── */}
-                  <div style={{ flex: 1, background: P.surface, borderRadius: 14, border: `1px solid ${P.border}`, overflow: "hidden", display: "flex", flexDirection: "column", minWidth: 0, height: "100%" }}>
+                  <div style={{ flex: 1, maxWidth: 360, background: P.surface, borderRadius: 14, border: `1px solid ${P.border}`, overflow: "hidden", display: "flex", flexDirection: "column", minWidth: 0, height: "100%" }}>
 
                     {/* Header */}
                     <div style={{ padding: "11px 18px", borderBottom: `1px solid ${P.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
-                      <div style={{ fontSize: 14, fontWeight: 700, color: P.text }}>Movimientos</div>
+                      <div style={{ fontSize: 20, fontWeight: 600, color: P.text }}>Movimientos</div>
                       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                         {/* Chips de ordenamiento */}
                         <div style={{ display: "flex", gap: 3 }}>
@@ -1483,7 +1483,7 @@ export default function Sky({ userId, userEmail }) {
                                   ? setSortBy(`${sKey}-${dir === "desc" ? "asc" : "desc"}`)
                                   : setSortBy(`${sKey}-${sKey === "nombre" ? "asc" : "desc"}`)
                                 }
-                                style={{ padding: "4px 8px", borderRadius: 7, border: "none", fontSize: 10, fontWeight: 600, background: active ? P.navy : P.bg, color: active ? "#fff" : P.text3, cursor: "pointer", transition: "all 0.15s" }}
+                                style={{ padding: "4px 8px", borderRadius: 7, border: "none", fontSize: 13, fontWeight: 600, background: active ? P.navy : P.bg, color: active ? "#fff" : P.text3, cursor: "pointer", transition: "all 0.15s" }}
                               >{sLabel}{arrow}</button>
                             );
                           })}

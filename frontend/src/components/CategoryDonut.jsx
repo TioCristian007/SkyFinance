@@ -9,7 +9,7 @@ import { fmt } from "../utils/format.js";
 
 const CIRC   = 2 * Math.PI * 80;
 const STROKE = 16;
-const GAP_PX = 8;  // gap visual entre slices (8 = STROKE/2 → sin solapamiento de caps)
+const GAP_PX = 10; // gap visual entre slices; con linecap round y STROKE=16 garantiza separación visible
 
 function sliceColor(key) {
   return getCategory(key).donutColor ?? '#94A3B8';
@@ -240,9 +240,9 @@ export default function CategoryDonut({ transactions, selectedCategory, onSelect
 
       {/* Leyenda completa en 2 columnas */}
       <div style={{
-        width: "100%", marginTop: 14,
+        width: "100%", marginTop: 20,
         display: "grid", gridTemplateColumns: "1fr 1fr",
-        gap: "1px 8px",
+        gap: "4px 8px",
       }}>
         {slices.map(s => (
           <div
@@ -259,14 +259,14 @@ export default function CategoryDonut({ transactions, selectedCategory, onSelect
               transition: "background 0.15s",
             }}
           >
-            <span style={{ width: 7, height: 7, borderRadius: "50%", background: s.color, flexShrink: 0 }} />
+            <span style={{ width: 12, height: 12, borderRadius: "50%", background: s.color, flexShrink: 0 }} />
             <span style={{
-              flex: 1, fontSize: 12, color: "#0D1B2A",
+              flex: 1, fontSize: 14, fontWeight: 600, color: "#0D1B2A",
               overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
             }}>
               {s.label}
             </span>
-            <span style={{ fontSize: 12, fontWeight: 600, color: "#6B7A8D", flexShrink: 0 }}>
+            <span style={{ fontSize: 14, fontWeight: 600, color: "#374151", flexShrink: 0 }}>
               {Math.round(s.pct * 100)}%
             </span>
           </div>
