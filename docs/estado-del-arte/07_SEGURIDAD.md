@@ -13,6 +13,7 @@
 | Credenciales bancarias (RUT + clave) | **Crítica** | `bank_accounts.encrypted_rut/pass` (cifradas) |
 | Movimientos financieros | Alta | `transactions` (Postgres, RLS) |
 | Saldos | Alta | `bank_accounts.last_balance` |
+| Perfil cualitativo (dimensiones psicológicas) | Alta (privado) | `public.user_financial_profile` (RLS service_only) |
 | Patrones de gasto | Media (anonimizada) | schema `aria.*` |
 | Identidad (UUID) | Media | `auth.users` / `profiles.id` |
 
@@ -55,7 +56,7 @@ Vistas analíticas con **k-anonymity ≥ 10** (mínimo 10 registros por agregado
 - `public.audit_log` inmutable (solo INSERT). Eventos: `sync.start/success/error`, `account.connected/disconnected`, export, delete.
 - `user_hash = SHA-256(user_id + AUDIT_LOG_SALT)` — correlación sin PII. Sin PII en metadata.
 - Retención `AUDIT_LOG_RETENTION_DAYS` (90), purgado por `audit_purge_job` diario 03:00 UTC.
-- ⚠️ **Bug activo**: el INSERT mezcla placeholder con nombre (`:detail::jsonb`) y posicionales (`$1..$7`) → falla en cada sync. No fatal (try/except) pero **no se está auditando**. Ver [08](08_ESTADO_Y_DEUDA.md).
+- ✅ Bug de sintaxis corregido (2026-05-25): `:detail::jsonb` → `CAST(:detail AS jsonb)`. Ver [08](08_ESTADO_Y_DEUDA.md).
 
 ## 6. Rate limiting
 
@@ -69,7 +70,7 @@ Vistas analíticas con **k-anonymity ≥ 10** (mínimo 10 registros por agregado
 ## 8. Privacidad y cumplimiento
 
 - **Ley 19.628** (datos personales, Chile).
-- **Data export (art. 11)**: `POST /api/account/export-request` → worker genera ZIP (transactions, goals, challenges, badges, audit propio) → signed URL 7d. Excluye `bank_accounts` (credenciales). Rate limit 5/min.
+- **Data export (art. 11)**: `POST /api/account/export-request` → worker genera ZIP (transactions, goals, challenges, badges, audit propio, perfil_cualitativo) → signed URL 7d. Excluye `bank_accounts` (credenciales cifradas). Rate limit 5/min.
 - Diseño compatible con **CMF SFA** (consent tokens, scopes).
 
 ## 9. Idempotencia
@@ -89,6 +90,26 @@ Vistas analíticas con **k-anonymity ≥ 10** (mínimo 10 registros por agregado
 - **Rotación de `BANK_ENCRYPTION_KEY`** (`RUNBOOK_KEY_ROTATION.md`): dual-decrypt → `rekey_bank_accounts.py --apply` → verificar prefijo `v2:` → retirar v1. Sin downtime, rollback seguro.
 - **DR** (`DR_RUNBOOK.md`): 3 escenarios (Supabase down, Railway down, brecha de clave).
 - **RLS verification**: `scripts/audit_rls_policies.py` antes de cada migración (exit 1 bloquea deploy).
+
+## 12. Perfil cualitativo privado (ARIA-quali v1, 2026-05-29)
+
+Nueva capa de datos introducida por ARIA-quali v1. Dos tablas con regímenes de acceso distintos:
+
+### `public.user_financial_profile` — perfil privado por usuario
+
+- Contiene dimensiones psicológicas y financieras aprendidas por Mr. Money (savings_mindset, risk_tolerance, etc.).
+- **RLS `ufp_service_only`**: política única `FOR ALL USING (false) WITH CHECK (false)`. **Ningún JWT puede leer ni escribir.** Solo `service_role` (el backend).
+- El perfil es **invisible para el usuario** — no hay endpoint que lo exponga. Solo se devuelve indirectamente en el ZIP de data export (`perfil_cualitativo`).
+- Mr. Money lo lee vía `domain/financial_profile.get_profile()` e inyecta dimensiones con `confidence >= 0.5` en su contexto de sistema.
+- Actualización solo via tool `update_profile_dimension` que valida contra un allow-list explícito (`_EDITABLE_DIMENSIONS`). Columnas como `emotional_volatility`, `last_emotion` y `user_id` **no** están en el allow-list.
+- `apply_emotion_inference` (tool `infer_emotional_state`, premium-gated) actualiza `last_emotion`, `stress_current`, y calcula `emotional_volatility` como desviación estándar móvil de las últimas 20 intensidades (`emotion_history jsonb`). El tool solo está disponible cuando `_is_premium_user() == True` (actualmente siempre False hasta que se agregue `profiles.tier`).
+
+### `aria.user_profile_snapshots` — snapshots k-anon
+
+- Sin `user_id`. Sin UUID. Solo datos agregados y bucketizados.
+- Schema `aria.*` — acceso exclusivo `service_role`, igual que `spending_patterns` y demás tablas `aria.*`.
+- Job semanal `snapshot_profiles_job` (lunes 06:00 UTC): agrupa perfiles por demografía `(age_range, region, income_range, occupation)`. Buckets con menos de `profile_snapshot_k_anon_min` (default 5) se descartan silenciosamente. Jitter temporal ±`profile_snapshot_jitter_days` (default 3) para romper correlación con el momento real.
+- El umbral de k-anonimidad configurable (ver deuda Q-2 en [08](08_ESTADO_Y_DEUDA.md)).
 
 ## Deuda de seguridad reconocida
 

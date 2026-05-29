@@ -5,7 +5,7 @@
 > La sección más importante para operar honestamente. Doctrina §22: "la deuda se documenta, no se oculta".
 > Referencia de deuda formal: `backend-python/docs/REMEDIATION_P0_P3.md`.
 
-**Última actualización**: 2026-05-28
+**Última actualización**: 2026-05-29
 
 ---
 
@@ -54,6 +54,9 @@ La app se siente lenta. Sin profiling aún. Sospechas: cold-start de Railway, qu
 
 | Fix | Detalle |
 |---|---|
+| **A1 — categoría real en sync bancario** | `banking_sync._track_aria_events` tenía hardcoded `"category": "other"`. Cambiado a `getattr(m, "category", None) or "other"` — future-proof cuando `CanonicalMovement` reciba el campo. |
+| **A2 — track_goal_event cableado** | `goals.py`: `_fire_goal_aria` (fire-and-forget) nunca se disparaba. Ahora se dispara en `create_goal` (status=active), `update_goal` (active/completed según pct), `delete_goal` (abandoned). |
+| **A3 / A3b — aria_consent endpoint + toggle frontend** | `ProfilePatch` expone `aria_consent: bool \| None`. Endpoint `PATCH /api/profile` persiste el valor en `profiles.aria_consent`. Frontend `Sky.jsx`: sección "Privacidad y datos" con toggle "Compartir patrones anónimos para mejorar Sky". |
 | **Cola ARQ** | `worker/main.py` ahora crea el pool con `default_queue_name="sky:default"`. Antes, `categorize_pending_job` caía en `arq:queue` (fantasma) y nunca corría → "Procesando..." eterno + todo rojo. Causa raíz de dos síntomas. |
 | **Income display** | `Sky.jsx` usa `tx.amount > 0` (3 lugares) en vez de `category === "income"`. Ingresos sin glosa estándar ya no se ven como gasto. |
 | **BankConnect** | `Promise.allSettled` — la lista de bancos no se rompe si `/accounts` falla. |
@@ -70,6 +73,37 @@ La app se siente lenta. Sin profiling aún. Sospechas: cold-start de Railway, qu
 | **Stealth anti-bot básico en browser_pool** | (2026-05-25) `--disable-blink-features=AutomationControlled`, User-Agent realista, `navigator.webdriver=undefined`. Palancas `browser_headless` + `scraper_debug_capture`. |
 | **Validators fail-fast en Settings** | (2026-05-25) `field_validator` en pydantic v2 para secrets críticos: vacío/espacios → error al arrancar. `anthropic_api_key` valida además prefijo `sk-ant`. |
 | **KPI Ingresos perdía positivos no-income/no-transfer** | (2026-05-28) `compute_summary` usaba whitelist `category IN ('income','transfer')` para income — positivos con `category='other'`, `'food'`, etc. caían en ninguna rama y se perdían del summary (~$50K invisibles: sidebar vs donut). Tercera aparición del patrón "filtro por categoría en vez de signo" (anteriores: toggle Tipo frontend, B-3 vocabulario audit). Fix: predicado por signo (`amount > 0 AND (category != 'transfer' OR count_transfers_as_income)`). Tests de regresión en `TestIncomeBySign` · `test_finance.py`. |
+
+## 🆕 ARIA-quali v1 (2026-05-29)
+
+Nueva capa de inteligencia cualitativa incorporada en producción. No es deuda — es feature nueva.
+
+### Perfil cualitativo privado (`public.user_financial_profile`)
+- Tabla con dimensiones psicológicas/financieras: `savings_mindset`, `risk_tolerance`, `financial_volatility`, `goal_orientation`, `stress_baseline/current`, `emotional_volatility`, `motivation_primary`, `recurring_blockers`, `protective_behaviors`, `emotion_history` (jsonb).
+- **RLS `ufp_service_only`**: `USING (false) WITH CHECK (false)` — ningún JWT puede leer ni escribir. Solo `service_role`. El perfil es invisible al usuario.
+- **Migración**: `migrations/011_user_financial_profile.sql` (aplicar manualmente).
+
+### Mr. Money: contexto enriquecido + tools
+- `_build_financial_context` inyecta sección "PERFIL APRENDIDO" para dimensiones con `confidence >= 0.5`.
+- Tool `read_profile`: Mr. Money puede leer el perfil propio para enriquecer respuesta.
+- Tool `update_profile_dimension`: actualiza una dimensión del allow-list (`_EDITABLE_DIMENSIONS`). El allow-list bloquea columnas como `user_id` o `emotional_volatility` (estas solo las calcula el sistema).
+- Tool `infer_emotional_state` (**premium-gated**): llama a `apply_emotion_inference` que registra `last_emotion`, actualiza `stress_current`, y calcula `emotional_volatility` como desviación estándar móvil de las últimas 20 observaciones.
+
+### Snapshot semanal k-anon (`aria.user_profile_snapshots`)
+- Job ARQ `snapshot_profiles_job`: corre lunes 06:00 UTC. Agrupa perfiles por `(age_range, region, income_range, occupation)`. Buckets con menos de `profile_snapshot_k_anon_min` (default 5) se descartan. Los que superan el umbral se insertan como snapshots anónimos con jitter ±`profile_snapshot_jitter_days` días.
+- Tabla `aria.user_profile_snapshots`: sin `user_id`, sin UUID. Solo datos agregados. `service_role` only.
+- **Migración**: `migrations/012_aria_user_profile_snapshots.sql` (aplicar manualmente).
+
+### Data export (Ley 19.628)
+- `_collect_user_data` agrega dataset `perfil_cualitativo` al ZIP. El usuario puede descargar sus propias dimensiones aprendidas.
+
+### Deuda nueva introducida por ARIA-quali v1
+
+| ID | Item | Nota |
+|---|---|---|
+| **Q-1** | `profiles.tier` no existe | `_is_premium_user()` siempre retorna `False` → `infer_emotional_state` deshabilitado para todos. Retomar cuando se agregue la columna `tier` a `public.profiles`. |
+| **Q-2** | `k_anon_min=5` es bajo para ARIA | Para privacidad ARIA robusta el umbral debería ser ≥10. Aceptable para lanzamiento con base de usuarios pequeña; subir a 10 cuando haya ≥100 usuarios activos. Configurable sin redeploy (`profile_snapshot_k_anon_min` en settings). |
+| **Q-3** | Snapshot no tiene test de integración contra Postgres real | Los tests de `test_snapshot_profiles.py` mockean el insert a `aria.*`. El job funciona lógicamente pero el insert a Supabase no está verificado en staging. Confirmar en el primer run real. |
 
 ## 🧹 Rastrilleo de deuda menor (2026-05-23)
 
