@@ -96,3 +96,53 @@ async def test_patch_profile_income_only_does_not_touch_expense_key(client: Asyn
     data = resp.json()
     assert data["count_transfers_as_income"] is True
     assert "count_transfers_as_expense" not in data
+
+
+# ── Tests A3: aria_consent ────────────────────────────────────────────────────
+
+async def test_patch_profile_aria_consent_true(client: AsyncClient) -> None:
+    engine = _make_update_engine()
+    with patch("sky.api.routers.profile.get_engine", return_value=engine):
+        resp = await client.patch("/api/profile", json={"aria_consent": True})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["aria_consent"] is True
+    assert "count_transfers_as_income" not in data
+    assert "count_transfers_as_expense" not in data
+    sql_call = str(engine.begin.return_value.__aenter__.return_value.execute.call_args[0][0])
+    assert "aria_consent" in sql_call
+
+
+async def test_patch_profile_aria_consent_false(client: AsyncClient) -> None:
+    engine = _make_update_engine()
+    with patch("sky.api.routers.profile.get_engine", return_value=engine):
+        resp = await client.patch("/api/profile", json={"aria_consent": False})
+    assert resp.status_code == 200
+    assert resp.json()["aria_consent"] is False
+
+
+async def test_patch_profile_aria_consent_not_in_response_when_not_sent(  # noqa: E501
+    client: AsyncClient,
+) -> None:
+    engine = _make_update_engine()
+    with patch("sky.api.routers.profile.get_engine", return_value=engine):
+        resp = await client.patch("/api/profile", json={"count_transfers_as_income": True})
+    assert "aria_consent" not in resp.json()
+
+
+async def test_patch_profile_all_three_fields(client: AsyncClient) -> None:
+    engine = _make_update_engine()
+    with patch("sky.api.routers.profile.get_engine", return_value=engine):
+        resp = await client.patch(
+            "/api/profile",
+            json={
+                "count_transfers_as_income": True,
+                "count_transfers_as_expense": False,
+                "aria_consent": True,
+            },
+        )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count_transfers_as_income"] is True
+    assert data["count_transfers_as_expense"] is False
+    assert data["aria_consent"] is True

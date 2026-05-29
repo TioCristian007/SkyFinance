@@ -60,7 +60,11 @@ async def _track_aria_events(user_id: str, movements: list[Any]) -> None:
         for m in movements:
             await track_spending_event(
                 anon_profile,
-                {"amount": m.amount_clp, "category": "other", "source": "bank_sync"},
+                {
+                    "amount": m.amount_clp,
+                    "category": getattr(m, "category", None) or "other",
+                    "source": "bank_sync",
+                },
                 user_id,
             )
     except Exception as exc:

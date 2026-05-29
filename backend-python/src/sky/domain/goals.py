@@ -1,6 +1,7 @@
 """sky.domain.goals — CRUD de metas + proyección mensual."""
 from __future__ import annotations
 
+import asyncio
 import math
 from datetime import date, timedelta
 from typing import Any
@@ -8,7 +9,41 @@ from typing import Any
 from sqlalchemy import text
 
 from sky.core.db import get_engine
+from sky.core.logging import get_logger
 from sky.domain.finance import compute_summary
+
+logger = get_logger("goals")
+
+_aria_tasks: set[asyncio.Task[None]] = set()
+
+
+async def _fire_goal_aria(
+    user_id: str,
+    goal: dict[str, Any],
+    completion_rate: float,
+    goal_status: str,
+) -> None:
+    """Fire-and-forget: registrar evento de meta en ARIA."""
+    try:
+        from sky.domain.aria import build_anon_profile, track_goal_event
+        engine = get_engine()
+        async with engine.connect() as conn:
+            rs = await conn.execute(
+                text(
+                    "SELECT age_range, region, income_range, occupation"
+                    " FROM public.profiles WHERE id = :uid"
+                ),
+                {"uid": user_id},
+            )
+            row = rs.mappings().first()
+        profile = build_anon_profile(dict(row) if row else {})
+        await track_goal_event(
+            profile, goal,
+            completion_rate=completion_rate, goal_status=goal_status,
+            user_id=user_id,
+        )
+    except Exception as exc:
+        logger.warning("aria_goal_fire_failed", error=str(exc))
 
 
 def calc_goal_projection(
@@ -128,6 +163,13 @@ async def create_goal(
         int(result["target_amount"] or 1),
         monthly,
     )["pct"])
+
+    _task = asyncio.create_task(
+        _fire_goal_aria(user_id, result, completion_rate=0.0, goal_status="active")
+    )
+    _aria_tasks.add(_task)
+    _task.add_done_callback(_aria_tasks.discard)
+
     return result
 
 
@@ -177,19 +219,50 @@ async def update_goal(
         result = dict(row)
 
     monthly = await _get_monthly_capacity(user_id)
-    result["progress_pct"] = float(calc_goal_projection(
+    pct = float(calc_goal_projection(
         int(result["current_amount"] or 0),
         int(result["target_amount"] or 1),
         monthly,
     )["pct"])
+    result["progress_pct"] = pct
+
+    goal_status = "completed" if pct >= 100 else "active"
+    _task = asyncio.create_task(
+        _fire_goal_aria(user_id, result, completion_rate=pct, goal_status=goal_status)
+    )
+    _aria_tasks.add(_task)
+    _task.add_done_callback(_aria_tasks.discard)
+
     return result
 
 
 async def delete_goal(user_id: str, goal_id: str) -> bool:
     engine = get_engine()
     async with engine.begin() as conn:
+        pre = await conn.execute(
+            text("""
+                SELECT title AS name, target_amount, saved_amount AS current_amount
+                  FROM public.goals WHERE id = :id AND user_id = :uid
+            """),
+            {"id": goal_id, "uid": user_id},
+        )
+        pre_row = pre.mappings().first()
+
         rs = await conn.execute(
             text("DELETE FROM public.goals WHERE id = :id AND user_id = :uid"),
             {"id": goal_id, "uid": user_id},
         )
-        return bool(rs.rowcount and rs.rowcount > 0)
+        deleted = bool(rs.rowcount and rs.rowcount > 0)
+
+    if deleted and pre_row:
+        goal_dict = dict(pre_row)
+        target = int(goal_dict.get("target_amount") or 1)
+        current = int(goal_dict.get("current_amount") or 0)
+        pct = min(100.0, round(current / target * 100, 1))
+        _task = asyncio.create_task(
+            _fire_goal_aria(user_id, goal_dict, completion_rate=pct, goal_status="abandoned")
+        )
+        _aria_tasks.add(_task)
+        _task.add_done_callback(_aria_tasks.discard)
+
+    return deleted

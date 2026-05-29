@@ -334,6 +334,7 @@ export default function Sky({ userId, userEmail }) {
   const [initialSimType,      setInitialSimType]      = useState(null);
   const [countTransfersAsIncome,  setCountTransfersAsIncome]  = useState(true);
   const [countTransfersAsExpense, setCountTransfersAsExpense] = useState(true);
+  const [ariaConsent, setAriaConsent] = useState(false);
 
   const bottomRef       = useRef(null);
   const inputRef        = useRef(null);
@@ -465,6 +466,17 @@ export default function Sky({ userId, userEmail }) {
     } catch (e) {
       console.error("[Sky] patchProfile:", e.message);
       setCountTransfersAsExpense(!val);
+      showToast("No se pudo guardar el ajuste", "red");
+    }
+  };
+
+  const handleToggleAriaConsent = async (val) => {
+    setAriaConsent(val);
+    try {
+      await api.patchProfile({ aria_consent: val });
+    } catch (e) {
+      console.error("[Sky] patchProfile aria_consent:", e.message);
+      setAriaConsent(!val);
       showToast("No se pudo guardar el ajuste", "red");
     }
   };
@@ -1303,6 +1315,43 @@ export default function Sky({ userId, userEmail }) {
                       </button>
                     </div>
 
+                  </div>
+                </div>
+
+                {/* Privacidad y datos */}
+                <div style={{ background: P.surface, borderRadius: 14, padding: "18px 22px", border: `1px solid ${P.border}` }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: P.text, marginBottom: 14 }}>Privacidad y datos</div>
+                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 20 }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: P.text, marginBottom: 4 }}>
+                        Compartir patrones anónimos para mejorar Sky
+                      </div>
+                      <div style={{ fontSize: 11, color: P.text3, lineHeight: 1.5 }}>
+                        {ariaConsent
+                          ? "Activado: contribuyes a mejorar Sky con patrones agregados y anonimizados."
+                          : "Desactivado: tus datos financieros no se usan en ningún análisis agregado."}
+                      </div>
+                      <div style={{ fontSize: 10, color: P.text3, marginTop: 6, lineHeight: 1.5 }}>
+                        Sky nunca vende tus datos personales ni tus conversaciones. Solo estudiamos patrones agregados, sin identificarte.
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleToggleAriaConsent(!ariaConsent)}
+                      title={ariaConsent ? "Desactivar" : "Activar"}
+                      style={{
+                        width: 44, height: 24, borderRadius: 12, border: "none",
+                        background: ariaConsent ? P.green : P.border2,
+                        position: "relative", cursor: "pointer", flexShrink: 0,
+                        transition: "background 0.2s", marginTop: 2,
+                      }}
+                    >
+                      <div style={{
+                        width: 18, height: 18, borderRadius: "50%", background: "#fff",
+                        position: "absolute", top: 3,
+                        left: ariaConsent ? 22 : 3,
+                        transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.25)",
+                      }} />
+                    </button>
                   </div>
                 </div>
               </div>
