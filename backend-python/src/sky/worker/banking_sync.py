@@ -130,7 +130,8 @@ async def sync_bank_account(
         try:
             try:
                 result = await router.ingest(bank_id=bank_id, user_id=user_id, credentials=creds, since=since)
-            except BankAuthError:
+            except BankAuthError as exc:
+                detail = str(exc)[:200]
                 await _mark_error(bank_account_id, "Credenciales rechazadas por el banco")
                 sky_sync_total.labels(bank_id=bank_id, status="error").inc()
                 await log_event(
@@ -138,7 +139,7 @@ async def sync_bank_account(
                     user_id=user_id,
                     resource_type="bank_account",
                     resource_id=bank_account_id,
-                    metadata={"bank_id": bank_id, "error_type": "AuthenticationError"},
+                    metadata={"bank_id": bank_id, "error_type": "AuthenticationError", "detail": detail},
                 )
                 return {"success": False, "skipped": False, "error_type": "AuthenticationError", "bank_id": bank_id}
             except AllSourcesFailedError as exc:

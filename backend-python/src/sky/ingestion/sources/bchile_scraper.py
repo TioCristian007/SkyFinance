@@ -260,6 +260,8 @@ class BChileScraperSource(DataSource):
             lambda: self._check_login_error(page), retries=3
         )
         if login_error:
+            logger.warning("bchile_auth_error", reason="check_login_error", detail=login_error[:200])
+            await self._capture_debug(page, "auth_check_login_error")
             raise AuthenticationError(f"Error de login: {login_error}")
 
         is_2fa = await self._retry_dom_read(lambda: self._detect_2fa(page), retries=3)
@@ -272,6 +274,8 @@ class BChileScraperSource(DataSource):
                 )
 
         if "/login" in page.url:
+            logger.warning("bchile_auth_error", reason="url_still_login", detail=None, url=page.url)
+            await self._capture_debug(page, "auth_url_still_login")
             raise AuthenticationError("Login falló — aún en página de login")
 
         progress("Sesión iniciada correctamente")
