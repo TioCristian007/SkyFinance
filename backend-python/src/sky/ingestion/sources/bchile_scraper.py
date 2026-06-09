@@ -273,10 +273,16 @@ class BChileScraperSource(DataSource):
                     "Abre tu app Banco de Chile y aprueba cuando inicies el sync."
                 )
 
-        if "/login" in page.url:
-            logger.warning("bchile_auth_error", reason="url_still_login", detail=None, url=page.url)
-            await self._capture_debug(page, "auth_url_still_login")
-            raise AuthenticationError("Login falló — aún en página de login")
+        # Esperar hasta 20s a que la URL deje el dominio Auth0 de BChile.
+        # El check de "/login" daba falso positivo porque el dominio nuevo SE LLAMA
+        # login.portales.bancochile.cl — el poll positivo es la forma correcta.
+        _login_poll_start = datetime.now()
+        while "login.portales.bancochile.cl" in page.url:
+            if int((datetime.now() - _login_poll_start).total_seconds()) >= 20:
+                logger.warning("bchile_auth_error", reason="url_still_login", detail=None, url=page.url)
+                await self._capture_debug(page, "auth_url_still_login")
+                raise AuthenticationError("Login falló — el portal siguió en pantalla de login post-submit")
+            await asyncio.sleep(1)
 
         progress("Sesión iniciada correctamente")
 
@@ -310,7 +316,7 @@ class BChileScraperSource(DataSource):
                 )
                 await el.click(click_count=3)
                 value = clean if (0 < max_len <= 10) else formatted
-                await el.type(value, delay=45)
+                await el.fill(value)
                 return True
             except Exception:
                 continue
@@ -328,8 +334,8 @@ class BChileScraperSource(DataSource):
                 )
                 if is_readonly:
                     continue
-                await el.click()
-                await el.type(password, delay=45)
+                await el.click(click_count=3)
+                await el.fill(password)
                 return True
             except Exception:
                 continue
