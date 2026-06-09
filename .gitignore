@@ -81,3 +81,6 @@ ehthumbs.db
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+
+# Scraper debug captures (PII; ver SCRAPER_DEBUG_DIR)
+sky_debug/
