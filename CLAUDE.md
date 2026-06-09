@@ -197,12 +197,13 @@ Fuente: **`docs/estado-del-arte/08_ESTADO_Y_DEUDA.md`** + `backend-python/docs/R
 ### Bloqueadores activos
 | ID | Item | Nota |
 |---|---|---|
-| **B-1** | Scraping bloqueado desde datacenter (anti-bot Incapsula en BChile) | Funciona desde IP residencial, no desde Railway. Stealth básico agregado (2026-05-25): `--disable-blink-features=AutomationControlled`, UA realista, `navigator.webdriver=undefined`, palancas `browser_headless`/`scraper_debug_capture`. No garantizado vs Incapsula sofisticado. Crítico arquitectónico → refuerza tesis SFA. |
+| **B-1** | Scraping bloqueado desde datacenter (anti-bot Incapsula en BChile) | ⚠️ **Estado a re-verificar post-migración Auth0 (ver B-7).** BChile migró el portal; Incapsula puede estar en el nuevo dominio o no. Stealth básico agregado (2026-05-25): `--disable-blink-features=AutomationControlled`, UA realista, `navigator.webdriver=undefined`. Palancas `browser_headless`/`scraper_debug_capture`. Crítico arquitectónico → refuerza tesis SFA. |
 | **B-2** | Scraper BCI roto — dominio cambiado | `portalpersonas.bci.cl` ya no resuelve. Requiere rework (sprint propio). |
 | ✅ **B-3** | ~~Audit log roto en runtime~~ — **cerrado 2026-05-25** | `:detail::jsonb` rompía asyncpg con named params → 0 filas escritas. Corregido: `CAST(:detail AS jsonb)`. Test de regresión en `test_audit.py`. Pendiente: verificar runtime con Postgres staging (10 min). + vocabulario de event_type/outcome en `audit.py` reconciliado con la DB (cerrado 2026-05-27). |
 | ✅ **B-4** | ~~Balance post-disconnect~~ — **cerrado 2026-05-27** | cerrado 2026-05-27: summary filtra deleted_at + balance nunca cae a net_flow; KPI muestra '—' sin banco. |
 | **B-5** | Lentitud general | Sin profiling. **Medir antes de optimizar.** |
 | **B-6** | Backend Node legacy `appealing-benevolence` (Railway) online y duplicando datos en la Supabase compartida | Cada sync inserta movimientos con `external_id` en formato distinto al Python (`bchile_<6-base36>` vs `bchile_<16-hex>`) → la unique index no detecta colisión → duplicación garantizada. Repo GitHub desconectado 2026-05-28. **Pendiente: apagar el servicio Railway antes de cualquier limpieza adicional.** Detectado 2026-05-27. |
+| ✅ **B-7** | ~~Falso positivo URL BChile post-migración Auth0~~ — **cerrado 2026-06-09** | BChile migró el form de login a `login.portales.bancochile.cl/login` (Auth0 + Angular), manteniendo los IDs DOM. El check `if "/login" in page.url` matcheaba el nombre literal del nuevo dominio → todos los syncs caían en `AuthenticationError` → mensaje "Credenciales rechazadas por el banco" para todos los usuarios/testers. Fix: check `"/login" in url` reemplazado por poll positivo 20s esperando que la URL salga de `login.portales.bancochile.cl` (commit 6fdae84). Además: `el.fill()` revertido a `el.type(delay=45)` porque la directiva Angular `delete-zero-left` del input RUT requiere keystrokes reales (commit 3145a0c). Login local verificado: OK, 40 movs, balance correcto, 42.3s. B-1 (Incapsula) probablemente obsoleto con esta migración — confirmar en Railway. |
 
 ### Deuda abierta / infra
 - **P1-1**: `Sky.jsx` god-component (~1.600 LOC) — refactor frontend.
@@ -353,6 +354,8 @@ No confundir con las 13 fases técnicas (ya cerradas).
 ---
 
 ## 📅 Última actualización
+
+`2026-06-09` · B-7 cerrado: falso positivo URL scraper BChile post-migración Auth0 (check `/login` en URL → poll positivo + revert fill→type). B-1 marcado para re-verificar en Railway. Ver detalles en B-7.
 
 `2026-05-27` · Saga de números: idempotencia con id nativo BChile + fallback con saldo, ventana mes calendario, audit_log vocabulario reconciliado, tzdata pinneado, toggles simétricos transfer→ingreso/gasto (default ON, principio contable), cleanup + categorize self-drain. Detectado y documentado el double-write de Node legacy (B-6). Migraciones aplicadas: 006 (`bank_accounts.status`), 007 (`count_transfers_as_income`), 008 (`count_transfers_as_expense`). Lint E501 pendiente en `tests/unit/test_finance.py:216-217`.
 

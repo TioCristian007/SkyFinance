@@ -219,18 +219,6 @@ class BChileScraperSource(DataSource):
             raise RecoverableIngestionError("No se encontró el campo de clave")
 
         progress("Enviando credenciales...")
-        form_state = await page.evaluate("""() => {
-            const q = (s) => document.querySelector(s);
-            return {
-                rut_filled: !!(q('#ppriv_per-login-click-input-rut')?.value),
-                pass_len: (q('#ppriv_per-login-click-input-password')?.value || '').length,
-                request_id_present: !!(q('input[name="request_id"]')?.value),
-                username_hidden_present: !!(q('#iduserName1')?.value),
-                submit_disabled: !!(q('#ppriv_per-login-click-ingresar-login')?.disabled),
-                submit_aria_disabled: q('#ppriv_per-login-click-ingresar-login')?.getAttribute('aria-disabled') || null,
-            };
-        }""")
-        logger.info("bchile_pre_submit_state", **form_state)
         submitted = False
         for sel in SUBMIT_SELECTORS:
             try:
