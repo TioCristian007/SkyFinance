@@ -1681,7 +1681,7 @@ export default function Sky({ userId, userEmail }) {
                                       ["utilities",     "Servicios"],
                                       ["subscriptions", "Suscripciones"],
                                       ["education",     "Educación"],
-                                      ["travel",        "Viajes"],
+                                      ["insurance",     "Seguros"],
                                       ["banking_fee",   "Comisiones"],
                                       ["transfer",      "Transferencia"],
                                       ["debt_payment",  "Cuotas"],
