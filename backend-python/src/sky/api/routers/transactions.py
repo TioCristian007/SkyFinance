@@ -13,16 +13,15 @@ from sky.api.schemas.transactions import (
 )
 from sky.core.db import get_engine
 from sky.core.logging import get_logger
-from sky.domain.categorizer import merchant_display
+from sky.domain.categorizer import CATEGORIES, merchant_display
+from sky.domain.merchant_feedback import record_user_categorization
 
 logger = get_logger("api.transactions")
 router = APIRouter(prefix="/api/transactions", tags=["transactions"])
 
-_VALID_CATEGORIES = {
-    "income", "food", "transport", "housing", "health", "entertainment",
-    "shopping", "utilities", "subscriptions", "education", "travel",
-    "banking_fee", "transfer", "debt_payment", "savings", "other",
-}
+# Canon único (16): el set anterior aceptaba 'travel' (violaba el CHECK de la
+# DB → 500 al elegir "Viajes") y rechazaba 'insurance' (DB-válida) con 422.
+_VALID_CATEGORIES = set(CATEGORIES)
 
 
 @router.get("", response_model=TransactionListResponse)
@@ -106,11 +105,24 @@ async def recategorize(
                        categorization_status = 'done',
                        updated_at = NOW()
                  WHERE id = :id AND user_id = :uid AND deleted_at IS NULL
+                 RETURNING raw_description
             """),
             {"cat": body.category, "id": tx_id, "uid": user_id},
         )
-        if rs.rowcount == 0:
+        row = rs.first()
+        if row is None:
             raise HTTPException(status_code=404, detail="Transacción no encontrada")
+
+    # Feedback loop: recategorizar enseña. Best-effort en transacción aparte —
+    # la recategorización del usuario nunca falla porque el aprendizaje falló.
+    try:
+        await record_user_categorization(
+            user_id=user_id,
+            raw_description=str(row.raw_description or ""),
+            category=body.category,
+        )
+    except Exception as exc:
+        logger.warning("merchant_vote_failed", tx_id=tx_id, error=str(exc))
 
     logger.info("tx_recategorized", tx_id=tx_id, category=body.category)
     return TransactionPatchResponse(id=tx_id, category=body.category)

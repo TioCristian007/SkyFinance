@@ -45,10 +45,22 @@ def _make_engine(rows: list[dict[str, Any]], count: int | None = None) -> MagicM
     return mock_engine
 
 
-def _make_update_engine(rowcount: int = 1) -> MagicMock:
-    """Engine mock for UPDATE operations (single execute call)."""
+def _make_update_engine(
+    rowcount: int = 1, raw_description: str = "JUMBO LAS CONDES"
+) -> MagicMock:
+    """Engine mock for UPDATE operations (single execute call).
+
+    Soporta el RETURNING del PATCH (rs.first() → row.raw_description) y el
+    rowcount del DELETE.
+    """
     update_rs = MagicMock()
     update_rs.rowcount = rowcount
+    if rowcount:
+        row = MagicMock()
+        row.raw_description = raw_description
+        update_rs.first.return_value = row
+    else:
+        update_rs.first.return_value = None
     mock_conn = AsyncMock()
     mock_conn.execute = AsyncMock(return_value=update_rs)
     mock_ctx = MagicMock()
@@ -137,11 +149,55 @@ async def test_get_transactions_empty_list(client: AsyncClient) -> None:
 # ── PATCH /api/transactions/{id} ─────────────────────────────────────────────
 
 async def test_patch_transaction_recategorize(client: AsyncClient) -> None:
-    with patch("sky.api.routers.transactions.get_engine", return_value=_make_update_engine(1)):
+    """Recategorizar actualiza la tx Y enseña (registra el voto del usuario)."""
+    with (
+        patch("sky.api.routers.transactions.get_engine", return_value=_make_update_engine(1)),
+        patch(
+            "sky.api.routers.transactions.record_user_categorization",
+            new_callable=AsyncMock,
+        ) as mock_learn,
+    ):
         resp = await client.patch("/api/transactions/tx-1", json={"category": "transport"})
 
     assert resp.status_code == 200
     assert resp.json()["category"] == "transport"
+    mock_learn.assert_awaited_once_with(
+        user_id=_TEST_USER,
+        raw_description="JUMBO LAS CONDES",
+        category="transport",
+    )
+
+
+async def test_patch_learning_failure_does_not_break_recategorize(client: AsyncClient) -> None:
+    """El feedback loop es best-effort: si el voto falla, la recategorización
+    del usuario igual responde 200."""
+    with (
+        patch("sky.api.routers.transactions.get_engine", return_value=_make_update_engine(1)),
+        patch(
+            "sky.api.routers.transactions.record_user_categorization",
+            new_callable=AsyncMock,
+            side_effect=Exception("votes table down"),
+        ),
+    ):
+        resp = await client.patch("/api/transactions/tx-1", json={"category": "food"})
+
+    assert resp.status_code == 200
+    assert resp.json()["category"] == "food"
+
+
+async def test_patch_not_found_does_not_learn(client: AsyncClient) -> None:
+    """404 (tx ajena o borrada) → no se registra ningún voto."""
+    with (
+        patch("sky.api.routers.transactions.get_engine", return_value=_make_update_engine(0)),
+        patch(
+            "sky.api.routers.transactions.record_user_categorization",
+            new_callable=AsyncMock,
+        ) as mock_learn,
+    ):
+        resp = await client.patch("/api/transactions/tx-1", json={"category": "food"})
+
+    assert resp.status_code == 404
+    mock_learn.assert_not_awaited()
 
 
 async def test_patch_transaction_invalid_category_returns_422(client: AsyncClient) -> None:
@@ -150,6 +206,27 @@ async def test_patch_transaction_invalid_category_returns_422(client: AsyncClien
         json={"category": "not_a_real_category"},
     )
     assert resp.status_code == 422
+
+
+async def test_patch_travel_returns_422(client: AsyncClient) -> None:
+    """'travel' nunca existió en el CHECK de la DB: antes pasaba la validación
+    y reventaba con 500 al hacer el UPDATE. Ahora 422 limpio."""
+    resp = await client.patch("/api/transactions/tx-1", json={"category": "travel"})
+    assert resp.status_code == 422
+
+
+async def test_patch_insurance_is_valid(client: AsyncClient) -> None:
+    """'insurance' es DB-válida y antes se rechazaba injustamente con 422."""
+    with (
+        patch("sky.api.routers.transactions.get_engine", return_value=_make_update_engine(1)),
+        patch(
+            "sky.api.routers.transactions.record_user_categorization",
+            new_callable=AsyncMock,
+        ),
+    ):
+        resp = await client.patch("/api/transactions/tx-1", json={"category": "insurance"})
+
+    assert resp.status_code == 200
 
 
 # ── DELETE /api/transactions/{id} ────────────────────────────────────────────
