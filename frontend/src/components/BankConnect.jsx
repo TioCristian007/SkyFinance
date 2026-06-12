@@ -111,7 +111,10 @@ function AccountList({ accounts, totalBalance, onConnect, onSync, onDisconnect, 
       {accounts.map((acc) => {
         const waiting2FA = is2FAWaiting(acc);
         const needsRec   = needsReconnection(acc);
-        const isSyncing  = syncingId === acc.id;
+        // inFlight cubre syncs iniciados por CUALQUIER camino (cron, otro
+        // dispositivo, primer sync post-connect) — no solo el botón local.
+        const inFlight   = isSyncInFlight(acc);
+        const isSyncing  = syncingId === acc.id || acc.status === "syncing";
         const hasIssue   = needsRec || acc.status === "error";
 
         return (
@@ -134,7 +137,11 @@ function AccountList({ accounts, totalBalance, onConnect, onSync, onDisconnect, 
                         ? (acc.lastSyncError || RECONNECT_MSG)
                         : acc.status === "error"
                           ? `${acc.lastSyncError || "Error de conexión"}`
-                          : `Actualizado: ${fmtDate(acc.lastSyncAt)}`
+                          : acc.status === "syncing"
+                            ? (acc.syncCount > 0
+                                ? "Sincronizando con el banco…"
+                                : "Primera sincronización — puede tardar unos minutos…")
+                            : `Actualizado: ${fmtDate(acc.lastSyncAt)}`
                     }
                   </div>
                 </div>
@@ -177,13 +184,13 @@ function AccountList({ accounts, totalBalance, onConnect, onSync, onDisconnect, 
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
               <button
                 onClick={() => onSync(acc.id, acc.bankId)}
-                disabled={isSyncing || waiting2FA || needsRec}
+                disabled={isSyncing || inFlight || needsRec}
                 style={{
                   flex: 1, padding: "7px 0", borderRadius: 10,
                   border: `1px solid ${C.border}`, background: "transparent",
                   fontSize: 12, fontWeight: 600, color: C.textSecondary,
-                  cursor: (isSyncing || waiting2FA || needsRec) ? "not-allowed" : "pointer",
-                  opacity: (isSyncing || waiting2FA || needsRec) ? 0.5 : 1,
+                  cursor: (isSyncing || inFlight || needsRec) ? "not-allowed" : "pointer",
+                  opacity: (isSyncing || inFlight || needsRec) ? 0.5 : 1,
                 }}
               >
                 {isSyncing ? "Actualizando..." : "Actualizar"}
@@ -547,11 +554,11 @@ export default function BankConnect({ onSyncComplete }) {
       onSyncComplete?.();
     } catch (e) {
       console.error("[BankConnect] handleSync error:", e);
-      let msg = e.message || "Error al actualizar";
-      if (/Chrome|Chromium/i.test(msg))   msg = "Servicio de conexión no disponible. Intenta más tarde.";
-      if (/AUTH_FAILED/i.test(msg))        msg = "RUT o clave incorrectos. Reconecta el banco.";
-      if (/2FA_TIMEOUT/i.test(msg))        msg = "No se recibió aprobación 2FA. Intenta nuevamente.";
-      showToast(msg, C.red);
+      // El backend Python responde {detail} accionable (api.js lo propaga):
+      // 409 needs_reconnection, 503 sync no disponible, etc. Los regex
+      // AUTH_FAILED/2FA_TIMEOUT eran códigos del backend Node (archivado) y
+      // el sync ahora es asíncrono — sus errores llegan por lastSyncError.
+      showToast(e.message || "Error al actualizar", C.red);
       setSyncingId(null);
       // El 409 de needs_reconnection significa que el status cambió en el
       // backend — refrescar para que la tarjeta muestre "Reconectar".

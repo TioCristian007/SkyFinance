@@ -98,6 +98,8 @@ async def test_devuelve_estado_y_ultimo_evento(client: AsyncClient) -> None:
     assert resp.status_code == 200
     data = resp.json()
     assert data["count"] == 1
+    # Resumen por status: triage multi-tester sin abrir cada fila
+    assert data["by_status"] == {"needs_reconnection": 1}
     acc = data["accounts"][0]
     assert acc["status"] == "needs_reconnection"
     assert acc["last_sync_error"].startswith("Tu clave cambió")

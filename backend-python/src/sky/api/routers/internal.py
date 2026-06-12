@@ -119,6 +119,7 @@ async def operator_sync_status(request: Request) -> dict[str, Any]:
         last_events = {str(r["resource_id"]): dict(r) for r in rs2.mappings().all()}
 
     out: list[dict[str, Any]] = []
+    by_status: dict[str, int] = {}
     for acc in accounts:
         acc_id = str(acc["id"])
         ev = last_events.get(acc_id)
@@ -134,10 +135,12 @@ async def operator_sync_status(request: Request) -> dict[str, Any]:
                 "detail": detail,
                 "occurred_at": ev["occurred_at"].isoformat() if ev["occurred_at"] else None,
             }
+        status = str(acc["status"] or "")
+        by_status[status] = by_status.get(status, 0) + 1
         out.append({
             "id": acc_id,
             "bank_id": str(acc["bank_id"]),
-            "status": str(acc["status"] or ""),
+            "status": status,
             "consecutive_errors": int(acc["consecutive_errors"] or 0),
             "sync_count": int(acc["sync_count"] or 0),
             "last_sync_at": acc["last_sync_at"].isoformat() if acc["last_sync_at"] else None,
@@ -145,4 +148,6 @@ async def operator_sync_status(request: Request) -> dict[str, Any]:
             "last_sync_event": ev_out,
         })
 
-    return {"accounts": out, "count": len(out)}
+    # Resumen por status para triage multi-tester de un vistazo: cuántas
+    # cuentas necesitan reconexión / están en error sin abrir cada fila.
+    return {"accounts": out, "count": len(out), "by_status": by_status}
