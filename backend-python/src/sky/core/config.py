@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     browser_pool_size: int = 4
     bchile_2fa_timeout_sec: int = 120
     browser_headless: bool = True
+    # "chrome" = Chrome real con fallback a bundled · "bundled" = fuerza Chromium
+    # bundled (repro del bug '$' del sprint 2026-06-12). Palanca operativa (§14).
+    browser_channel: str = "chrome"
     scraper_debug_capture: bool = False
     scraper_debug_dir: str = ""   # vacío = usa carpeta temp del sistema
 

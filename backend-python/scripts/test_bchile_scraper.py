@@ -44,6 +44,12 @@ async def main():
     parser.add_argument("--since", help="YYYY-MM-DD — solo movimientos desde esta fecha")
     parser.add_argument("--timeout-2fa", type=int, default=120)
     parser.add_argument("--headless", action="store_true", help="Correr sin GUI")
+    parser.add_argument(
+        "--force-bundled",
+        action="store_true",
+        help="Forzar Chromium bundled (ignora Chrome real) — repro del entorno de prod "
+        "donde type() manglaba el '$' de la clave (sprint 2026-06-12)",
+    )
     args = parser.parse_args()
 
     since = date.fromisoformat(args.since) if args.since else None
@@ -51,7 +57,11 @@ async def main():
     # Browser pool con 1 browser para test, con GUI visible por default
     # (--headless flag lo oculta si querés)
     from sky.ingestion.browser_pool import set_browser_pool
-    pool = BrowserPool(pool_size=1, headless=args.headless)
+    pool = BrowserPool(
+        pool_size=1,
+        headless=args.headless,
+        channel="bundled" if args.force_bundled else None,
+    )
     await pool.start()
     set_browser_pool(pool)  # hacer que get_browser_pool() devuelva este
 

@@ -27,9 +27,18 @@ logger = get_logger("browser_pool")
 
 
 class BrowserPool:
-    def __init__(self, pool_size: int | None = None, headless: bool = True):
+    def __init__(
+        self,
+        pool_size: int | None = None,
+        headless: bool = True,
+        channel: str | None = None,
+    ):
         self._pool_size = pool_size or settings.browser_pool_size
         self._headless = headless
+        # "chrome" = intenta Chrome real con fallback a bundled (default).
+        # "bundled" = fuerza Chromium bundled — repro local del bug '$'
+        # (sprint 2026-06-12: bundled headless tecleaba mal chars con Shift).
+        self._channel = channel or settings.browser_channel
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
         self._semaphore = asyncio.Semaphore(self._pool_size)
@@ -48,29 +57,41 @@ class BrowserPool:
             "--disable-blink-features=AutomationControlled",
         ]
 
-        # Intentar Chrome de canal instalado (mejor huella anti-bot); fallback a Chromium bundled.
-        try:
-            self._browser = await self._playwright.chromium.launch(
-                channel="chrome",
-                headless=self._headless,
-                args=base_args,
-            )
-            logger.info(
-                "browser_pool_started",
-                pool_size=self._pool_size, headless=self._headless, channel="chrome",
-            )
-        except Exception:
-            launch_kwargs: dict = {
-                "headless": self._headless,
-                "args": base_args,
-            }
-            if settings.chrome_path and os.path.exists(settings.chrome_path):
-                launch_kwargs["executable_path"] = settings.chrome_path
-            self._browser = await self._playwright.chromium.launch(**launch_kwargs)
-            logger.info(
-                "browser_pool_started",
-                pool_size=self._pool_size, headless=self._headless, channel="chromium-bundled",
-            )
+        # Chrome de canal instalado: misma huella y comportamiento que el
+        # entorno local validado (teclea bien el '$', mejor huella anti-bot).
+        if self._channel == "chrome":
+            try:
+                self._browser = await self._playwright.chromium.launch(
+                    channel="chrome",
+                    headless=self._headless,
+                    args=base_args,
+                )
+                logger.info(
+                    "browser_pool_started",
+                    pool_size=self._pool_size, headless=self._headless, channel="chrome",
+                )
+                self._started = True
+                return
+            except Exception as exc:
+                # warning, no info: en bundled la verificación post-fill del
+                # scraper es la única red contra el bug del '$'. Esto debe
+                # verse en los logs de arranque del worker en prod.
+                logger.warning("browser_chrome_unavailable_falling_back", error=str(exc))
+
+        launch_kwargs: dict = {
+            "headless": self._headless,
+            "args": base_args,
+        }
+        # En modo "bundled" forzado no se respeta chrome_path: el punto del
+        # repro es usar exactamente el Chromium que empaqueta Playwright.
+        force_bundled = self._channel == "bundled"
+        if not force_bundled and settings.chrome_path and os.path.exists(settings.chrome_path):
+            launch_kwargs["executable_path"] = settings.chrome_path
+        self._browser = await self._playwright.chromium.launch(**launch_kwargs)
+        logger.info(
+            "browser_pool_started",
+            pool_size=self._pool_size, headless=self._headless, channel="chromium-bundled",
+        )
 
         self._started = True
 
