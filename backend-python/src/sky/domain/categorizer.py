@@ -116,7 +116,7 @@ def normalize_merchant(description: str) -> str:
     return s.strip()[:60]
 
 
-_TRANSFER_PREFIX_RE = re.compile(
+TRANSFER_PREFIX_RE = re.compile(
     r"^(?:traspaso\s+(?:de|a)|transferencia\s+a):\s*",
     re.IGNORECASE,
 )
@@ -127,7 +127,7 @@ def merchant_display(raw_description: str | None) -> str | None:
     if not raw_description:
         return None
     s = raw_description.strip()
-    m = _TRANSFER_PREFIX_RE.match(s)
+    m = TRANSFER_PREFIX_RE.match(s)
     if m:
         counterparty = s[m.end():].strip()
         return counterparty.title() or None

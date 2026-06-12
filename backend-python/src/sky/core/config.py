@@ -78,6 +78,8 @@ class Settings(BaseSettings):
     categorize_max_keys_per_ai_call: int = 20
     categorize_anthropic_model: str = "claude-haiku-4-5-20251001"
     categorize_confidence_threshold: float = 0.75
+    # usuarios distintos de acuerdo para promover un voto al caché global
+    merchant_vote_promotion_threshold: int = 3
 
     # ── Sync banking job (Fase 6) ─────────────────────────────────────────
     sync_advisory_lock_timeout_sec: int = 600   # 10 min — máximo razonable
