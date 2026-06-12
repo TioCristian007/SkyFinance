@@ -39,6 +39,8 @@ from sky.core.logging import get_logger
 from sky.core.metrics import sky_sync_duration, sky_sync_total
 from sky.ingestion.contracts import (
     FAILURE_USER_MESSAGES,
+    PROGRESS_2FA_WAIT_PREFIX,
+    PROGRESS_LOGIN_OK,
     AllSourcesFailedError,
     BankCredentials,
     CircuitOpenError,
@@ -143,14 +145,43 @@ async def sync_bank_account(
         else:
             since = date.today() - timedelta(days=90)
 
+        # Señal 2FA → status visible para el frontend (sprint testers 2026-06-12).
+        # El callback de progreso es sync (contrato DataSource); los UPDATE corren
+        # como tasks y se drenan SIEMPRE antes de cualquier escritura final de
+        # estado, para que un task tardío no pise 'active'/'error' con 'waiting_2fa'.
+        progress_tasks: list[asyncio.Task[None]] = []
+        in_2fa = False
+
+        def _on_progress(message: str) -> None:
+            nonlocal in_2fa
+            if message.startswith(PROGRESS_2FA_WAIT_PREFIX):
+                if not in_2fa:
+                    in_2fa = True
+                    progress_tasks.append(
+                        asyncio.create_task(_mark_waiting_2fa(bank_account_id, message))
+                    )
+            elif in_2fa and message == PROGRESS_LOGIN_OK:
+                in_2fa = False
+                progress_tasks.append(asyncio.create_task(_mark_syncing(bank_account_id)))
+
+        async def _flush_progress_tasks() -> None:
+            if progress_tasks:
+                await asyncio.gather(*progress_tasks, return_exceptions=True)
+                progress_tasks.clear()
+
         try:
             try:
-                result = await router.ingest(bank_id=bank_id, user_id=user_id, credentials=creds, since=since)
+                result = await router.ingest(
+                    bank_id=bank_id, user_id=user_id, credentials=creds,
+                    on_progress=_on_progress, since=since,
+                )
+                await _flush_progress_tasks()
             except BankAuthError as exc:
                 # B1 (sprint 2026-06-12): el banco rechazó la sesión → la cuenta
                 # entra en needs_reconnection y queda fuera de todo reintento
                 # automático hasta que el usuario reconecte con su clave vigente.
                 detail = str(exc)[:200]
+                await _flush_progress_tasks()
                 await _mark_needs_reconnection(bank_account_id)
                 sky_sync_total.labels(bank_id=bank_id, status="error").inc()
                 await log_event(
@@ -176,6 +207,7 @@ async def sync_bank_account(
             except AllSourcesFailedError as exc:
                 kind = classify_failure_chain([e for _, e in exc.errors])
                 user_msg = _user_message_for_failure(exc)
+                await _flush_progress_tasks()
                 await _mark_error(bank_account_id, user_msg)
                 sky_sync_total.labels(bank_id=bank_id, status="error").inc()
                 cause_type = type(exc.primary_cause).__name__ if exc.primary_cause else "unknown"
@@ -246,6 +278,7 @@ async def sync_bank_account(
             # Excepción inesperada (no BankAuthError/AllSourcesFailedError que ya manejan
             # su propio _mark_error y retornan). Garantiza que el status no quede en 'syncing'.
             try:
+                await _flush_progress_tasks()
                 await _mark_error(bank_account_id, "Error inesperado de sincronización")
             except Exception:
                 logger.warning("failed_to_mark_error_after_unexpected_exc", bank_account_id=bank_account_id)
@@ -354,6 +387,42 @@ async def _mark_needs_reconnection(bank_account_id: str) -> None:
                  WHERE id = :id
             """),
             {"id": bank_account_id, "msg": RECONNECT_USER_MSG},
+        )
+
+
+async def _mark_waiting_2fa(bank_account_id: str, msg: str) -> None:
+    """El scraper está esperando la aprobación 2FA del usuario (sprint testers
+    2026-06-12). Status visible: el frontend muestra el banner "aprueba en tu
+    app" (is2FAWaiting matchea el status y/o el mensaje en last_sync_error).
+    No toca consecutive_errors — esperar no es un error. El status ya está
+    permitido por el CHECK de bank_accounts (migraciones 006/013)."""
+    engine = get_engine()
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("""
+                UPDATE public.bank_accounts
+                   SET status = 'waiting_2fa',
+                       last_sync_error = :msg,
+                       updated_at = NOW()
+                 WHERE id = :id
+            """),
+            {"id": bank_account_id, "msg": msg[:500]},
+        )
+
+
+async def _mark_syncing(bank_account_id: str) -> None:
+    """Vuelta de waiting_2fa a syncing: el usuario aprobó y el scrape sigue."""
+    engine = get_engine()
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("""
+                UPDATE public.bank_accounts
+                   SET status = 'syncing',
+                       last_sync_error = NULL,
+                       updated_at = NOW()
+                 WHERE id = :id
+            """),
+            {"id": bank_account_id},
         )
 
 

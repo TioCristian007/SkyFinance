@@ -171,3 +171,18 @@ async def test_candidates_sql_excluye_needs_reconnection() -> None:
     conn = engine.connect.return_value.__aenter__.return_value
     sql = str(conn.execute.call_args[0][0])
     assert "needs_reconnection" in sql
+
+
+async def test_candidates_sql_recupera_waiting_2fa_stale() -> None:
+    """Sprint testers 2026-06-12: si el worker muere esperando la aprobación
+    2FA, la cuenta queda en waiting_2fa. El cron debe recuperarla (junto con
+    syncing stale) o queda huérfana fuera del auto-sync para siempre."""
+    ctx = _make_ctx()
+    engine = _make_engine([])
+    with patch("sky.worker.jobs.scheduled.get_engine", return_value=engine):
+        await scheduled_sync_job(ctx)
+
+    conn = engine.connect.return_value.__aenter__.return_value
+    sql = str(conn.execute.call_args[0][0])
+    assert "waiting_2fa" in sql
+    assert "'syncing', 'waiting_2fa'" in sql  # ambos en la rama stale-recovery

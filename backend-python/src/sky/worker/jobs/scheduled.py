@@ -52,7 +52,11 @@ async def scheduled_sync_job(ctx: dict[str, Any]) -> dict[str, Any]:
                   FROM public.bank_accounts ba
                   JOIN public.profiles p ON p.id = ba.user_id
                  WHERE (ba.status IN ('active', 'error')
-                        OR (ba.status = 'syncing'
+                        -- syncing/waiting_2fa con updated_at viejo = el worker
+                        -- murió a mitad de sync (o esperando la aprobación 2FA
+                        -- que nunca llegó). Recuperarlas para que no queden
+                        -- huérfanas fuera del cron para siempre.
+                        OR (ba.status IN ('syncing', 'waiting_2fa')
                             AND ba.updated_at < NOW() - INTERVAL '30 minutes'))
                    -- B2 (sprint 2026-06-12): needs_reconnection ya queda fuera
                    -- del IN de arriba; el guard explícito protege contra

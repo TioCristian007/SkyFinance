@@ -1,5 +1,7 @@
 """Tests unitarios de sync_bank_account con mocks."""
+import asyncio
 from datetime import date, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -7,6 +9,8 @@ import pytest
 
 from sky.core.errors import RateLimitError
 from sky.ingestion.contracts import (
+    PROGRESS_2FA_WAIT_PREFIX,
+    PROGRESS_LOGIN_OK,
     AccountBalance,
     AllSourcesFailedError,
     CanonicalMovement,
@@ -22,6 +26,8 @@ from sky.worker.banking_sync import (
     RECONNECT_USER_MSG,
     _mark_error,
     _mark_needs_reconnection,
+    _mark_syncing,
+    _mark_waiting_2fa,
     _persist_movements,
     _user_message_for_failure,
     sync_bank_account,
@@ -429,6 +435,109 @@ async def test_mark_needs_reconnection_updates_db(mock_get_engine: MagicMock) ->
     params = mock_conn.execute.call_args[0][1]
     assert "needs_reconnection" in sql
     assert params["msg"] == RECONNECT_USER_MSG
+
+
+# ── waiting_2fa visible (sprint testers 2026-06-12) ───────────────────────────
+
+@pytest.mark.asyncio
+@patch("sky.worker.banking_sync.try_advisory_lock")
+@patch("sky.worker.banking_sync._mark_syncing", new_callable=AsyncMock)
+@patch("sky.worker.banking_sync._mark_waiting_2fa", new_callable=AsyncMock)
+@patch("sky.worker.banking_sync._persist_movements", new_callable=AsyncMock)
+@patch("sky.worker.banking_sync._update_account_after_sync", new_callable=AsyncMock)
+@patch("sky.worker.banking_sync.get_engine")
+@patch("sky.worker.banking_sync.decrypt", side_effect=lambda x, _k: f"plain_{x}")
+async def test_progress_2fa_marca_waiting_y_vuelve_a_syncing(
+    _decrypt: MagicMock,
+    mock_get_engine: MagicMock,
+    _update: AsyncMock,
+    mock_persist: AsyncMock,
+    mock_waiting: AsyncMock,
+    mock_syncing: AsyncMock,
+    mock_lock: MagicMock,
+    fake_arq_pool: MagicMock,
+) -> None:
+    """El prefijo de progreso 2FA marca waiting_2fa en DB; PROGRESS_LOGIN_OK
+    devuelve la cuenta a syncing. Es la señal que el frontend convierte en el
+    banner "aprueba en tu app" — sin esto el tester ve un spinner genérico."""
+    mock_lock.return_value = _make_advisory_lock_cm(acquired=True)
+    mock_row = {
+        "id": "acc-uuid", "user_id": "user-uuid", "bank_id": "bchile",
+        "encrypted_rut": "enc_rut", "encrypted_pass": "enc_pass",
+        "sync_count": 0, "consecutive_errors": 0,
+    }
+    mock_get_engine.return_value = _make_engine_with_row(mock_row)
+    mock_persist.return_value = 0
+
+    result_obj = IngestionResult(
+        balance=None, movements=[], source_kind=SourceKind.SCRAPER,
+        source_identifier="scraper.bchile", elapsed_ms=10,
+    )
+
+    async def fake_ingest(**kwargs: Any) -> IngestionResult:
+        on_progress = kwargs.get("on_progress")
+        assert on_progress is not None, "sync_bank_account debe pasar on_progress al router"
+        on_progress(f"{PROGRESS_2FA_WAIT_PREFIX} en tu app Banco de Chile...")
+        await asyncio.sleep(0)  # deja correr el task del UPDATE
+        on_progress(f"{PROGRESS_2FA_WAIT_PREFIX} (90s restantes)...")  # repetido: no re-marca
+        on_progress(PROGRESS_LOGIN_OK)
+        await asyncio.sleep(0)
+        return result_obj
+
+    router = MagicMock()
+    router.ingest = fake_ingest
+
+    out = await sync_bank_account(
+        router=router,
+        bank_account_id="acc-uuid",
+        user_id="user-uuid",
+        arq_pool=fake_arq_pool,
+    )
+
+    assert out["success"] is True
+    mock_waiting.assert_awaited_once()
+    args = mock_waiting.await_args[0]
+    assert args[0] == "acc-uuid"
+    assert args[1].startswith(PROGRESS_2FA_WAIT_PREFIX)
+    mock_syncing.assert_awaited_once_with("acc-uuid")
+
+
+@pytest.mark.asyncio
+@patch("sky.worker.banking_sync.get_engine")
+async def test_mark_waiting_2fa_updates_db(mock_get_engine: MagicMock) -> None:
+    """waiting_2fa se escribe con el mensaje visible y SIN tocar consecutive_errors
+    (esperar la aprobación del usuario no es un error)."""
+    mock_conn = AsyncMock()
+    mock_conn.execute = AsyncMock()
+    mock_ctx = MagicMock()
+    mock_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_ctx.__aexit__ = AsyncMock(return_value=False)
+    mock_get_engine.return_value.begin.return_value = mock_ctx
+
+    await _mark_waiting_2fa("acc-1", f"{PROGRESS_2FA_WAIT_PREFIX} en tu app...")
+
+    sql = str(mock_conn.execute.call_args[0][0])
+    params = mock_conn.execute.call_args[0][1]
+    assert "waiting_2fa" in sql
+    assert "consecutive_errors" not in sql
+    assert params["msg"].startswith(PROGRESS_2FA_WAIT_PREFIX)
+
+
+@pytest.mark.asyncio
+@patch("sky.worker.banking_sync.get_engine")
+async def test_mark_syncing_vuelve_de_2fa_y_limpia_error(mock_get_engine: MagicMock) -> None:
+    mock_conn = AsyncMock()
+    mock_conn.execute = AsyncMock()
+    mock_ctx = MagicMock()
+    mock_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_ctx.__aexit__ = AsyncMock(return_value=False)
+    mock_get_engine.return_value.begin.return_value = mock_ctx
+
+    await _mark_syncing("acc-1")
+
+    sql = str(mock_conn.execute.call_args[0][0])
+    assert "'syncing'" in sql
+    assert "last_sync_error = NULL" in sql
 
 
 @pytest.mark.asyncio
