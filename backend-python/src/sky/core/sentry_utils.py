@@ -119,7 +119,7 @@ def init_sentry() -> None:
     sentry_sdk.init(
         dsn=settings.sentry_dsn,
         traces_sample_rate=0.1 if settings.is_production else 1.0,
-        before_send=before_send,  # type: ignore[arg-type]
+        before_send=before_send,
         environment="production" if settings.is_production else "development",
     )
     logger.info("sentry_initialized", env=settings.node_env)
