@@ -5,7 +5,7 @@
 > La sección más importante para operar honestamente. Doctrina §22: "la deuda se documenta, no se oculta".
 > Referencia de deuda formal: `backend-python/docs/REMEDIATION_P0_P3.md`.
 
-**Última actualización**: 2026-06-09
+**Última actualización**: 2026-06-12
 
 ---
 
@@ -16,33 +16,58 @@
 - **Categorización**: 3 capas funcionando. ~1.283 transacciones, 0 en `pending`, ~1.231 `done`, ~52 `failed` (fallback "other").
 - **Display ingreso/gasto**: por signo del monto — ingresos en verde, gastos en rojo.
 - **Cifrado, RLS, audit (parcial), data export, rate limit, idempotencia**: implementados.
-- **Scraper BChile**: validado funcionando **desde IP residencial** — login + 2FA + 175 movimientos + balance, signos correctos.
+- **Scraper BChile**: ✅ **validado end-to-end EN PRODUCCIÓN (2026-06-12)** — sync real desde Railway: login OK, 42 movimientos, balance correcto, `channel="chrome"`, categorización OK. El MVP para testers está desbloqueado.
 - **Cola ARQ**: corregida (ver abajo).
+
+## 🏁 Sprint ingesta BChile 2026-06-12 (cerrado)
+
+Plan completo: `backend-python/docs/SPRINT_INGESTA_BCHILE_AUTH0.md`. Causa raíz del
+bloqueador del MVP: la clave del fundador termina en `$` y `type()` lo tecleaba mal
+en Chromium bundled headless (prod); local con Chrome real funcionaba. La clave en
+DB estaba bien (cifrado sano). Qué quedó construido:
+
+- **Fase A (verificada en prod)**: `_fill_password` usa `fill()` (el RUT **se queda**
+  con `type()` por la directiva Angular `delete-zero-left`); verificación post-fill
+  lee `input.value` antes del submit y lanza `FieldFillError` (recoverable, no auth,
+  solo longitudes — jamás el valor); Chrome real en el worker
+  (`docker/worker.Dockerfile`) con bundled de fallback (warning visible);
+  `browser_channel` setting + `--force-bundled` para repro local sin tocar al banco.
+- **Fase B — ciclo de credenciales**: nuevo status `needs_reconnection`
+  (migración 013) cuando el banco rechaza la clave de verdad. Hard-stop en TODOS
+  los caminos (cron ARQ, sync-all, cron HTTP deprecated, endpoint manual → 409,
+  backstop dentro del worker). Imposible llegar al 3er fallo del banco por acción
+  automática. Frontend: "Actualizar" deshabilitado + "Reconectar" primario con
+  banco preseleccionado.
+- **Fase C — observabilidad**: taxonomía `SyncFailureKind` en contracts
+  (wrong_credentials · needs_2fa · bank_temporary · antibot · field_fill_failed)
+  con mensaje y acción por kind; `failure_kind` en el audit_log; panel de operador
+  `GET /api/internal/operator/sync-status` (x-cron-secret) — estado + último error
+  real sin scripts ad-hoc; capturas debug a Supabase Storage
+  (`scraper_debug_bucket`, bucket privado, best-effort); auto-refresh del dashboard
+  mientras la categorización async drena (sin recarga manual).
+- **Fase D**: script `scripts/cleanup_bchile_accounts.sql` (D2, correr manual);
+  docs sincronizados (D3). **D1 pendiente de acción manual**: apagar
+  `appealing-benevolence` en Railway.
 
 ## ❌ Lo que NO funciona / bloqueadores
 
-### B-1 · Scraping bloqueado desde datacenter (anti-bot) — **estado a re-verificar**
+### ✅ B-1 · Scraping bloqueado desde datacenter (anti-bot) — **obsoleto, cerrado 2026-06-12**
 
-⚠️ **2026-06-09**: BChile migró el portal de login a Auth0 (`login.portales.bancochile.cl/login`). El bloqueador histórico de Incapsula (diagnosticado contra `portalpersonas.bancochile.cl`) puede haber cambiado de dominio o de comportamiento. Re-verificar desde Railway tras confirmar que el fix B-7 funciona en prod.
+**Cierre**: con la migración del banco a Auth0, el scraper desde la IP de Railway carga, llena y **envía** el form sin challenge — el bloqueo de datacenter dejó de aplicar. Confirmado con el sync real en prod del 2026-06-12 (42 movimientos). El fallo que quedaba tras B-7 no era anti-bot: era el `$` de la clave mal tecleado por `type()` en Chromium bundled headless (ver sprint 2026-06-12 arriba).
 
-**Contexto histórico**: BChile estaba detrás de **Imperva Incapsula**. El scraper headless desde la **IP de datacenter de Railway** era detectado como bot → página-desafío sin formulario → "No se encontró el campo de RUT". Desde IP residencial (laptop) funcionaba.
+**Contexto histórico**: BChile estaba detrás de **Imperva Incapsula** en `portalpersonas.bancochile.cl`. El scraper headless desde datacenter era detectado como bot → página-desafío sin formulario → "No se encontró el campo de RUT". Desde IP residencial funcionaba. Las palancas de stealth (2026-05-25: `--disable-blink-features=AutomationControlled`, UA realista, `navigator.webdriver=undefined`, `browser_headless`, `scraper_debug_capture`) se conservan.
 
-**Palancas agregadas (2026-05-25)**:
-- `browser_headless=True/False` (setting, no redeploy) — permite correr visible para diagnóstico local.
-- Stealth básico en `browser_pool.py`: `--disable-blink-features=AutomationControlled`, User-Agent realista de Chrome/Windows, `navigator.webdriver=undefined` via init_script, intentar `channel="chrome"`.
-- `scraper_debug_capture=True` (setting) + `scraper_debug_dir` — guarda screenshot + HTML en el punto de fallo (sin PII).
+**Implicación estratégica intacta**: el scraping sigue siendo frágil ante cambios del banco (esta saga lo demuestra dos veces). **Refuerza la tesis SFA.**
 
-**Implicación**: fix real arquitectónico sigue siendo proxy residencial o SFA. **Refuerza la tesis SFA.**
-
-### ✅ B-7 · Falso positivo URL BChile post-migración Auth0 — **cerrado 2026-06-09**
+### ✅ B-7 · Falso positivo URL BChile post-migración Auth0 — **cerrado y verificado en prod 2026-06-12**
 
 **Causa raíz**: BChile migró el form de login a `login.portales.bancochile.cl/login` (Auth0 + Angular), manteniendo los IDs DOM intactos. El scraper tenía el check `if "/login" in page.url` para detectar login fallido — pero el nuevo dominio contiene literalmente `/login` en la URL → todos los syncs caían en `AuthenticationError` al completarse correctamente → mensaje "Credenciales rechazadas por el banco" para todos los usuarios y testers. No era Incapsula.
 
 **Fix aplicado**:
 - `commit 6fdae84`: check `"/login" in url` reemplazado por poll positivo de hasta 20s esperando que la URL salga de `login.portales.bancochile.cl`. Si el poll agota el timeout → `logger.warning` + `_capture_debug` + `AuthenticationError("Login falló — el portal siguió en pantalla de login post-submit")`.
-- `commit 3145a0c`: `el.fill()` revertido a `el.type(delay=45)` en `_fill_rut` y `_fill_password` — `fill()` no disparaba los eventos que la directiva Angular `delete-zero-left` del input RUT consume (keystrokes reales), y además perdía el marcado GTM del campo.
+- Historia del fill/type (importante para no repetir el error): `6fdae84` cambió **ambos** campos a `fill()` y rompió el RUT (la directiva Angular `delete-zero-left` requiere keystrokes reales) → `3145a0c` revirtió ambos a `type()` → el sprint 2026-06-12 estableció la forma correcta y la pineó con tests: **RUT = `type()` · password = `fill()`** (el campo password no tiene la directiva, y `type()` manglaba el `$` en bundled headless).
 
-**Verificación local**: login OK, 40 movimientos, balance correcto, 42.3s. B-1 (Incapsula) probablemente obsoleto con esta migración del banco — confirmar en Railway.
+**Verificación en prod (2026-06-12)**: sync real desde Railway — login OK, 42 movimientos, balance correcto, `channel="chrome"`, categorización OK.
 
 ### B-2 · Scraper BCI roto — dominio cambiado
 `portalpersonas.bci.cl` ya no resuelve (NXDOMAIN desde toda red probada; antes funcionaba). BCI cambió el dominio de su portal. Requiere rework: nuevo dominio + probablemente nuevos selectores y endpoints de API interna. BCI está en `pending`. Sprint propio pendiente.
@@ -133,9 +158,10 @@ Hallazgos del barrido de calidad. No bloquean, pero se documentan para no acumul
 
 ## Deuda de infraestructura
 
-- **`appealing-benevolence`** (Node legacy) sigue online en Railway — decomisionar.
+- **`appealing-benevolence`** (Node legacy, B-6) sigue online en Railway — **apagarlo es el D1 del sprint 2026-06-12, pendiente de acción manual en el dashboard**. Hoy no duplica datos (184/184 external_id en formato Python) pero es riesgo latente.
 - **`api-v2.skyfinanzas.com`** — custom domain leftover del canary, devuelve 502. Limpiar.
 - **Warm standby** en Fly.io recomendado (DR Railway).
+- **Bucket `scraper-debug`** (C3): crearlo privado en Supabase Storage y setear `SCRAPER_DEBUG_BUCKET` en el worker para activar capturas durables. Sin TTL nativo — purga manual.
 
 ## Inventario de deuda P0-P3 (de `REMEDIATION_P0_P3.md`)
 
@@ -152,9 +178,9 @@ Hallazgos del barrido de calidad. No bloquean, pero se documentan para no acumul
 
 ## Prioridades sugeridas (orden)
 
-1. **Verificar B-7 en Railway** — confirmar que login BChile funciona desde datacenter (fix Auth0 URL). Si pasa → re-evaluar B-1 (puede estar obsoleto o cambiado de dominio).
-2. **Prep del pitch BCI** (objetivo de negocio inmediato — ver `Documentacion_Externa_Reuniones_Bancos/`).
-3. **B-2** rework scraper BCI (sprint propio).
-4. **B-1** re-verificar anti-bot en nuevo dominio Auth0 si Railway todavía falla post-B-7.
+1. **Cierre operativo del sprint 2026-06-12**: aplicar migración 013 (antes del deploy del worker), apagar `appealing-benevolence` (D1), correr `cleanup_bchile_accounts.sql` (D2), crear bucket `scraper-debug` si se quieren capturas durables.
+2. **Onboarding de testers reales** — el sync BChile está verificado en prod; cada tester reconecta con su clave vigente.
+3. **Prep del pitch BCI** (objetivo de negocio inmediato — ver `Documentacion_Externa_Reuniones_Bancos/`).
+4. **B-2** rework scraper BCI (sprint propio).
 5. **B-5** performance (profiling primero).
-6. Decomisionar Node legacy (B-6) + limpiar `api-v2`.
+6. Limpiar `api-v2` + warm standby Fly.io.

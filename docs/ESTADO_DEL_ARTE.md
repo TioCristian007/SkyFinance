@@ -37,17 +37,18 @@ Documentación **modular**. Este índice da el panorama; cada sección profundiz
 
 **Quién**: SkyFinanzas SpA (RUT 78.395.382-K), cofundada por Cristian Vásquez y Juan José Latorre. Modelo registrado ante INAPI.
 
-**Estado técnico (mayo 2026)**:
+**Estado técnico (junio 2026)**:
 - Backend migrado de Node.js a **Python 3.12 (FastAPI + ARQ + Playwright)**. Las 13 fases de migración cerradas; cutover completo. Node archivado.
 - Producción viva: `app.skyfinanzas.com` (frontend React) + `api.skyfinanzas.com` (API Python), sobre Railway + Supabase + Anthropic.
-- ~1.283 transacciones reales procesadas. Categorización en 3 capas funcionando. 386 tests automatizados.
+- ~1.283 transacciones reales procesadas. Categorización en 3 capas funcionando. 534 tests automatizados.
+- **Sync BChile verificado end-to-end EN PRODUCCIÓN (2026-06-12)** — sprint ingesta cerrado: fill()+verificación post-fill, Chrome real en el worker, ciclo `needs_reconnection` anti-bloqueo, taxonomía de fallos + panel de operador. MVP para testers desbloqueado.
 
-**Lo que funciona**: ingesta canónica, categorización, Mr. Money, ARIA, metas/desafíos, cifrado AES-256-GCM, RLS, audit log, data export Ley 19.628.
+**Lo que funciona**: ingesta canónica (BChile en prod), categorización, Mr. Money, ARIA, metas/desafíos, cifrado AES-256-GCM, RLS, audit log, data export Ley 19.628.
 
 **Lo que NO funciona hoy** (ver [08](estado-del-arte/08_ESTADO_Y_DEUDA.md)):
-- **Scraping desde el datacenter de Railway bloqueado por anti-bot** (Incapsula en BChile). Los scrapers funcionan desde IP residencial, no desde datacenter.
-- **Scraper BCI roto**: BCI cambió el dominio de su portal (`portalpersonas.bci.cl` ya no resuelve).
-- Bug en el INSERT del audit log (`:detail::jsonb`), bug de balance tras desconectar cuenta, lentitud general.
+- **Scraper BCI roto**: BCI cambió el dominio de su portal (`portalpersonas.bci.cl` ya no resuelve). Rework pendiente (sprint propio).
+- **Node legacy `appealing-benevolence` aún online en Railway** — apagarlo es acción manual pendiente (D1).
+- Lentitud general sin profiling (B-5) · `Sky.jsx` god-component (P1-1).
 
 **Dirección estratégica**: migrar de scraping a **SFA (Open Banking chileno, CMF)** en cuanto los bancos liberen sus APIs. El scraping queda como fallback. La fragilidad del scraping (anti-bot, cambios de portal) es precisamente el argumento para el SFA.
 

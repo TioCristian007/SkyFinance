@@ -1,6 +1,8 @@
 # SPRINT — Ingesta BChile: hardening post-Auth0 + ciclo de credenciales
 
-> **Estado**: listo para ejecutar. Causa raíz del bloqueador del MVP ya diagnosticada y cerrada (2026-06-12).
+> **Estado**: ✅ **EJECUTADO (2026-06-12)**. Fase A verificada en producción (sync real:
+> 42 movimientos, channel=chrome, categorización OK). Fases B, C y D implementadas y
+> commiteadas. Quedan 4 acciones operativas manuales — ver "Cierre operativo" al final.
 > **Objetivo**: dejar el sync de BChile funcionando de punta a punta en producción para testers reales, y blindar el camino para que esta clase de fallo nunca vuelva a ser invisible.
 > **No es un fix puntual — es el upgrade del subsistema de ingesta.**
 
@@ -148,7 +150,33 @@ Este diagnóstico requirió acceso directo a la DB y descifrar credenciales. Eso
 
 ## 5. Definición de "MVP listo para testers"
 
-- [ ] Un sync real de BChile en producción entra y trae movimientos (Fase A).
-- [ ] Una clave incorrecta lleva a `needs_reconnection` con UX clara, sin riesgo de bloqueo (Fase B).
-- [ ] El error real es visible sin cavar en la DB (Fase C).
-- [ ] Node legacy apagado, docs al día (Fase D).
+- [x] Un sync real de BChile en producción entra y trae movimientos (Fase A). ✅ **Verificado en prod 2026-06-12**: 42 movs, channel=chrome, categorización OK.
+- [x] Una clave incorrecta lleva a `needs_reconnection` con UX clara, sin riesgo de bloqueo (Fase B). Código completo; requiere migración 013 aplicada.
+- [x] El error real es visible sin cavar en la DB (Fase C). Taxonomía + `failure_kind` en audit + panel operador + capturas durables + auto-refresh dashboard.
+- [ ] Node legacy apagado, docs al día (Fase D). Docs ✅ · **apagar `appealing-benevolence` pendiente (manual)**.
+
+---
+
+## 6. Estado de ejecución B/C/D (2026-06-12)
+
+**Fase B** (commits `b482bea` backend + `e4ace0b` frontend):
+- B1 ✅ migración 013 (`needs_reconnection` en el CHECK) + detección explícita del mensaje real del banco ("no son correctos") en `LOGIN_ERROR_KEYWORDS` + `_mark_needs_reconnection` en `BankAuthError`.
+- B2 ✅ hard-stop en TODOS los caminos: backstop dentro de `sync_bank_account` (cubre jobs ya encolados), exclusión en cron ARQ + sync-all + cron HTTP deprecated, endpoint manual → **409**.
+- B3 ✅ tarjeta roja + banner explicativo, "Actualizar" deshabilitado, "Reconectar" primario con banco preseleccionado (`ConnectForm initialBank`). `api.js` ahora propaga `{detail}` de FastAPI.
+
+**Fase C** (commits `55df0f5` backend + `be4cc29` frontend):
+- C1 ✅ `SyncFailureKind` + `classify_sync_failure`/`classify_failure_chain` + `FAILURE_USER_MESSAGES`/`FAILURE_ACTIONS` en `contracts.py`. `_user_message_for_failure` delega en la taxonomía.
+- C2 ✅ `failure_kind` + `detail` en el audit de sync.error · `GET /api/internal/operator/sync-status` (x-cron-secret): estado + último error + último evento bank_sync por cuenta, sin PII.
+- C3 ✅ `scraper_debug_bucket`: capturas a Supabase Storage (best-effort, PII-aware — solo se captura antes de llenar el form).
+- C4 ✅ (agregado en ejecución) auto-refresh del dashboard: mientras haya tx `pending`, `Sky.jsx` refresca tx+summary cada 5s hasta que la categorización async drene. `onSyncComplete` ahora también trae transacciones.
+
+**Fase D**:
+- D2 ✅ script `scripts/cleanup_bchile_accounts.sql` (inspección + mutaciones comentadas, correr manual en Supabase).
+- D3 ✅ docs sincronizados en orden: `docs/estado-del-arte/08` → `docs/ESTADO_DEL_ARTE.md` → `CLAUDE.md`. B-1 y B-7 cerrados.
+- D1 ⚠️ **pendiente manual**: apagar `appealing-benevolence` en el dashboard Railway.
+
+### Cierre operativo (acciones manuales del fundador)
+1. **Aplicar migración 013 en Supabase ANTES de deployar el worker** (staging → prod). Si el worker se deploya primero, el UPDATE a `needs_reconnection` viola el CHECK y el flujo cae al `error` genérico (con retry — exactamente lo que B2 evita).
+2. **Apagar `appealing-benevolence`** en Railway (D1, cierra B-6).
+3. **Correr `scripts/cleanup_bchile_accounts.sql`** (D2): inspección primero; mutaciones comentadas.
+4. (Opcional, C3) Crear bucket privado `scraper-debug` en Supabase Storage y setear `SCRAPER_DEBUG_BUCKET` en el worker.
