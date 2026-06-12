@@ -1,6 +1,6 @@
 # SPRINT — Categorización que aprende (feedback loop + comercios canónicos)
 
-> **Estado**: listo para ejecutar. Diagnóstico de estado actual aterrizado en prod (2026-06-12).
+> **Estado**: Fase 1 CONSTRUIDA (2026-06-12) — pendiente aplicar migración 014 + deploy + verificación en prod (ver §5). Fase 2 gated a esa verificación; Fase 3 solo diseño.
 > **Objetivo**: que cada categorización/renombre de un usuario mejore el sistema — para esa persona y, con respaldo de varios, para todos. Es el "§4 votos crowdsourced" que `categorizer.py:14` dejó diferido desde Fase 6.
 > **Doble valor**: producto (el diferencial "aprende de la comunidad") + dato más limpio para ARIA (tesis B2B). Avanza y solidifica a la vez.
 
@@ -82,4 +82,78 @@ CREATE TABLE public.merchant_category_votes (
 - Migración SQL: `audit_rls_policies.py` verde + aplicar en orden (migración antes que código). Avisar el orden de deploy explícitamente.
 - Commits en español + `Co-Authored-By`. El usuario pushea.
 - Frontend: ojo con `Sky.jsx` (god-component P1-1) — si el UI de renombre lo infla mucho, evaluar una rebanada de extracción.
-```
+
+---
+
+## 5. Estado de ejecución (2026-06-12)
+
+### Fase 1 — ✅ CONSTRUIDA (pendiente: aplicar migración + deploy + verificación en prod)
+
+Commits: `fc3de31` (migración 014 + `verify_merchant_priority_guard.py` + pin del
+archivo) · `74e9650` (dominio `merchant_feedback` + umbral config) · `67c0a22`
+(resolución 5 niveles + job con `user_id`) · `179bf18` (PATCH enseña + canon de
+categorías) · `1085d76` (picker travel→insurance). Tests: 555 → 598.
+
+**Decisiones tomadas sobre el diseño sugerido (§3):**
+- `merchant_category_votes` ganó la columna `crowdsource_eligible boolean NOT NULL
+  DEFAULT false`, **decidida al votar** — es la única instancia con la
+  `raw_description` a mano; al promover ya solo existe la key normalizada. Índice
+  parcial `(merchant_key, category) WHERE crowdsource_eligible` para el quórum.
+- **Resolución**: votos propios → caché `source='user'` → reglas → caché
+  `'rule'/'ai'` → IA. Desviación deliberada del texto literal del §1.6 ("votos →
+  caché → reglas/IA"): solo el tier `'user'` del caché sube sobre las reglas.
+  Subir TODO el caché habría dejado que las 164 semillas y las filas IA viejas
+  sombreen por prefijo las reglas sign-dependent (transfer/income) — regresión
+  ajena al sprint. El objetivo del doc (el consenso corrige una regla equivocada
+  PARA TODOS) se cumple igual: test `test_consenso_crowdsourced_corrige_la_regla_para_todos`.
+- La promoción converge a la **mayoría** (`COUNT(DISTINCT user_id)` por categoría
+  entre votos elegibles), no al último voto emitido. `user` sí puede pisar a
+  `user` (consenso nuevo); no hay retracción automática si la mayoría se diluye.
+- El CHECK era-Node de `source` se dropea **por inspección** de `pg_constraint`
+  (el nombre autogenerado puede variar entre entornos), no por nombre fijo.
+- Bug latente cerrado de pasada: `_VALID_CATEGORIES` aceptaba `'travel'` (no
+  existe en `transactions_category_check` → 500 al elegir "Viajes" en el picker)
+  y rechazaba `'insurance'` (DB-válida). Canon único `set(CATEGORIES)` + picker.
+
+**Checklist de deploy (en este orden, como la 013):**
+1. Aplicar `migrations/014_merchant_category_votes.sql` en **staging**.
+2. `python scripts/audit_rls_policies.py` (exit 0) y
+   `python scripts/verify_merchant_priority_guard.py` (exit 0 — ejercita la
+   guarda de verdad, con ROLLBACK).
+3. Aplicar la 014 en **prod** + repetir ambas verificaciones.
+4. Deploy Railway api + worker (el código viejo es compatible con el esquema
+   nuevo; el nuevo NO corre sin la tabla).
+5. Smoke en prod: recategorizar una tx → fila en `merchant_category_votes` con
+   `crowdsource_eligible=true`; recategorizar una "Transferencia a: …" → fila
+   con `crowdsource_eligible=false` y NADA nuevo en `merchant_categories`.
+
+### Fase 2 — NO arrancada
+
+Gated a la verificación en prod de la Fase 1 (decisión del kickoff). El esquema
+de `merchant_aliases` es análogo al de votos (misma elegibilidad, mismo umbral).
+
+### Fase 3 — Propuesta de diseño (NO construir en este sprint)
+
+Identidad canónica de comercio por variantes (`oxxo`/`OXXO`/`60092 providencia`
+→ "Copec"), que conduce categoría Y display:
+
+- **Esquema**: `merchant_entities` (id, canonical_name, category_hint) +
+  `merchant_entity_aliases` (entity_id, merchant_key UNIQUE). El alias mapea
+  keys normalizadas a UNA entidad; categoría/display cuelgan de la entidad. Las
+  tablas de votos/aliases per-user de Fases 1-2 quedan intactas debajo (el
+  override privado sigue ganando).
+- **Resolución en cascada, barato primero**: (1) lookup exacto de la key en
+  aliases; (2) prefix variants (reuso de `_key_variants`); (3) fuzzy SOLO
+  offline — job ARQ nocturno que batea keys nuevas contra entidades con
+  `pg_trgm` (similarity ≥ 0.85 + cap de longitud). **Nunca fuzzy en el hot path
+  del sync.**
+- **Curaduría con el mismo umbral**: el fuzzy PROPONE (tabla
+  `merchant_alias_candidates`); la promoción a alias global exige el quórum de
+  N usuarios (un renombre de Fase 2 cuenta como voto de alias) o confirmación
+  del operador vía panel. Nada se colapsa automáticamente sin respaldo humano.
+- **Privacidad**: misma frontera de Fase 1 — keys con prefijo de transferencia
+  jamás entran a entidades/aliases; la elegibilidad ya viene persistida en los
+  votos.
+- **Por qué es sprint propio**: riesgo de falsos merges (`jumbo` vs `jumbo
+  express`), extensión `pg_trgm` en Supabase, backfill de ~200 keys existentes,
+  UI de curaduría. No es una tarde.

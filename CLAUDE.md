@@ -102,7 +102,7 @@ sky_OFFICIAL/
 │   │   ├── api/                 ← FastAPI: main + jwt_auth + routers/* + schemas/* (implementados)
 │   │   ├── worker/              ← ARQ: main + jobs/* + banking_sync (implementados)
 │   │   └── domain/              ← Mr. Money, ARIA, finance, categorizer (implementados)
-│   ├── tests/                   ← 555 tests (unit verde + integration + parity)
+│   ├── tests/                   ← 598 tests (unit verde + integration + parity)
 │   ├── scripts/                 ← smoke_router, test_*_scraper, verify_encryption_compat, rekey_*, audit_rls_policies
 │   ├── migrations/              ← SQL versionadas
 │   ├── docs/                    ← referencia operativa durable + archive/ (histórico de las 13 fases)
@@ -173,14 +173,18 @@ Config: `mr_money_max_tokens=4096`, `temperature=0.7`, prompt caching 5m.
 
 ---
 
-## 🧮 Categorización 3 capas
+## 🧮 Categorización — 5 niveles (aprende del usuario)
 
-Orden estricto, cada capa solo invoca la siguiente si falla:
-1. **Reglas deterministas** — ~25 regex. Sin tokens.
-2. **Caché de comercios** — tabla `merchant_categories`, lookup por prefijo progresivo (`"jumbo las condes" → "jumbo las" → "jumbo"`). Compartida entre usuarios.
-3. **Claude API** (`claude-haiku-4-5`) — solo si las dos capas anteriores fallan. Resultado se guarda en caché.
+Orden estricto, cada nivel solo se consulta si el anterior no resolvió (sprint 2026-06-12 tercera tanda; antes eran solo los niveles 2-4):
+0. **Votos propios** (`merchant_category_votes`, prefix matching per-user) — el usuario recategorizó ese comercio: override privado inmediato. Lo escribe `merchant_feedback.record_user_categorization` desde el PATCH de transacciones.
+1. **Caché global `source='user'`** — consenso crowdsourced (≥ `merchant_vote_promotion_threshold` usuarios distintos, default 3; converge a la mayoría). Corrige una regla equivocada para todos. La guarda de `upsert_merchant_category` (migración 014) impide que la IA pise estas filas.
+2. **Reglas deterministas** — ~25 regex. Sin tokens.
+3. **Caché de comercios** `source 'rule'/'ai'` — lookup por prefijo progresivo (`"jumbo las condes" → "jumbo las" → "jumbo"`). Compartida entre usuarios. Va BAJO las reglas — solo el tier `'user'` las supera; no cambiar sin leer el sprint doc.
+4. **Claude API** (`claude-haiku-4-5`) — solo si todo lo anterior falla. Resultado se guarda en caché.
 
-Las tx se insertan con `categorization_status='pending'` y descripción `'Procesando...'`; el job ARQ `categorize_pending_job` las procesa async. **Display ingreso/gasto en frontend = por signo del monto (`tx.amount > 0`), NO por categoría.**
+**Frontera de privacidad (doctrina §5/§21)**: transferencias y contrapartes personales (`TRANSFER_PREFIX_RE` o categoría `transfer`) JAMÁS entran al caché global ni se promueven — el voto queda `crowdsource_eligible=false` (override privado solamente) y esas keys no van a logs.
+
+Las tx se insertan con `categorization_status='pending'` y descripción `'Procesando...'`; el job ARQ `categorize_pending_job` las procesa async (propaga `user_id` para el nivel 0). **Display ingreso/gasto en frontend = por signo del monto (`tx.amount > 0`), NO por categoría.**
 
 ---
 
@@ -212,6 +216,11 @@ Fuente: **`docs/estado-del-arte/08_ESTADO_Y_DEUDA.md`** + `backend-python/docs/R
 ### Ciclo de credenciales (sprint 2026-06-12 — Fase B)
 Clave rechazada de verdad por el banco → status **`needs_reconnection`** (migración 013): hard-stop en TODOS los caminos (cron ARQ, sync-all, cron HTTP, endpoint manual → 409, backstop en el worker) hasta que el usuario reconecte — el upsert de reconexión resetea status/errores (pineado por test). Protege contra el bloqueo del banco al 3er fallo. Frontend: "Actualizar" deshabilitado + "Reconectar" primario. Taxonomía de fallos `SyncFailureKind` en `contracts.py` (mensajes/acciones en un solo lugar, `failure_kind` en audit). Panel operador: `GET /api/internal/operator/sync-status` (x-cron-secret) con `by_status`.
 
+### Categorización que aprende — Fase 1 (sprint 2026-06-12, tercera tanda)
+- **⚠️ Migración 014 pendiente de aplicar** (`merchant_category_votes` + CHECK source acepta `'user'` + guarda de prioridad en `upsert_merchant_category`). Orden: 014 en staging → `audit_rls_policies.py` + `verify_merchant_priority_guard.py` (ambos exit 0) → 014 en prod → deploy Railway api+worker. El código viejo es compatible con el esquema nuevo; el nuevo NO corre sin la tabla.
+- Invariantes pineados por tests: la IA jamás pisa un voto `user` · transferencias/contrapartes personales jamás se promueven al global · promoción solo con quórum de usuarios distintos · un voto no se filtra a otro usuario.
+- Fase 2 (renombre/alias) gated a verificación en prod de la Fase 1. Fase 3 (identidad canónica por variantes) solo diseñada — sprint propio. Detalle: `backend-python/docs/SPRINT_CATEGORIZACION_APRENDE.md`.
+
 ### 2FA y onboarding de testers (sprint 2026-06-12, segunda tanda)
 - **`_post_submit_flow`** (`bchile_scraper.py`): resolución post-submit en el dominio Auth0. La ambigüedad **jamás** lanza `AuthenticationError` (mandaría la cuenta a `needs_reconnection` con la clave buena). Clave mala = SOLO con el mensaje del banco en pantalla (keyword "no son correctos", pineada por test). Pantalla desconocida sin form de login → se asume 2FA (espera + captura `pii_safe` para refinar keywords); form pegado → `RecoverableIngestionError` (ANTIBOT).
 - Keywords 2FA en dos listas: `TWO_FA_KEYWORDS_CLASSIC` (post-login, portal clásico — NO agregar frases Auth0 acá: el dashboard matchearía marketing) y `TWO_FA_KEYWORDS_AUTH0` (solo en el dominio de login).
@@ -219,7 +228,7 @@ Clave rechazada de verdad por el banco → status **`needs_reconnection`** (migr
 - Capturas debug `pii_safe` (post-submit): solo HTML scrubeado, sin screenshot (doctrina §20).
 
 ### Prioridades sugeridas
-1. **Cierre operativo restante**: correr `scripts/cleanup_bchile_accounts.sql` (D2) si falta · crear bucket `scraper-debug` + `SCRAPER_DEBUG_BUCKET` en el worker (recomendado: captura el DOM del 2FA real de los testers). · 2. **Onboarding testers** (sync verificado en prod + 2FA endurecido). · 3. **Prep pitch BCI**. · 4. **B-2** rework BCI scraper. · 5. **B-5** performance (medir antes de optimizar).
+0. **Deploy Fase 1 categorización que aprende** (migración 014 + verificación + Railway — ver bloque arriba). · 1. **Cierre operativo restante**: correr `scripts/cleanup_bchile_accounts.sql` (D2) si falta · crear bucket `scraper-debug` + `SCRAPER_DEBUG_BUCKET` en el worker (recomendado: captura el DOM del 2FA real de los testers). · 2. **Onboarding testers** (sync verificado en prod + 2FA endurecido). · 3. **Prep pitch BCI**. · 4. **B-2** rework BCI scraper. · 5. **B-5** performance (medir antes de optimizar).
 
 ---
 
@@ -285,7 +294,7 @@ No hay "cierre de fase" (las 13 fases ya cerraron; sus planes viven en `backend-
 
 1. `ruff check src/sky/ tests/`
 2. `mypy src/sky/`
-3. `pytest tests/ -v` (555 tests; cobertura en el módulo tocado)
+3. `pytest tests/ -v` (598 tests; cobertura en el módulo tocado)
 4. Smoke contra Redis local si tocas ingestión/routing.
 5. `uvicorn` arranca + `/api/health` responde 200 si tocas la API.
 6. Si hay migración SQL: `audit_rls_policies.py` verde + aplicar en staging antes que prod.
@@ -363,6 +372,8 @@ No confundir con las 13 fases técnicas (ya cerradas).
 ---
 
 ## 📅 Última actualización
+
+`2026-06-12 (tercera tanda)` · **Sprint categorización que aprende — Fase 1 construida (pendiente: aplicar migración 014 + deploy).** Recategorizar ahora enseña: voto per-user inmediato (nivel 0, prefix matching) + promoción al caché global con quórum de N usuarios distintos (default 3, converge a la mayoría) y guarda de prioridad user>ai en `upsert_merchant_category` — antes el upsert sobrescribía ciego y el PATCH no enseñaba nada. Frontera de privacidad: transferencias/contrapartes personales jamás se crowdsourcean (`crowdsource_eligible=false` decidido al votar con la raw_description a mano; defensa en profundidad sobre la key; fuera de logs). Resolución 5 niveles: votos → caché `'user'` → reglas → caché `'rule'/'ai'` → Haiku (desviación deliberada del doc del sprint: solo el tier `'user'` sube sobre las reglas, para no dejar que semillas/filas IA viejas sombreen las reglas sign-dependent por prefijo). El job propaga `user_id`. Bug latente cerrado: `'travel'` no existe en el CHECK de transactions (picker "Viajes" → 500) — backend y picker alineados al canon de 16 (`insurance` entra). Migración 014 con drop del CHECK era-Node por inspección de `pg_constraint` + `verify_merchant_priority_guard.py` (verificación funcional con ROLLBACK, correr en staging y prod). Fase 2 gated a verificación en prod; Fase 3 solo diseño (sprint doc). 598 tests.
 
 `2026-06-12 (segunda tanda)` · **Sprint endurecer onboarding de testers cerrado.** Riesgo mayor neutralizado: un tester con BChile Pass disparaba el 2FA Auth0 no detectado → 20s de poll → `AuthenticationError` → `needs_reconnection` con la clave buena ("tu clave cambió" falso). Nuevo `_post_submit_flow`: la ambigüedad jamás se castiga como clave mala; 2FA positivo con keywords Auth0 (frases compuestas) + asunción de 2FA en pantallas desconocidas sin form + capturas `pii_safe` para refinar. `waiting_2fa` ahora se escribe de verdad (wiring `on_progress` que faltaba; el frontend ya sabía mostrarlo); cron ARQ recupera `waiting_2fa` stale. Cobertura `needs_reconnection` completada (cron HTTP, reset por reconexión, keyword pineada). UX: "Primera sincronización…" visible, panel operador con `by_status`. Debts: `_sanitize_error` eliminado, `check_gates.ps1` ASCII (la "Ó" rompía el parser de PS 5.1). B-6 cerrado (`appealing-benevolence` apagado). Sin migración SQL. 555 tests.
 

@@ -13,7 +13,7 @@
 
 - **Producción viva**: `app.skyfinanzas.com` + `api.skyfinanzas.com` responden 200.
 - **Migración Python completa**: 13 fases cerradas, cutover hecho, Node archivado.
-- **Categorización**: 3 capas funcionando. ~1.283 transacciones, 0 en `pending`, ~1.231 `done`, ~52 `failed` (fallback "other").
+- **Categorización**: 3 capas funcionando en prod (~1.283 transacciones, 0 en `pending`, ~1.231 `done`, ~52 `failed` fallback "other"). El feedback loop de 5 niveles (sprint 2026-06-12 tercera tanda, ver abajo) está construido y commiteado, **pendiente de aplicar migración 014 + deploy**.
 - **Display ingreso/gasto**: por signo del monto — ingresos en verde, gastos en rojo.
 - **Cifrado, RLS, audit (parcial), data export, rate limit, idempotencia**: implementados.
 - **Scraper BChile**: ✅ **validado end-to-end EN PRODUCCIÓN (2026-06-12)** — sync real desde Railway: login OK, 42 movimientos, balance correcto, `channel="chrome"`, categorización OK. El MVP para testers está desbloqueado.
@@ -97,6 +97,43 @@ reales, no solo la cuenta del fundador. **Sin migración SQL** (el status
   ANSI: el segundo byte UTF-8 de "Ó" es 0x93 = comilla tipográfica → rompía el
   parser).
 - Tests: 534 → 555 (descontando los 5 de `_sanitize_error` eliminados).
+
+## 🧠 Sprint categorización que aprende — Fase 1 construida (2026-06-12, tercera tanda)
+
+Plan: `backend-python/docs/SPRINT_CATEGORIZACION_APRENDE.md`. Es el "§4 votos
+crowdsourced" diferido desde Fase 6: **recategorizar ahora enseña** — antes el
+PATCH solo actualizaba la tx y `upsert_merchant_category` sobrescribía ciego
+(una pasada de IA podía pisar la corrección de un usuario).
+
+- **Migración 014** (`merchant_category_votes` + el CHECK era-Node de `source`
+  acepta `'user'` + `upsert_merchant_category` con guarda de prioridad).
+  ⚠️ **Pendiente de aplicar — va ANTES del deploy de api+worker** (el código
+  viejo es compatible con el esquema nuevo; el nuevo no corre sin la tabla).
+  Tras aplicar: `audit_rls_policies.py` + `verify_merchant_priority_guard.py`
+  (script nuevo: ejercita la guarda contra DB real con ROLLBACK, sin residuos).
+- **Guarda de prioridad user > ai**: una fila `source='user'` solo la actualiza
+  otra escritura `'user'`. La IA jamás pisa un voto humano.
+- **Frontera de privacidad**: elegibilidad decidida al votar (prefijo de
+  transferencia o categoría `transfer` → `crowdsource_eligible=false`): el voto
+  vale como override privado pero JAMÁS se promueve al global. Defensa en
+  profundidad re-chequea la key antes del upsert. Keys inelegibles fuera de logs.
+- **Anti-envenenamiento**: promoción al caché global solo con ≥ N usuarios
+  distintos de acuerdo (`merchant_vote_promotion_threshold`, default 3, env);
+  converge a la mayoría real (COUNT DISTINCT por categoría), no al último voto.
+- **Resolución 5 niveles**: votos propios (prefix matching, per-user) → caché
+  `source='user'` (el consenso corrige una regla equivocada PARA TODOS) → reglas
+  regex → caché `'rule'`/`'ai'` → Haiku. Desviación deliberada del doc del
+  sprint: solo el tier `'user'` sube sobre las reglas, para que semillas/filas
+  IA viejas no sombreen por prefijo las reglas sign-dependent (transfer/income).
+  `categorize_pending_job` ahora propaga `user_id` (el SELECT no lo traía).
+- **Bug latente cerrado**: el PATCH aceptaba `'travel'`, que NO existe en el
+  CHECK de `transactions` (elegir "Viajes" en el picker → 500 en prod), y
+  rechazaba `'insurance'` (DB-válida) con 422. Backend (`set(CATEGORIES)`) y
+  picker de `Sky.jsx` alineados al canon de 16.
+- **Fase 2** (renombre/alias de comercio) NO arrancada — gated a verificación en
+  prod de la Fase 1. **Fase 3** (identidad canónica por variantes) solo
+  diseñada en el sprint doc — candidata a sprint propio.
+- Tests: 555 → 598.
 
 ## ❌ Lo que NO funciona / bloqueadores
 
@@ -227,6 +264,7 @@ Hallazgos del barrido de calidad. No bloquean, pero se documentan para no acumul
 
 ## Prioridades sugeridas (orden)
 
+0. **Deploy Fase 1 categorización que aprende**: aplicar migración 014 en staging → `audit_rls_policies.py` + `verify_merchant_priority_guard.py` → prod → deploy Railway api+worker → smoke (recategorizar una tx → voto en `merchant_category_votes`; recategorizar una "Transferencia a:…" → `crowdsource_eligible=false` y nada en el global).
 1. **Cierre operativo restante**: correr `cleanup_bchile_accounts.sql` (D2) si no se corrió; crear bucket `scraper-debug` + `SCRAPER_DEBUG_BUCKET` en el worker (recomendado para el onboarding — captura el DOM del 2FA real). Verificar migración 013 aplicada antes del deploy del worker si hubiera duda.
 2. **Onboarding de testers reales** — sync BChile verificado en prod + 2FA endurecido (sprint testers). Cada tester conecta con su clave vigente; si tiene BChile Pass, la espera de aprobación ahora es visible (waiting_2fa).
 3. **Prep del pitch BCI** (objetivo de negocio inmediato — ver `Documentacion_Externa_Reuniones_Bancos/`).
