@@ -46,8 +46,57 @@ DB estaba bien (cifrado sano). Qué quedó construido:
   (`scraper_debug_bucket`, bucket privado, best-effort); auto-refresh del dashboard
   mientras la categorización async drena (sin recarga manual).
 - **Fase D**: script `scripts/cleanup_bchile_accounts.sql` (D2, correr manual);
-  docs sincronizados (D3). **D1 pendiente de acción manual**: apagar
-  `appealing-benevolence` en Railway.
+  docs sincronizados (D3). D1 ✅ **`appealing-benevolence` apagado en Railway
+  (confirmado 2026-06-12)** — cierra B-6.
+
+## 🛡️ Sprint endurecer onboarding de testers (2026-06-12, segunda tanda — cerrado)
+
+Continuación inmediata del sprint de ingesta: blinda la experiencia para testers
+reales, no solo la cuenta del fundador. **Sin migración SQL** (el status
+`waiting_2fa` ya estaba permitido por el CHECK de las migraciones 006/013).
+
+- **2FA sobre Auth0** (el riesgo mayor: testers con Banco de Chile Pass). El
+  challenge "aprueba en tu app" del form Auth0 no matcheaba los
+  `TWO_FA_KEYWORDS` del portal viejo → el poll de URL expiraba a los 20s →
+  `AuthenticationError` → `needs_reconnection` (hard-stop B2) con "tu clave
+  cambió" **falso**. Nuevo `_post_submit_flow` en `bchile_scraper.py`: éxito =
+  la URL sale del dominio Auth0; error del banco (keywords, en cualquier tick)
+  = `AuthenticationError`; 2FA positivo (keywords nuevas, frases compuestas) =
+  espera con timeout completo + progreso visible; ambiguo tras 25s → form
+  visible = `RecoverableIngestionError` (ANTIBOT), form ausente = se asume 2FA
+  desconocido (beneficio de la duda + captura debug para refinar keywords).
+  **La ambigüedad jamás se castiga como clave mala.** Keywords divididas
+  CLASSIC (camino post-login verificado en prod, intacto) / AUTH0 (solo en el
+  dominio de login).
+- **Capturas PII-safe**: `_capture_debug(pii_safe=True)` para estados
+  post-submit (error de login, pantallas 2FA, form pegado) — solo HTML
+  scrubeado (`_scrub_pii`: values de inputs, RUTs, corridas de dígitos), sin
+  screenshot (doctrina §20). Es el material para refinar la detección cuando
+  un tester real dispare el challenge.
+- **`waiting_2fa` visible (el wiring que faltaba)**: el status existía y el
+  frontend lo sabía renderear, pero `sync_bank_account` llamaba al router SIN
+  `on_progress` — nunca se escribía. Ahora el prefijo
+  `PROGRESS_2FA_WAIT_PREFIX` (constante en contracts, convención
+  fuente↔worker) marca `waiting_2fa` y `PROGRESS_LOGIN_OK` devuelve a
+  `syncing`; los UPDATE corren como tasks drenadas antes de cualquier
+  escritura final de estado. El cron ARQ recupera `waiting_2fa` stale
+  (>30 min) junto con `syncing`.
+- **Cobertura `needs_reconnection` completada**: cron HTTP deprecated (sin
+  test alguno → ahora pinea el guard del SELECT), reconexión (upsert resetea
+  `status/consecutive_errors/last_sync_error` — si se pierde, la cuenta queda
+  en hard-stop CON la clave nueva), keyword "no son correctos" pineada,
+  credenciales jamás en texto plano en params.
+- **UX multi-tester**: tarjeta distingue "Primera sincronización — puede
+  tardar unos minutos…" (syncCount=0) de "Sincronizando con el banco…";
+  "Actualizar" se deshabilita ante syncs de cualquier origen; `handleSync`
+  muestra el `{detail}` de FastAPI tal cual (regex AUTH_FAILED/2FA_TIMEOUT de
+  la era Node eliminados). Panel operador con `by_status` (triage de un
+  vistazo, sigue sin PII).
+- **Debts cerrados**: `_sanitize_error` (código muerto post-taxonomía C1)
+  eliminado con sus tests; `check_gates.ps1` 100% ASCII (PS 5.1 sin BOM lee
+  ANSI: el segundo byte UTF-8 de "Ó" es 0x93 = comilla tipográfica → rompía el
+  parser).
+- Tests: 534 → 555 (descontando los 5 de `_sanitize_error` eliminados).
 
 ## ❌ Lo que NO funciona / bloqueadores
 
@@ -158,10 +207,10 @@ Hallazgos del barrido de calidad. No bloquean, pero se documentan para no acumul
 
 ## Deuda de infraestructura
 
-- **`appealing-benevolence`** (Node legacy, B-6) sigue online en Railway — **apagarlo es el D1 del sprint 2026-06-12, pendiente de acción manual en el dashboard**. Hoy no duplica datos (184/184 external_id en formato Python) pero es riesgo latente.
+- ✅ **`appealing-benevolence`** (Node legacy, B-6) — **apagado en Railway, confirmado 2026-06-12**. Cierra el último riesgo de double-write.
 - **`api-v2.skyfinanzas.com`** — custom domain leftover del canary, devuelve 502. Limpiar.
 - **Warm standby** en Fly.io recomendado (DR Railway).
-- **Bucket `scraper-debug`** (C3): crearlo privado en Supabase Storage y setear `SCRAPER_DEBUG_BUCKET` en el worker para activar capturas durables. Sin TTL nativo — purga manual.
+- **Bucket `scraper-debug`** (C3): crearlo privado en Supabase Storage y setear `SCRAPER_DEBUG_BUCKET` en el worker para activar capturas durables. Sin TTL nativo — purga manual. **Sube de valor con el sprint testers**: las capturas pii_safe del 2FA son el material para refinar `TWO_FA_KEYWORDS_AUTH0` cuando un tester real dispare el challenge.
 
 ## Inventario de deuda P0-P3 (de `REMEDIATION_P0_P3.md`)
 
@@ -178,8 +227,8 @@ Hallazgos del barrido de calidad. No bloquean, pero se documentan para no acumul
 
 ## Prioridades sugeridas (orden)
 
-1. **Cierre operativo del sprint 2026-06-12**: aplicar migración 013 (antes del deploy del worker), apagar `appealing-benevolence` (D1), correr `cleanup_bchile_accounts.sql` (D2), crear bucket `scraper-debug` si se quieren capturas durables.
-2. **Onboarding de testers reales** — el sync BChile está verificado en prod; cada tester reconecta con su clave vigente.
+1. **Cierre operativo restante**: correr `cleanup_bchile_accounts.sql` (D2) si no se corrió; crear bucket `scraper-debug` + `SCRAPER_DEBUG_BUCKET` en el worker (recomendado para el onboarding — captura el DOM del 2FA real). Verificar migración 013 aplicada antes del deploy del worker si hubiera duda.
+2. **Onboarding de testers reales** — sync BChile verificado en prod + 2FA endurecido (sprint testers). Cada tester conecta con su clave vigente; si tiene BChile Pass, la espera de aprobación ahora es visible (waiting_2fa).
 3. **Prep del pitch BCI** (objetivo de negocio inmediato — ver `Documentacion_Externa_Reuniones_Bancos/`).
 4. **B-2** rework scraper BCI (sprint propio).
 5. **B-5** performance (profiling primero).

@@ -153,7 +153,7 @@ Este diagnóstico requirió acceso directo a la DB y descifrar credenciales. Eso
 - [x] Un sync real de BChile en producción entra y trae movimientos (Fase A). ✅ **Verificado en prod 2026-06-12**: 42 movs, channel=chrome, categorización OK.
 - [x] Una clave incorrecta lleva a `needs_reconnection` con UX clara, sin riesgo de bloqueo (Fase B). Código completo; requiere migración 013 aplicada.
 - [x] El error real es visible sin cavar en la DB (Fase C). Taxonomía + `failure_kind` en audit + panel operador + capturas durables + auto-refresh dashboard.
-- [ ] Node legacy apagado, docs al día (Fase D). Docs ✅ · **apagar `appealing-benevolence` pendiente (manual)**.
+- [x] Node legacy apagado, docs al día (Fase D). Docs ✅ · `appealing-benevolence` **apagado (confirmado 2026-06-12)** — B-6 cerrado.
 
 ---
 
@@ -173,7 +173,7 @@ Este diagnóstico requirió acceso directo a la DB y descifrar credenciales. Eso
 **Fase D**:
 - D2 ✅ script `scripts/cleanup_bchile_accounts.sql` (inspección + mutaciones comentadas, correr manual en Supabase).
 - D3 ✅ docs sincronizados en orden: `docs/estado-del-arte/08` → `docs/ESTADO_DEL_ARTE.md` → `CLAUDE.md`. B-1 y B-7 cerrados.
-- D1 ⚠️ **pendiente manual**: apagar `appealing-benevolence` en el dashboard Railway.
+- D1 ✅ `appealing-benevolence` apagado en Railway (confirmado 2026-06-12). Cierra B-6.
 
 ### Cierre operativo (acciones manuales del fundador)
 1. **Aplicar migración 013 en Supabase ANTES de deployar el worker** (staging → prod). Si el worker se deploya primero, el UPDATE a `needs_reconnection` viola el CHECK y el flujo cae al `error` genérico (con retry — exactamente lo que B2 evita).

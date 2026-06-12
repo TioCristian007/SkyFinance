@@ -102,7 +102,7 @@ sky_OFFICIAL/
 │   │   ├── api/                 ← FastAPI: main + jwt_auth + routers/* + schemas/* (implementados)
 │   │   ├── worker/              ← ARQ: main + jobs/* + banking_sync (implementados)
 │   │   └── domain/              ← Mr. Money, ARIA, finance, categorizer (implementados)
-│   ├── tests/                   ← 534 tests (unit verde + integration + parity)
+│   ├── tests/                   ← 555 tests (unit verde + integration + parity)
 │   ├── scripts/                 ← smoke_router, test_*_scraper, verify_encryption_compat, rekey_*, audit_rls_policies
 │   ├── migrations/              ← SQL versionadas
 │   ├── docs/                    ← referencia operativa durable + archive/ (histórico de las 13 fases)
@@ -202,7 +202,7 @@ Fuente: **`docs/estado-del-arte/08_ESTADO_Y_DEUDA.md`** + `backend-python/docs/R
 | ✅ **B-3** | ~~Audit log roto en runtime~~ — **cerrado 2026-05-25** | `:detail::jsonb` rompía asyncpg con named params → 0 filas escritas. Corregido: `CAST(:detail AS jsonb)`. Test de regresión en `test_audit.py`. Pendiente: verificar runtime con Postgres staging (10 min). + vocabulario de event_type/outcome en `audit.py` reconciliado con la DB (cerrado 2026-05-27). |
 | ✅ **B-4** | ~~Balance post-disconnect~~ — **cerrado 2026-05-27** | cerrado 2026-05-27: summary filtra deleted_at + balance nunca cae a net_flow; KPI muestra '—' sin banco. |
 | **B-5** | Lentitud general | Sin profiling. **Medir antes de optimizar.** |
-| **B-6** | Backend Node legacy `appealing-benevolence` (Railway) sigue online | Hoy NO duplica datos (verificado 2026-06-12: 184/184 external_id en formato Python), pero es riesgo latente — el formato Node (`bchile_<6-base36>`) esquivaría la unique index. Repo GitHub desconectado 2026-05-28. **Pendiente (D1 sprint 2026-06-12): apagar el servicio en el dashboard Railway.** |
+| ✅ **B-6** | ~~Backend Node legacy `appealing-benevolence` online~~ — **cerrado 2026-06-12** | Servicio apagado en Railway (D1). No alcanzó a duplicar datos (184/184 external_id en formato Python). |
 | ✅ **B-7** | ~~Falso positivo URL BChile post-migración Auth0~~ — **cerrado, verificado en prod 2026-06-12** | BChile migró el form de login a `login.portales.bancochile.cl/login` (Auth0 + Angular), manteniendo los IDs DOM. El check `if "/login" in page.url` matcheaba el nombre literal del nuevo dominio → todos los syncs caían en `AuthenticationError` → mensaje "Credenciales rechazadas por el banco" para todos los usuarios/testers. Fix: check `"/login" in url` reemplazado por poll positivo 20s esperando que la URL salga de `login.portales.bancochile.cl` (commit 6fdae84). La saga fill/type quedó resuelta y pineada por tests en el sprint 2026-06-12: **RUT = `type()`** (directiva Angular `delete-zero-left` requiere keystrokes) · **clave = `fill()`** (`type()` manglaba el `$` en Chromium bundled headless — esa era la causa raíz del último bloqueador). Verificación post-fill (`FieldFillError`) como red permanente. Verificado en prod: 42 movs, channel=chrome, categorización OK. |
 
 ### Deuda abierta / infra
@@ -210,10 +210,16 @@ Fuente: **`docs/estado-del-arte/08_ESTADO_Y_DEUDA.md`** + `backend-python/docs/R
 - Limpiar `api-v2.skyfinanzas.com` (502, leftover canary) · warm standby Fly.io (DR Railway).
 
 ### Ciclo de credenciales (sprint 2026-06-12 — Fase B)
-Clave rechazada de verdad por el banco → status **`needs_reconnection`** (migración 013): hard-stop en TODOS los caminos (cron, sync-all, endpoint manual → 409, backstop en el worker) hasta que el usuario reconecte. Protege contra el bloqueo del banco al 3er fallo. Frontend: "Actualizar" deshabilitado + "Reconectar" primario. Taxonomía de fallos `SyncFailureKind` en `contracts.py` (mensajes/acciones en un solo lugar, `failure_kind` en audit). Panel operador: `GET /api/internal/operator/sync-status` (x-cron-secret).
+Clave rechazada de verdad por el banco → status **`needs_reconnection`** (migración 013): hard-stop en TODOS los caminos (cron ARQ, sync-all, cron HTTP, endpoint manual → 409, backstop en el worker) hasta que el usuario reconecte — el upsert de reconexión resetea status/errores (pineado por test). Protege contra el bloqueo del banco al 3er fallo. Frontend: "Actualizar" deshabilitado + "Reconectar" primario. Taxonomía de fallos `SyncFailureKind` en `contracts.py` (mensajes/acciones en un solo lugar, `failure_kind` en audit). Panel operador: `GET /api/internal/operator/sync-status` (x-cron-secret) con `by_status`.
+
+### 2FA y onboarding de testers (sprint 2026-06-12, segunda tanda)
+- **`_post_submit_flow`** (`bchile_scraper.py`): resolución post-submit en el dominio Auth0. La ambigüedad **jamás** lanza `AuthenticationError` (mandaría la cuenta a `needs_reconnection` con la clave buena). Clave mala = SOLO con el mensaje del banco en pantalla (keyword "no son correctos", pineada por test). Pantalla desconocida sin form de login → se asume 2FA (espera + captura `pii_safe` para refinar keywords); form pegado → `RecoverableIngestionError` (ANTIBOT).
+- Keywords 2FA en dos listas: `TWO_FA_KEYWORDS_CLASSIC` (post-login, portal clásico — NO agregar frases Auth0 acá: el dashboard matchearía marketing) y `TWO_FA_KEYWORDS_AUTH0` (solo en el dominio de login).
+- **`waiting_2fa` se escribe de verdad**: `sync_bank_account` pasa `on_progress` al router; `PROGRESS_2FA_WAIT_PREFIX` (contracts) marca el status, `PROGRESS_LOGIN_OK` devuelve a `syncing`. NO cambiar el prefijo sin tocar `BankConnect.jsx` (fallback `/Esperando aprobaci[oó]n/i`). Cron ARQ recupera `waiting_2fa` stale (>30 min). Sin migración: el CHECK 006/013 ya permitía el status.
+- Capturas debug `pii_safe` (post-submit): solo HTML scrubeado, sin screenshot (doctrina §20).
 
 ### Prioridades sugeridas
-1. **Cierre operativo sprint 2026-06-12**: aplicar migración 013 antes del deploy del worker · apagar `appealing-benevolence` (B-6/D1, manual en Railway) · correr `scripts/cleanup_bchile_accounts.sql` (D2) · crear bucket `scraper-debug` (C3, opcional). · 2. **Onboarding testers** (sync BChile verificado en prod). · 3. **Prep pitch BCI**. · 4. **B-2** rework BCI scraper. · 5. **B-5** performance (medir antes de optimizar).
+1. **Cierre operativo restante**: correr `scripts/cleanup_bchile_accounts.sql` (D2) si falta · crear bucket `scraper-debug` + `SCRAPER_DEBUG_BUCKET` en el worker (recomendado: captura el DOM del 2FA real de los testers). · 2. **Onboarding testers** (sync verificado en prod + 2FA endurecido). · 3. **Prep pitch BCI**. · 4. **B-2** rework BCI scraper. · 5. **B-5** performance (medir antes de optimizar).
 
 ---
 
@@ -279,7 +285,7 @@ No hay "cierre de fase" (las 13 fases ya cerraron; sus planes viven en `backend-
 
 1. `ruff check src/sky/ tests/`
 2. `mypy src/sky/`
-3. `pytest tests/ -v` (534 tests; cobertura en el módulo tocado)
+3. `pytest tests/ -v` (555 tests; cobertura en el módulo tocado)
 4. Smoke contra Redis local si tocas ingestión/routing.
 5. `uvicorn` arranca + `/api/health` responde 200 si tocas la API.
 6. Si hay migración SQL: `audit_rls_policies.py` verde + aplicar en staging antes que prod.
@@ -357,6 +363,8 @@ No confundir con las 13 fases técnicas (ya cerradas).
 ---
 
 ## 📅 Última actualización
+
+`2026-06-12 (segunda tanda)` · **Sprint endurecer onboarding de testers cerrado.** Riesgo mayor neutralizado: un tester con BChile Pass disparaba el 2FA Auth0 no detectado → 20s de poll → `AuthenticationError` → `needs_reconnection` con la clave buena ("tu clave cambió" falso). Nuevo `_post_submit_flow`: la ambigüedad jamás se castiga como clave mala; 2FA positivo con keywords Auth0 (frases compuestas) + asunción de 2FA en pantallas desconocidas sin form + capturas `pii_safe` para refinar. `waiting_2fa` ahora se escribe de verdad (wiring `on_progress` que faltaba; el frontend ya sabía mostrarlo); cron ARQ recupera `waiting_2fa` stale. Cobertura `needs_reconnection` completada (cron HTTP, reset por reconexión, keyword pineada). UX: "Primera sincronización…" visible, panel operador con `by_status`. Debts: `_sanitize_error` eliminado, `check_gates.ps1` ASCII (la "Ó" rompía el parser de PS 5.1). B-6 cerrado (`appealing-benevolence` apagado). Sin migración SQL. 555 tests.
 
 `2026-06-12` · **Sprint ingesta BChile cerrado — MVP desbloqueado.** Causa raíz del bloqueador: `$` de la clave mal tecleado por `type()` en Chromium bundled headless (la clave en DB estaba bien). Fase A verificada en prod (sync real: 42 movs, channel=chrome): clave con `fill()`, RUT sigue con `type()`, verificación post-fill con `FieldFillError`, Chrome real en worker, `--force-bundled` para repro. Fase B: ciclo `needs_reconnection` (migración 013) con hard-stop anti-bloqueo en todos los caminos + UX Reconectar. Fase C: taxonomía `SyncFailureKind`, panel operador `/api/internal/operator/sync-status`, capturas debug a Supabase Storage, auto-refresh del dashboard post-categorización. Fase D: B-1 y B-7 cerrados; pendiente manual: apagar `appealing-benevolence` (D1), correr `cleanup_bchile_accounts.sql` (D2). Plan: `backend-python/docs/SPRINT_INGESTA_BCHILE_AUTH0.md`.
 
