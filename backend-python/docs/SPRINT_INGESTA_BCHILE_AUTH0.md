@@ -53,6 +53,21 @@ Cuatro fases. La **Fase A es la que desbloquea el MVP** y debe ir primero. El re
 
 **Criterio de aceptación Fase A**: con `fill()` + post-fill verify, un sync de prueba en local-bundled con una clave que contiene `$` pasa el login. Idealmente, un sync real en prod (con la cuenta del fundador, un solo intento) entra y trae movimientos → cierra B-7/B-1/causa-raíz en producción de verdad.
 
+#### ✅ Estado de ejecución Fase A (2026-06-12) — código completo, pendiente verificación en prod
+
+Commits: `b3f5f26` (A1+A2) · `10213c2` (A3+A4). Gates verdes: ruff + mypy + 506 tests (13 nuevos).
+
+- **A1** ✅ `_fill_password` usa `fill()`; `_fill_rut` se queda con `type()` (pineado por test de regresión anti-6fdae84).
+- **A2** ✅ `_verify_login_fields` lee `input.value` de ambos campos antes del submit; mismatch → `FieldFillError` (recoverable, no auth, solo longitudes — jamás el valor) + log `bchile_field_mismatch`. `fetch()` lo propaga sin re-envolver y `_user_message_for_failure` lo mapea a "problema técnico, no es tu clave". RUT se compara normalizado (el sitio reformatea puntos/guion; `delete-zero-left` quita ceros).
+- **A3** ✅ en repo: `docker/worker.Dockerfile` instala Chrome real (`playwright install chrome --with-deps`) + chromium de fallback; el fallback a bundled ahora loguea **warning**. Nuevo setting `browser_channel` (palanca §14).
+  ⚠️ **Acción manual Railway**: si `sky-worker-python` NO buildea con `docker/worker.Dockerfile` (build command propio en el dashboard), agregar ahí `playwright install chrome --with-deps`.
+- **A4** ✅ `BrowserPool(channel="bundled")` + flag `--force-bundled` en `scripts/test_bchile_scraper.py`. Test de integración lanza Chromium bundled real y verifica que `fill()` preserva `Abc_123$` exacto (sin tocar al banco). El "falla ANTES con type()" no se pinea en test: es específico de bundled-headless-Linux; la evidencia quedó en §0.
+
+**Verificación pendiente (requiere al fundador — un solo intento cada paso):**
+1. (Opcional, local) `python scripts/test_bchile_scraper.py RUT CLAVE --headless --force-bundled` → debe entrar y traer movimientos. Reproduce exactamente el entorno de prod.
+2. Deploy del worker a Railway → en logs de arranque debe decir `browser_pool_started ... channel="chrome"` (si dice `chromium-bundled` + warning, aplicar la acción manual de A3 — el fix A1/A2 igual cubre).
+3. Sync real de la cuenta del fundador en prod → entra, trae movimientos, balance correcto. **Esto cierra el MVP.**
+
 ---
 
 ### FASE B — Ciclo de vida de credenciales + seguridad anti-bloqueo
