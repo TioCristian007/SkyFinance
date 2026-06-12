@@ -64,7 +64,9 @@ async function request(path, options = {}) {
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: "Error de red" }));
-    throw new Error(err.error ?? `HTTP ${res.status}`);
+    // FastAPI usa {detail}; el backend Node usaba {error}. Aceptar ambos para
+    // que mensajes accionables (ej. 409 needs_reconnection) lleguen al usuario.
+    throw new Error(err.detail ?? err.error ?? `HTTP ${res.status}`);
   }
   return res.json();
 }

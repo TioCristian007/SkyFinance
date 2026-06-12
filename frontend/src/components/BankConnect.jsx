@@ -34,6 +34,13 @@ const is2FAWaiting = (acc) =>
 const isSyncInFlight = (acc) =>
   acc.status === "syncing" || acc.status === "waiting_2fa";
 
+// B3 (sprint 2026-06-12): el banco rechazó la clave guardada. "Actualizar"
+// queda deshabilitado (el backend igual responde 409) y la acción primaria
+// es "Reconectar" — reintentar con la clave vieja acerca al bloqueo del banco.
+const needsReconnection = (acc) => acc.status === "needs_reconnection";
+
+const RECONNECT_MSG = "Tu clave cambió o el banco la rechazó — vuelve a ingresarla";
+
 // Referencias a assets visuales (logos PNG + color de fondo). Solo para render.
 // La fuente de datos del catálogo de bancos (id, name, status, etc.) es el
 // backend: GET /api/banking/banks → consumido via getSupportedBanks() en api.js.
@@ -80,7 +87,7 @@ const BankIcon = ({ name, icon, size = 36 }) => {
 
 // ── AccountList ───────────────────────────────────────────────────────────────
 
-function AccountList({ accounts, totalBalance, onConnect, onSync, onDisconnect, syncingId }) {
+function AccountList({ accounts, totalBalance, onConnect, onSync, onDisconnect, onReconnect, syncingId }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
 
@@ -103,14 +110,16 @@ function AccountList({ accounts, totalBalance, onConnect, onSync, onDisconnect, 
       {/* Tarjetas por banco */}
       {accounts.map((acc) => {
         const waiting2FA = is2FAWaiting(acc);
+        const needsRec   = needsReconnection(acc);
         const isSyncing  = syncingId === acc.id;
+        const hasIssue   = needsRec || acc.status === "error";
 
         return (
           <div key={acc.id} style={{
             background:   C.white,
             borderRadius: 16,
             padding:      "14px 16px",
-            border:       `1.5px solid ${waiting2FA ? C.amber : acc.status === "error" ? C.red : C.border}`,
+            border:       `1.5px solid ${waiting2FA ? C.amber : hasIssue ? C.red : C.border}`,
             transition:   "border-color 0.3s",
           }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -118,12 +127,14 @@ function AccountList({ accounts, totalBalance, onConnect, onSync, onDisconnect, 
                 <BankIcon name={acc.bankName} icon={acc.bankIcon} size={36} />
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 700, color: C.textPrimary }}>{acc.bankName}</div>
-                  <div style={{ fontSize: 11, marginTop: 2, color: waiting2FA ? C.amber : acc.status === "error" ? C.red : C.textMuted }}>
+                  <div style={{ fontSize: 11, marginTop: 2, color: waiting2FA ? C.amber : hasIssue ? C.red : C.textMuted }}>
                     {waiting2FA
                       ? "Abre tu app Banco de Chile y aprueba"
-                      : acc.status === "error"
-                        ? `${acc.lastSyncError || "Error de conexión"}`
-                        : `Actualizado: ${fmtDate(acc.lastSyncAt)}`
+                      : needsRec
+                        ? (acc.lastSyncError || RECONNECT_MSG)
+                        : acc.status === "error"
+                          ? `${acc.lastSyncError || "Error de conexión"}`
+                          : `Actualizado: ${fmtDate(acc.lastSyncAt)}`
                     }
                   </div>
                 </div>
@@ -149,20 +160,46 @@ function AccountList({ accounts, totalBalance, onConnect, onSync, onDisconnect, 
               </div>
             )}
 
+            {/* Banner reconexión — clave rechazada por el banco */}
+            {needsRec && !waiting2FA && (
+              <div style={{
+                marginTop: 10, padding: "10px 12px",
+                background: "#FEF2F2", borderRadius: 10,
+                border: "1px solid #FECACA",
+                fontSize: 12, color: "#991B1B", lineHeight: 1.5,
+              }}>
+                🔑 Tu clave cambió o el banco la rechazó. Vuelve a ingresarla para
+                reactivar la sincronización. No reintentaremos con la clave anterior
+                — así protegemos tu acceso al banco.
+              </div>
+            )}
+
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
               <button
                 onClick={() => onSync(acc.id, acc.bankId)}
-                disabled={isSyncing || waiting2FA}
+                disabled={isSyncing || waiting2FA || needsRec}
                 style={{
                   flex: 1, padding: "7px 0", borderRadius: 10,
                   border: `1px solid ${C.border}`, background: "transparent",
                   fontSize: 12, fontWeight: 600, color: C.textSecondary,
-                  cursor: (isSyncing || waiting2FA) ? "not-allowed" : "pointer",
-                  opacity: (isSyncing || waiting2FA) ? 0.5 : 1,
+                  cursor: (isSyncing || waiting2FA || needsRec) ? "not-allowed" : "pointer",
+                  opacity: (isSyncing || waiting2FA || needsRec) ? 0.5 : 1,
                 }}
               >
                 {isSyncing ? "Actualizando..." : "Actualizar"}
               </button>
+              {needsRec && (
+                <button
+                  onClick={() => onReconnect(acc)}
+                  style={{
+                    flex: 1, padding: "7px 0", borderRadius: 10, border: "none",
+                    background: `linear-gradient(135deg,${C.green},${C.greenDark})`,
+                    fontSize: 12, fontWeight: 700, color: C.white, cursor: "pointer",
+                  }}
+                >
+                  Reconectar
+                </button>
+              )}
               <button
                 onClick={() => onDisconnect(acc.id, acc.bankName)}
                 disabled={isSyncing}
@@ -197,8 +234,10 @@ function AccountList({ accounts, totalBalance, onConnect, onSync, onDisconnect, 
 
 // ── ConnectForm ───────────────────────────────────────────────────────────────
 
-function ConnectForm({ banks, onSuccess, onCancel }) {
-  const [selectedBank, setSelectedBank] = useState(null);
+// initialBank ≠ null = flujo "Reconectar": el usuario aterriza directo en el
+// form de credenciales de ese banco, sin pasar por el selector.
+function ConnectForm({ banks, onSuccess, onCancel, initialBank = null }) {
+  const [selectedBank, setSelectedBank] = useState(initialBank);
   const [rut,          setRut]          = useState("");
   const [password,     setPassword]     = useState("");
   const [loading,      setLoading]      = useState(false);
@@ -375,13 +414,14 @@ function ConnectForm({ banks, onSuccess, onCancel }) {
 // ── BankConnect principal ─────────────────────────────────────────────────────
 
 export default function BankConnect({ onSyncComplete }) {
-  const [view,         setView]         = useState("list");
-  const [accounts,     setAccounts]     = useState([]);
-  const [totalBalance, setTotalBalance] = useState(0);
-  const [banks,        setBanks]        = useState([]);
-  const [loading,      setLoading]      = useState(true);
-  const [syncingId,    setSyncingId]    = useState(null);
-  const [toast,        setToast]        = useState(null);
+  const [view,          setView]          = useState("list");
+  const [accounts,      setAccounts]      = useState([]);
+  const [totalBalance,  setTotalBalance]  = useState(0);
+  const [banks,         setBanks]         = useState([]);
+  const [loading,       setLoading]       = useState(true);
+  const [syncingId,     setSyncingId]     = useState(null);
+  const [toast,         setToast]         = useState(null);
+  const [reconnectBank, setReconnectBank] = useState(null); // banco preseleccionado al "Reconectar"
   const pollingRef = useRef(null);
 
   const showToast = (msg, color = C.green) => {
@@ -455,7 +495,9 @@ export default function BankConnect({ onSyncComplete }) {
                          acc.lastSyncAt &&
                          acc.lastSyncAt !== lastSyncAtRef &&
                          !is2FA;
-        const isError  = acc.status === "error" && !is2FA;
+        // needs_reconnection es terminal para este ciclo: cortar polling
+        // y mostrar el mensaje de reconexión (viene en lastSyncError).
+        const isError  = (acc.status === "error" || needsReconnection(acc)) && !is2FA;
         const timeout  = attempts >= MAX_ATTEMPTS;
 
         if (isDone || isError || timeout) {
@@ -511,7 +553,18 @@ export default function BankConnect({ onSyncComplete }) {
       if (/2FA_TIMEOUT/i.test(msg))        msg = "No se recibió aprobación 2FA. Intenta nuevamente.";
       showToast(msg, C.red);
       setSyncingId(null);
+      // El 409 de needs_reconnection significa que el status cambió en el
+      // backend — refrescar para que la tarjeta muestre "Reconectar".
+      await loadAccounts();
     }
+  };
+
+  const handleReconnect = (acc) => {
+    console.log("[BankConnect] handleReconnect →", { accountId: acc.id, bankId: acc.bankId });
+    const bank = banks.find((b) => b.id === acc.bankId)
+      || { id: acc.bankId, name: acc.bankName, icon: acc.bankIcon, status: "active" };
+    setReconnectBank(bank);
+    setView("connect");
   };
 
   const handleDisconnect = async (accountId, bankName) => {
@@ -583,16 +636,18 @@ export default function BankConnect({ onSyncComplete }) {
         <AccountList
           accounts={accounts}
           totalBalance={totalBalance}
-          onConnect={() => setView("connect")}
+          onConnect={() => { setReconnectBank(null); setView("connect"); }}
           onSync={handleSync}
           onDisconnect={handleDisconnect}
+          onReconnect={handleReconnect}
           syncingId={syncingId}
         />
       ) : (
         <ConnectForm
           banks={banks}
-          onSuccess={handleConnectSuccess}
-          onCancel={() => setView("list")}
+          initialBank={reconnectBank}
+          onSuccess={(bankId) => { setReconnectBank(null); handleConnectSuccess(bankId); }}
+          onCancel={() => { setReconnectBank(null); setView("list"); }}
         />
       )}
     </div>
