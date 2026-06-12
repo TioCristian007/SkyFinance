@@ -39,6 +39,8 @@ from sky.core.config import settings
 from sky.core.logging import get_logger
 from sky.ingestion.browser_pool import get_browser_pool
 from sky.ingestion.contracts import (
+    PROGRESS_2FA_WAIT_PREFIX,
+    PROGRESS_LOGIN_OK,
     AccountBalance,
     AuthenticationError,
     BankCredentials,
@@ -61,6 +63,9 @@ logger = get_logger("bchile_scraper")
 
 BANK_URL = "https://portalpersonas.bancochile.cl/persona/"
 API_BASE = "https://portalpersonas.bancochile.cl/mibancochile/rest/persona"
+# Dominio Auth0 del login post-migración (B-7). Mientras la URL siga aquí,
+# el login NO terminó: o hay error, o hay 2FA pendiente, o el form no avanzó.
+LOGIN_DOMAIN = "login.portales.bancochile.cl"
 
 RUT_SELECTORS = [
     "#ppriv_per-login-click-input-rut",
@@ -83,7 +88,19 @@ SUBMIT_SELECTORS = [
     "#btn_login",
 ]
 
-TWO_FA_KEYWORDS = [
+# Detección POSITIVA de la pantalla 2FA. Dos generaciones de portal con
+# listas SEPARADAS a propósito:
+#   · CLASSIC — portal pre-Auth0. Es la lista del flujo verificado en prod
+#     2026-06-12 y la ÚNICA que corre post-login sobre portalpersonas (el
+#     dashboard podría mencionar "notificación"/"app" en marketing y un falso
+#     positivo ahí colgaría el sync 120s).
+#   · AUTH0 — challenge "aprueba en tu app" (Banco de Chile Pass) dentro de
+#     login.portales.bancochile.cl. Solo se evalúa mientras la URL siga en el
+#     dominio de login (_post_submit_flow). Frases compuestas a propósito —
+#     palabras sueltas como "app" o "aprueba" matchearían el marketing del
+#     propio form. Cuando un tester real dispare el 2FA, la captura debug
+#     (pii_safe) trae el DOM para refinar esta lista.
+TWO_FA_KEYWORDS_CLASSIC = [
     "clave dinámica",
     "clave dinamica",
     "superclave",
@@ -95,6 +112,27 @@ TWO_FA_KEYWORDS = [
     "digital pass",
     "bchile pass",
 ]
+TWO_FA_KEYWORDS_AUTH0 = [
+    "banco de chile pass",
+    "aprueba el ingreso",
+    "aprueba la notificación",
+    "aprueba la notificacion",
+    "aprueba desde tu app",
+    "aprueba en tu app",
+    "te enviamos una notificación",
+    "te enviamos una notificacion",
+    "notificación a tu celular",
+    "notificacion a tu celular",
+    "notificación push",
+    "notificacion push",
+    "autoriza el ingreso",
+    "autoriza esta operación",
+    "autoriza esta operacion",
+    "revisa tu app",
+    "verificación adicional",
+    "verificacion adicional",
+]
+TWO_FA_KEYWORDS = TWO_FA_KEYWORDS_CLASSIC + TWO_FA_KEYWORDS_AUTH0
 LOGIN_ERROR_KEYWORDS = [
     "clave incorrecta",
     # Mensaje real del portal Auth0 post-migración: "Los datos ingresados no
@@ -115,8 +153,18 @@ REJECTION_KEYWORDS = ["rechazad", "denegad", "cancelad"]
 class BChileScraperSource(DataSource):
     """DataSource para Banco de Chile vía Playwright + REST interna."""
 
-    def __init__(self, two_fa_timeout_sec: int = 120):
+    def __init__(
+        self,
+        two_fa_timeout_sec: int = 120,
+        *,
+        post_submit_grace_sec: float = 25.0,
+        poll_interval_sec: float = 1.0,
+    ):
         self._timeout_sec = two_fa_timeout_sec
+        # Cuánto esperar señales post-submit (error / 2FA / redirect) antes de
+        # decidir por estructura. Override solo en tests (acelerar el loop).
+        self._post_submit_grace_sec = post_submit_grace_sec
+        self._poll_interval_sec = poll_interval_sec
 
     @property
     def source_identifier(self) -> str:
@@ -251,13 +299,20 @@ class BChileScraperSource(DataSource):
                 }
             }""")
 
-        # BChile hace múltiples redirects post-submit. Esperamos doble:
-        # primero DOM listo, luego networkidle. Sin esto el context se
-        # destruye mientras intentamos leer el DOM.
+        # BChile hace múltiples redirects post-submit: dejar que el DOM asiente
+        # antes de empezar a leer señales.
         try:
             await page.wait_for_load_state("domcontentloaded", timeout=25_000)
         except Exception:
             pass
+        await asyncio.sleep(2)
+
+        # Resolver el estado post-submit en el dominio Auth0: éxito (la URL
+        # sale del dominio), error del banco, challenge 2FA o form pegado.
+        await self._post_submit_flow(page, progress)
+
+        # Dar tiempo a portalpersonas a asentarse (la SPA inicializa tokens
+        # de sesión). Mismo settle que el flujo verificado en prod 2026-06-12.
         await asyncio.sleep(5)
         try:
             await page.wait_for_load_state("networkidle", timeout=15_000)
@@ -265,36 +320,18 @@ class BChileScraperSource(DataSource):
             pass
         await asyncio.sleep(2)
 
-        # Retry wrapper por si aún hay navegaciones tardías
-        login_error = await self._retry_dom_read(
-            lambda: self._check_login_error(page), retries=3
-        )
-        if login_error:
-            logger.warning("bchile_auth_error", reason="check_login_error", detail=login_error[:200])
-            await self._capture_debug(page, "auth_check_login_error")
-            raise AuthenticationError(f"Error de login: {login_error}")
-
+        # Portal clásico: el 2FA podía aparecer DESPUÉS de salir del login
+        # (en portalpersonas). Se mantiene ese camino tal cual.
         is_2fa = await self._retry_dom_read(lambda: self._detect_2fa(page), retries=3)
         if is_2fa:
-            progress("⏳ Esperando aprobación 2FA en tu app Banco de Chile...")
+            progress(f"{PROGRESS_2FA_WAIT_PREFIX} en tu app Banco de Chile...")
             if not await self._wait_for_2fa(page, progress):
                 raise TwoFactorTimeoutError(
                     "Timeout esperando aprobación 2FA. "
                     "Abre tu app Banco de Chile y aprueba cuando inicies el sync."
                 )
 
-        # Esperar hasta 20s a que la URL deje el dominio Auth0 de BChile.
-        # El check de "/login" daba falso positivo porque el dominio nuevo SE LLAMA
-        # login.portales.bancochile.cl — el poll positivo es la forma correcta.
-        _login_poll_start = datetime.now()
-        while "login.portales.bancochile.cl" in page.url:
-            if int((datetime.now() - _login_poll_start).total_seconds()) >= 20:
-                logger.warning("bchile_auth_error", reason="url_still_login", detail=None, url=page.url)
-                await self._capture_debug(page, "auth_url_still_login")
-                raise AuthenticationError("Login falló — el portal siguió en pantalla de login post-submit")
-            await asyncio.sleep(1)
-
-        progress("Sesión iniciada correctamente")
+        progress(PROGRESS_LOGIN_OK)
 
     async def _retry_dom_read(self, fn, retries: int = 3):
         """
@@ -314,6 +351,125 @@ class BChileScraperSource(DataSource):
         if last_exc:
             raise last_exc
         return None
+
+    async def _post_submit_flow(self, page: Page, progress: ProgressCallback) -> None:
+        """Resuelve el estado post-submit en el dominio Auth0 (sprint testers 2026-06-12).
+
+        Poll cada `_poll_interval_sec` con cuatro salidas posibles:
+          · La URL sale de LOGIN_DOMAIN → login OK (return).
+          · Mensaje de error del banco (LOGIN_ERROR_KEYWORDS) en CUALQUIER tick
+            → AuthenticationError. Los mensajes pueden aparecer tarde; antes
+            solo se chequeaban una vez.
+          · Pantalla 2FA detectada POSITIVAMENTE (TWO_FA_KEYWORDS) → modo
+            espera con el timeout 2FA completo y progreso visible al usuario.
+          · Sin señales tras `_post_submit_grace_sec`: si el form de clave
+            DESAPARECIÓ, se asume un challenge 2FA con texto desconocido
+            (espera + captura debug para refinar keywords); si el form sigue
+            visible, el submit no avanzó → RecoverableIngestionError.
+
+        REGLA (la razón de ser de este método): la ambigüedad JAMÁS se castiga
+        como AuthenticationError — eso mandaría la cuenta a needs_reconnection
+        (hard-stop B2) con la clave buena, exactamente el falso "credenciales
+        rechazadas" que destruyó la confianza en la era B-7. Clave mala se
+        declara SOLO con el mensaje del banco en pantalla.
+        """
+        start = datetime.now()
+        two_fa_started: datetime | None = None
+        last_progress_emit = 0.0
+
+        while True:
+            if LOGIN_DOMAIN not in page.url:
+                return  # éxito: Auth0 redirigió a portalpersonas
+
+            # Lecturas de DOM tolerantes: una navegación en curso destruye el
+            # execution context — ese tick se pierde y la URL decide el próximo.
+            try:
+                login_error = await self._check_login_error(page)
+            except Exception:
+                login_error = None
+            if login_error:
+                logger.warning(
+                    "bchile_auth_error", reason="check_login_error", detail=login_error[:200]
+                )
+                await self._capture_debug(page, "auth_check_login_error", pii_safe=True)
+                raise AuthenticationError(f"Error de login: {login_error}")
+
+            try:
+                body_text = await page.evaluate(
+                    "() => (document.body?.innerText || '').toLowerCase()"
+                )
+            except Exception:
+                body_text = ""
+
+            elapsed = (datetime.now() - start).total_seconds()
+
+            if two_fa_started is None:
+                if self._match_2fa_text(body_text):
+                    two_fa_started = datetime.now()
+                    logger.info("bchile_2fa_detected", positive=True, url=page.url)
+                    progress(f"{PROGRESS_2FA_WAIT_PREFIX} en tu app Banco de Chile...")
+                    await self._capture_debug(page, "2fa_screen", pii_safe=True)
+                elif elapsed >= self._post_submit_grace_sec:
+                    if await self._password_field_present(page):
+                        # Form completo en pantalla, sin error y sin redirect:
+                        # el submit no avanzó. Posible challenge anti-bot.
+                        logger.warning("bchile_post_submit_stuck", url=page.url)
+                        await self._capture_debug(page, "post_submit_form_stuck", pii_safe=True)
+                        raise RecoverableIngestionError(
+                            "El formulario de login no avanzó tras el envío "
+                            "(posible challenge anti-bot)"
+                        )
+                    # El form desapareció pero seguimos en el dominio de login:
+                    # lo más probable es un challenge 2FA con texto que aún no
+                    # conocemos. Beneficio de la duda + captura para refinar.
+                    two_fa_started = datetime.now()
+                    logger.warning(
+                        "bchile_2fa_assumed", reason="unrecognized_screen", url=page.url
+                    )
+                    progress(f"{PROGRESS_2FA_WAIT_PREFIX} en tu app Banco de Chile...")
+                    await self._capture_debug(page, "2fa_unrecognized_screen", pii_safe=True)
+
+            if two_fa_started is not None:
+                if any(kw in body_text for kw in REJECTION_KEYWORDS):
+                    logger.info("bchile_2fa_rejected")
+                    raise TwoFactorTimeoutError(
+                        "La aprobación 2FA fue rechazada o cancelada. "
+                        "Reintenta el sync y aprueba la notificación en tu app."
+                    )
+                elapsed_2fa = (datetime.now() - two_fa_started).total_seconds()
+                if elapsed_2fa >= self._timeout_sec:
+                    logger.warning("bchile_2fa_timeout", timeout_sec=self._timeout_sec)
+                    await self._capture_debug(page, "2fa_timeout", pii_safe=True)
+                    raise TwoFactorTimeoutError(
+                        "Timeout esperando aprobación 2FA. "
+                        "Abre tu app Banco de Chile y aprueba cuando inicies el sync."
+                    )
+                if elapsed_2fa - last_progress_emit >= 15:
+                    last_progress_emit = elapsed_2fa
+                    remaining = int(self._timeout_sec - elapsed_2fa)
+                    progress(f"{PROGRESS_2FA_WAIT_PREFIX} ({remaining}s restantes)...")
+
+            await asyncio.sleep(self._poll_interval_sec)
+
+    @staticmethod
+    def _match_2fa_text(body_text: str, keywords: list[str] = TWO_FA_KEYWORDS) -> bool:
+        """True si el texto (ya en minúsculas) matchea la pantalla 2FA."""
+        return any(kw in body_text for kw in keywords)
+
+    async def _password_field_present(self, page: Page) -> bool:
+        """¿Sigue el form de login en pantalla? (señal estructural post-submit).
+
+        El challenge 2FA de Auth0 reemplaza el form — si el campo de clave
+        sigue presente, lo que vemos NO es un 2FA sino el form pegado.
+        """
+        for sel in PASS_SELECTORS:
+            try:
+                el = await page.query_selector(sel)
+                if el:
+                    return True
+            except Exception:
+                continue
+        return False
 
     async def _fill_rut(self, page: Page, formatted: str, clean: str) -> tuple[str, str] | None:
         """Llena el RUT con type() — SE QUEDA con type().
@@ -432,10 +588,14 @@ class BChileScraperSource(DataSource):
         )
 
     async def _detect_2fa(self, page: Page) -> bool:
+        """2FA del portal clásico, post-login. SOLO keywords clásicas: el
+        dashboard de portalpersonas puede mencionar "app"/"notificación" en
+        marketing y un falso positivo acá colgaría el sync 120s."""
         text = await page.evaluate("() => (document.body?.innerText || '').toLowerCase()")
-        return any(kw in text for kw in TWO_FA_KEYWORDS)
+        return self._match_2fa_text(text, TWO_FA_KEYWORDS_CLASSIC)
 
     async def _wait_for_2fa(self, page: Page, progress: ProgressCallback) -> bool:
+        """Espera 2FA del portal clásico: aprobado = las keywords desaparecen."""
         start = datetime.now()
         while (elapsed := int((datetime.now() - start).total_seconds())) < self._timeout_sec:
             text = await page.evaluate("() => (document.body?.innerText || '').toLowerCase()")
@@ -444,13 +604,13 @@ class BChileScraperSource(DataSource):
                 logger.info("bchile_2fa_rejected")
                 return False
 
-            if not any(kw in text for kw in TWO_FA_KEYWORDS):
+            if not self._match_2fa_text(text, TWO_FA_KEYWORDS_CLASSIC):
                 logger.info("bchile_2fa_approved", elapsed_sec=elapsed)
                 return True
 
             if elapsed > 0 and elapsed % 15 == 0:
                 remaining = self._timeout_sec - elapsed
-                progress(f"⏳ Esperando aprobación 2FA ({remaining}s restantes)...")
+                progress(f"{PROGRESS_2FA_WAIT_PREFIX} ({remaining}s restantes)...")
 
             await asyncio.sleep(3)
 
@@ -744,12 +904,18 @@ class BChileScraperSource(DataSource):
             out.append(m)
         return out
 
-    async def _capture_debug(self, page: Page, label: str) -> None:
-        """Captura screenshot + HTML del estado actual si scraper_debug_capture=True.
+    async def _capture_debug(self, page: Page, label: str, *, pii_safe: bool = False) -> None:
+        """Captura el estado actual de la página si scraper_debug_capture=True.
 
-        Se llama justo antes de lanzar RecoverableIngestionError por campo no encontrado.
-        En ese punto NO se ha llenado RUT ni password, así que no hay PII en la captura.
-        (La verificación post-fill NO captura — ahí el form ya muestra el RUT.)
+        Dos modos:
+          · pii_safe=False — screenshot + HTML crudos. SOLO para estados
+            pre-fill (campo no encontrado): ahí el form está vacío y no hay PII.
+          · pii_safe=True — SOLO HTML scrubeado (_scrub_pii): valores de inputs
+            y RUTs redactados. Un screenshot no se puede sanitizar y los estados
+            post-submit (error de login, pantalla 2FA) pueden mostrar el RUT en
+            pantalla (doctrina §20). Es el modo de las capturas 2FA del sprint
+            testers — el material para refinar TWO_FA_KEYWORDS cuando un tester
+            real dispare el challenge.
 
         C3 (sprint 2026-06-12): si scraper_debug_bucket está configurado, la
         captura además se sube a Supabase Storage — el filesystem del contenedor
@@ -761,24 +927,41 @@ class BChileScraperSource(DataSource):
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             base_dir = settings.scraper_debug_dir or tempfile.gettempdir()
             stem = f"bchile_{label}_{ts}"
-            screenshot_path = os.path.join(base_dir, f"{stem}.png")
             html_path = os.path.join(base_dir, f"{stem}.html")
-            await page.screenshot(path=screenshot_path)
+            files: list[tuple[str, str, str]] = []
+
+            if not pii_safe:
+                screenshot_path = os.path.join(base_dir, f"{stem}.png")
+                await page.screenshot(path=screenshot_path)
+                files.append((f"bchile/{stem}.png", screenshot_path, "image/png"))
+
             content = await page.content()
+            if pii_safe:
+                content = self._scrub_pii(content)
             with open(html_path, "w", encoding="utf-8") as fh:
                 fh.write(content)
-            logger.info("scraper_debug_captured", screenshot=screenshot_path, html=html_path)
+            files.append((f"bchile/{stem}.html", html_path, "text/html"))
+            logger.info("scraper_debug_captured", label=label, pii_safe=pii_safe, html=html_path)
 
             if settings.scraper_debug_bucket:
-                await self._upload_debug_capture(
-                    settings.scraper_debug_bucket,
-                    [
-                        (f"bchile/{stem}.png", screenshot_path, "image/png"),
-                        (f"bchile/{stem}.html", html_path, "text/html"),
-                    ],
-                )
+                await self._upload_debug_capture(settings.scraper_debug_bucket, files)
         except Exception as exc:
             logger.warning("scraper_debug_capture_failed", error=str(exc))
+
+    @staticmethod
+    def _scrub_pii(html: str) -> str:
+        """Redacta PII del HTML capturado antes de persistirlo (doctrina §20).
+
+        Cubre: valores de inputs serializados (value="..."), RUTs con formato
+        (12.345.678-9 y variantes) y cualquier corrida larga de dígitos
+        (RUT sin formato, números de cuenta/teléfono). Agresivo a propósito:
+        en una captura debug sobra redactar de más, jamás de menos.
+        """
+        html = re.sub(r'value="[^"]*"', 'value="[redacted]"', html)
+        html = re.sub(r"value='[^']*'", "value='[redacted]'", html)
+        html = re.sub(r"\b\d{1,2}(?:\.?\d{3}){2}\s*-\s*[\dkK]\b", "[rut]", html)
+        html = re.sub(r"\b\d{7,10}\b", "[digits]", html)
+        return html
 
     async def _upload_debug_capture(
         self, bucket: str, files: list[tuple[str, str, str]]

@@ -132,6 +132,16 @@ class OAuthTokens:
 # Callback para reportar progreso (2FA, login, etc.)
 ProgressCallback = Callable[[str], None]
 
+# Convención de mensajes de progreso (sprint testers 2026-06-12).
+# NO es parte del contrato DataSource — es un acuerdo entre las fuentes y el
+# worker para que la espera 2FA sea visible al usuario: el worker traduce el
+# prefijo a status 'waiting_2fa' en bank_accounts y el frontend muestra el
+# banner "aprueba en tu app". El texto del prefijo además debe seguir
+# matcheando el fallback del frontend (/Esperando aprobaci[oó]n/i sobre
+# last_sync_error) — no cambiarlo sin tocar BankConnect.jsx.
+PROGRESS_2FA_WAIT_PREFIX = "⏳ Esperando aprobación 2FA"
+PROGRESS_LOGIN_OK = "Sesión iniciada correctamente"
+
 
 class DataSource(ABC):
     """
