@@ -749,6 +749,11 @@ class BChileScraperSource(DataSource):
 
         Se llama justo antes de lanzar RecoverableIngestionError por campo no encontrado.
         En ese punto NO se ha llenado RUT ni password, así que no hay PII en la captura.
+        (La verificación post-fill NO captura — ahí el form ya muestra el RUT.)
+
+        C3 (sprint 2026-06-12): si scraper_debug_bucket está configurado, la
+        captura además se sube a Supabase Storage — el filesystem del contenedor
+        es efímero y las capturas morían con cada deploy.
         """
         if not settings.scraper_debug_capture:
             return
@@ -763,8 +768,44 @@ class BChileScraperSource(DataSource):
             with open(html_path, "w", encoding="utf-8") as fh:
                 fh.write(content)
             logger.info("scraper_debug_captured", screenshot=screenshot_path, html=html_path)
+
+            if settings.scraper_debug_bucket:
+                await self._upload_debug_capture(
+                    settings.scraper_debug_bucket,
+                    [
+                        (f"bchile/{stem}.png", screenshot_path, "image/png"),
+                        (f"bchile/{stem}.html", html_path, "text/html"),
+                    ],
+                )
         except Exception as exc:
             logger.warning("scraper_debug_capture_failed", error=str(exc))
+
+    async def _upload_debug_capture(
+        self, bucket: str, files: list[tuple[str, str, str]]
+    ) -> None:
+        """Sube capturas debug al bucket privado de Supabase Storage.
+
+        Bucket privado, service_role only (doctrina §15). Sin TTL nativo en
+        Supabase: la purga es manual o por job — documentado en el runbook.
+        El cliente es sync, así que corre en thread para no bloquear el loop.
+        """
+        try:
+            from sky.core.db import get_service_client
+
+            client = get_service_client()
+            for key, path, content_type in files:
+                with open(path, "rb") as fh:
+                    data = fh.read()
+
+                def _upload(k: str = key, d: bytes = data, ct: str = content_type) -> None:
+                    client.storage.from_(bucket).upload(k, d, {"content-type": ct, "upsert": "true"})
+
+                await asyncio.to_thread(_upload)
+            logger.info(
+                "scraper_debug_uploaded", bucket=bucket, files=[k for k, _, _ in files]
+            )
+        except Exception as exc:
+            logger.warning("scraper_debug_upload_failed", error=str(exc))
 
     def _format_rut(self, rut: str) -> str:
         clean = re.sub(r"[.\-]", "", rut).upper()

@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     browser_channel: str = "chrome"
     scraper_debug_capture: bool = False
     scraper_debug_dir: str = ""   # vacío = usa carpeta temp del sistema
+    # C3 (sprint 2026-06-12): bucket privado de Supabase Storage para capturas
+    # debug durables (el /tmp del contenedor es efímero). Vacío = solo local.
+    scraper_debug_bucket: str = ""
 
     # ── Scheduler ─────────────────────────────────────────────────────────
     scheduler_base_interval_hours: float = 1.0

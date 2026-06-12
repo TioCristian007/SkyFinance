@@ -17,6 +17,7 @@ REGLA DOCTRINAL:
 from __future__ import annotations
 
 import hashlib
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -266,6 +267,110 @@ class AllSourcesFailedError(IngestionError):
     def primary_cause(self) -> Exception | None:
         """Última excepción de la cadena (el proveedor más lejos intentado), o None."""
         return self.errors[-1][1] if self.errors else None
+
+
+# ── Taxonomía de fallos de sync (C1, sprint 2026-06-12) ──────────────────────
+
+class SyncFailureKind(StrEnum):
+    """Clasificación canónica de por qué falló un sync.
+
+    Objetivo: que la causa real sea visible desde la app y el panel de
+    operador sin cavar en la DB. Cada kind tiene mensaje de usuario
+    (FAILURE_USER_MESSAGES) y acción sugerida (FAILURE_ACTIONS) propios.
+    """
+    WRONG_CREDENTIALS = "wrong_credentials"    # el banco rechazó RUT/clave
+    NEEDS_2FA = "needs_2fa"                    # el 2FA no se aprobó a tiempo
+    BANK_TEMPORARY = "bank_temporary"          # timeout / circuito / rate limit
+    ANTIBOT = "antibot"                        # bloqueo anti-bot / form no encontrado
+    FIELD_FILL_FAILED = "field_fill_failed"    # post-fill verify detectó mismatch
+    UNKNOWN = "unknown"
+
+
+FAILURE_USER_MESSAGES: dict[SyncFailureKind, str] = {
+    SyncFailureKind.WRONG_CREDENTIALS: (
+        "Tu clave cambió o el banco la rechazó. "
+        "Vuelve a ingresarla para reactivar la sincronización."
+    ),
+    SyncFailureKind.NEEDS_2FA: (
+        "No se recibió la aprobación en tu app del banco. "
+        "Reintenta y aprueba la notificación a tiempo."
+    ),
+    SyncFailureKind.BANK_TEMPORARY: "El banco no respondió. Intenta más tarde.",
+    SyncFailureKind.ANTIBOT: (
+        "No pudimos conectar con el banco automáticamente en este momento. "
+        "Reintenta más tarde."
+    ),
+    SyncFailureKind.FIELD_FILL_FAILED: (
+        "Tuvimos un problema técnico al ingresar tus datos en el sitio del banco "
+        "(no es un problema de tu clave). Reintenta en unos minutos."
+    ),
+    SyncFailureKind.UNKNOWN: "No pudimos completar la sincronización. Reintenta más tarde.",
+}
+
+# Acción sugerida por kind — la consume el frontend/panel de operador.
+FAILURE_ACTIONS: dict[SyncFailureKind, str] = {
+    SyncFailureKind.WRONG_CREDENTIALS: "reconnect",
+    SyncFailureKind.NEEDS_2FA: "retry_approve_2fa",
+    SyncFailureKind.BANK_TEMPORARY: "retry_later",
+    SyncFailureKind.ANTIBOT: "retry_later",
+    SyncFailureKind.FIELD_FILL_FAILED: "retry",
+    SyncFailureKind.UNKNOWN: "retry_later",
+}
+
+_ANTIBOT_RE = re.compile(
+    r"no se encontr[oó] el campo|campo de rut|campo de clave|incapsula|challenge", re.I
+)
+_CREDS_RE = re.compile(
+    r"rut\s+inv[aá]lid|rut\s+invalido|clave\s+incorrecta|credential|password|clave\s+rechazad",
+    re.I,
+)
+_TEMPORARY_RE = re.compile(r"circuito abierto|rate limit|timeout|etimedout|econnrefused", re.I)
+
+
+def classify_sync_failure(exc: Exception) -> SyncFailureKind:
+    """Clasifica UNA excepción de sync en la taxonomía canónica.
+
+    El orden importa: tipos específicos primero (isinstance), patrones de
+    texto después. Anti-bot se evalúa antes que credenciales para no
+    confundir "no se encontró el campo de clave" con clave incorrecta.
+    """
+    if isinstance(exc, TwoFactorTimeoutError):
+        return SyncFailureKind.NEEDS_2FA
+    if isinstance(exc, FieldFillError):
+        return SyncFailureKind.FIELD_FILL_FAILED
+    if isinstance(exc, AuthenticationError):
+        return SyncFailureKind.WRONG_CREDENTIALS
+    if isinstance(exc, CircuitOpenError):
+        return SyncFailureKind.BANK_TEMPORARY
+    text = str(exc)
+    if _ANTIBOT_RE.search(text):
+        return SyncFailureKind.ANTIBOT
+    if _CREDS_RE.search(text):
+        return SyncFailureKind.WRONG_CREDENTIALS
+    if _TEMPORARY_RE.search(text):
+        return SyncFailureKind.BANK_TEMPORARY
+    return SyncFailureKind.UNKNOWN
+
+
+# Prioridad al clasificar una cadena de causas (AllSourcesFailedError):
+# el diagnóstico más accionable gana.
+_KIND_PRIORITY: tuple[SyncFailureKind, ...] = (
+    SyncFailureKind.NEEDS_2FA,
+    SyncFailureKind.FIELD_FILL_FAILED,
+    SyncFailureKind.ANTIBOT,
+    SyncFailureKind.WRONG_CREDENTIALS,
+    SyncFailureKind.BANK_TEMPORARY,
+    SyncFailureKind.UNKNOWN,
+)
+
+
+def classify_failure_chain(causes: list[Exception]) -> SyncFailureKind:
+    """Clasifica la cadena completa de causas: devuelve el kind más prioritario."""
+    kinds = {classify_sync_failure(c) for c in causes}
+    for kind in _KIND_PRIORITY:
+        if kind in kinds:
+            return kind
+    return SyncFailureKind.UNKNOWN
 
 
 # ── build_external_id — ÚNICO en todo el sistema ─────────────────────────────

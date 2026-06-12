@@ -100,3 +100,12 @@ def get_aria_client() -> Client:
             settings.supabase_service_key,
         )
     return _aria_client
+
+
+def get_service_client() -> Client:
+    """Cliente Supabase service_role para usos backend-only (storage, aria).
+
+    Mismo cliente singleton que ARIA — usa SUPABASE_SERVICE_KEY, que jamás
+    sale del backend (doctrina §15/§19).
+    """
+    return get_aria_client()

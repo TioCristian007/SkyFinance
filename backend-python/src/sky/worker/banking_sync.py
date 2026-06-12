@@ -38,11 +38,12 @@ from sky.core.locks import try_advisory_lock
 from sky.core.logging import get_logger
 from sky.core.metrics import sky_sync_duration, sky_sync_total
 from sky.ingestion.contracts import (
+    FAILURE_USER_MESSAGES,
     AllSourcesFailedError,
     BankCredentials,
     CircuitOpenError,
-    FieldFillError,
-    TwoFactorTimeoutError,
+    SyncFailureKind,
+    classify_failure_chain,
 )
 from sky.ingestion.contracts import AuthenticationError as BankAuthError
 from sky.ingestion.routing.router import IngestionRouter
@@ -50,11 +51,8 @@ from sky.ingestion.routing.router import IngestionRouter
 logger = get_logger("banking_sync")
 
 # Mensaje único para el ciclo de reconexión (B1/B2, sprint 2026-06-12).
-# El frontend lo muestra tal cual; mantener accionable y sin culpar de más.
-RECONNECT_USER_MSG = (
-    "Tu clave cambió o el banco la rechazó. "
-    "Vuelve a ingresarla para reactivar la sincronización."
-)
+# Fuente de verdad: la taxonomía C1 en contracts (un solo lugar para mensajes).
+RECONNECT_USER_MSG = FAILURE_USER_MESSAGES[SyncFailureKind.WRONG_CREDENTIALS]
 
 # Mantiene referencias a tareas ARIA fire-and-forget para evitar GC prematuro.
 _aria_tasks: set[asyncio.Task[None]] = set()
@@ -163,6 +161,7 @@ async def sync_bank_account(
                     metadata={
                         "bank_id": bank_id,
                         "error_type": "AuthenticationError",
+                        "failure_kind": SyncFailureKind.WRONG_CREDENTIALS.value,
                         "detail": detail,
                         "new_status": "needs_reconnection",
                     },
@@ -175,6 +174,7 @@ async def sync_bank_account(
                     "bank_id": bank_id,
                 }
             except AllSourcesFailedError as exc:
+                kind = classify_failure_chain([e for _, e in exc.errors])
                 user_msg = _user_message_for_failure(exc)
                 await _mark_error(bank_account_id, user_msg)
                 sky_sync_total.labels(bank_id=bank_id, status="error").inc()
@@ -184,7 +184,13 @@ async def sync_bank_account(
                     user_id=user_id,
                     resource_type="bank_account",
                     resource_id=bank_account_id,
-                    metadata={"bank_id": bank_id, "error_type": "AllSourcesFailedError", "cause_type": cause_type},
+                    metadata={
+                        "bank_id": bank_id,
+                        "error_type": "AllSourcesFailedError",
+                        "failure_kind": kind.value,
+                        "cause_type": cause_type,
+                        "detail": str(exc)[:200],
+                    },
                 )
                 return {"success": False, "skipped": False, "error_type": "AllSourcesFailedError", "bank_id": bank_id}
 
@@ -386,50 +392,28 @@ def _sanitize_error(msg: str) -> str:
 
 
 def _user_message_for_failure(exc: AllSourcesFailedError) -> str:
-    """Mapea AllSourcesFailedError a un mensaje accionable en español para el usuario."""
+    """Mapea AllSourcesFailedError a mensaje accionable vía la taxonomía C1.
+
+    La clasificación y los mensajes viven en contracts (un solo lugar);
+    acá solo queda la granularidad extra dentro de bank_temporary, donde
+    saturación propia / rate limit / banco caído piden mensajes distintos.
+    """
     causes = [e for _, e in exc.errors]
+    kind = classify_failure_chain(causes)
 
-    # Prioridad 1: timeout de 2FA
-    if any(isinstance(c, TwoFactorTimeoutError) for c in causes):
-        return "No se recibió la aprobación en tu app del banco. Reintenta y aprueba la notificación a tiempo."
+    if kind is SyncFailureKind.BANK_TEMPORARY:
+        if any(
+            isinstance(c, CircuitOpenError) or re.search(r"circuito abierto", str(c), re.I)
+            for c in causes
+        ):
+            return "El servicio de conexión está temporalmente saturado. Reintenta en unos minutos."
+        if any(
+            isinstance(c, RateLimitError) or re.search(r"rate limit", str(c), re.I)
+            for c in causes
+        ):
+            return "Demasiados intentos seguidos. Espera un momento y reintenta."
+        fallback: str = FAILURE_USER_MESSAGES[SyncFailureKind.BANK_TEMPORARY]
+        return fallback
 
-    # Prioridad 2: el form de login no quedó con el valor que quisimos escribir
-    # (verificación post-fill del scraper). Fallo técnico nuestro — NUNCA debe
-    # presentarse como credenciales incorrectas del usuario.
-    if any(isinstance(c, FieldFillError) for c in causes):
-        return (
-            "Tuvimos un problema técnico al ingresar tus datos en el sitio del banco "
-            "(no es un problema de tu clave). Reintenta en unos minutos."
-        )
-
-    # Prioridad 3: anti-bot / campo no encontrado (bloqueo de red, Incapsula)
-    _antibot = re.compile(
-        r"no se encontr[oó] el campo|campo de rut|campo de clave|incapsula|challenge",
-        re.I,
-    )
-    if any(_antibot.search(str(c)) for c in causes):
-        return "No pudimos conectar con el banco automáticamente en este momento. Reintenta más tarde."
-
-    # Prioridad 4: circuito abierto
-    _circuit = re.compile(r"circuito abierto", re.I)
-    if any(isinstance(c, CircuitOpenError) or _circuit.search(str(c)) for c in causes):
-        return "El servicio de conexión está temporalmente saturado. Reintenta en unos minutos."
-
-    # Prioridad 5: rate limit
-    if any(isinstance(c, RateLimitError) or re.search(r"rate limit", str(c), re.I) for c in causes):
-        return "Demasiados intentos seguidos. Espera un momento y reintenta."
-
-    # Prioridad 6: credenciales erróneas
-    _creds = re.compile(
-        r"rut\s+inv[aá]lid|rut\s+invalido|clave\s+incorrecta|credential|password|clave\s+rechazad",
-        re.I,
-    )
-    if any(_creds.search(str(c)) for c in causes):
-        return "RUT o clave incorrectos. Reconecta el banco con tus credenciales."
-
-    # Prioridad 7: timeout / conexión
-    if any(re.search(r"timeout|etimedout|econnrefused", str(c), re.I) for c in causes):
-        return "El banco no respondió. Intenta más tarde."
-
-    # Default
-    return "No pudimos completar la sincronización. Reintenta más tarde."
+    msg: str = FAILURE_USER_MESSAGES[kind]
+    return msg
