@@ -43,7 +43,32 @@ async def sync_bank_account_endpoint(
     """
     Encola un sync de la cuenta indicada. Responde inmediato {started: true}.
     El frontend hace polling sobre /api/banking/accounts para el progreso.
+
+    B2 (sprint 2026-06-12): si la cuenta está en needs_reconnection, el sync
+    manual se rechaza con 409 — reintentar con la clave rechazada acerca al
+    bloqueo del banco. El usuario debe reconectar con su clave vigente.
     """
+    engine = get_engine()
+    async with engine.connect() as conn:
+        rs = await conn.execute(
+            text("""
+                SELECT status FROM public.bank_accounts
+                 WHERE id = :id AND user_id = :uid AND status != 'disconnected'
+            """),
+            {"id": account_id, "uid": user_id},
+        )
+        acc_row = rs.mappings().first()
+    if acc_row is None:
+        raise HTTPException(status_code=404, detail="Cuenta no encontrada")
+    if str(acc_row["status"]) == "needs_reconnection":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Tu clave cambió o el banco la rechazó. "
+                "Reconecta el banco con tu clave vigente para reactivar la sincronización."
+            ),
+        )
+
     arq_pool = request.app.state.arq_pool
     if arq_pool is None:
         raise HTTPException(
@@ -172,6 +197,7 @@ async def connect_account(
                         bank_name           = EXCLUDED.bank_name,
                         status              = 'active',
                         consecutive_errors  = 0,
+                        last_sync_error     = NULL,
                         updated_at          = NOW()
                 RETURNING id
             """),

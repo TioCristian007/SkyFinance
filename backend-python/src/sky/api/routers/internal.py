@@ -45,7 +45,7 @@ async def cron_sync_due(request: Request) -> dict[str, int]:
                    OR last_sync_at < NOW() - (:hours * INTERVAL '1 hour')
                  )
                    AND consecutive_errors < :max_errors
-                   AND status NOT IN ('disconnected', 'waiting_2fa')
+                   AND status NOT IN ('disconnected', 'waiting_2fa', 'needs_reconnection')
                  ORDER BY last_sync_at ASC NULLS FIRST
                  LIMIT 100
             """),

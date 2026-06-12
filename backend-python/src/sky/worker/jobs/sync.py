@@ -51,7 +51,9 @@ async def sync_all_user_accounts_job(
         rs = await conn.execute(
             text("""
                 SELECT id FROM public.bank_accounts
-                 WHERE user_id = :uid AND status != 'disconnected'
+                 WHERE user_id = :uid
+                   -- B2: needs_reconnection no se reintenta ni con "sync all"
+                   AND status NOT IN ('disconnected', 'needs_reconnection')
             """),
             {"uid": user_id},
         )

@@ -97,6 +97,10 @@ TWO_FA_KEYWORDS = [
 ]
 LOGIN_ERROR_KEYWORDS = [
     "clave incorrecta",
+    # Mensaje real del portal Auth0 post-migración: "Los datos ingresados no
+    # son correctos". Solo se busca dentro de elementos error/alert, así que
+    # el fragmento corto no produce falsos positivos.
+    "no son correctos",
     "rut inválido",
     "rut invalido",
     "bloqueada",

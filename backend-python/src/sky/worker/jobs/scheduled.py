@@ -54,6 +54,11 @@ async def scheduled_sync_job(ctx: dict[str, Any]) -> dict[str, Any]:
                  WHERE (ba.status IN ('active', 'error')
                         OR (ba.status = 'syncing'
                             AND ba.updated_at < NOW() - INTERVAL '30 minutes'))
+                   -- B2 (sprint 2026-06-12): needs_reconnection ya queda fuera
+                   -- del IN de arriba; el guard explícito protege contra
+                   -- ampliaciones futuras del IN. Clave rechazada = cero
+                   -- reintentos automáticos (bloqueo del banco al 3er fallo).
+                   AND ba.status != 'needs_reconnection'
                    AND p.auto_sync_enabled = true
                    AND COALESCE(ba.consecutive_errors, 0) < :max_errors
                  ORDER BY ba.last_scheduled_at ASC NULLS FIRST

@@ -157,3 +157,17 @@ async def test_naive_datetime_treated_as_utc() -> None:
         result = await scheduled_sync_job(ctx)
 
     assert result["ok"] == 1
+
+
+async def test_candidates_sql_excluye_needs_reconnection() -> None:
+    """B2 (sprint 2026-06-12): el SQL de candidatos lleva el guard explícito —
+    una clave rechazada jamás se reintenta por cron, aunque alguien amplíe
+    el IN de status en el futuro."""
+    ctx = _make_ctx()
+    engine = _make_engine([])
+    with patch("sky.worker.jobs.scheduled.get_engine", return_value=engine):
+        await scheduled_sync_job(ctx)
+
+    conn = engine.connect.return_value.__aenter__.return_value
+    sql = str(conn.execute.call_args[0][0])
+    assert "needs_reconnection" in sql

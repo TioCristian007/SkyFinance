@@ -24,7 +24,7 @@ class BankAccountOut(BaseModel):
     last_balance: int = 0
     last_sync_at: datetime | None = None
     last_sync_error: str | None = None
-    status: str  # "active" | "syncing" | "error" | "waiting_2fa" | "disconnected"
+    status: str  # active | syncing | error | waiting_2fa | disconnected | needs_reconnection
     sync_count: int = 0
     minutes_ago: int | None = None
     account_type: str = "Cuenta"

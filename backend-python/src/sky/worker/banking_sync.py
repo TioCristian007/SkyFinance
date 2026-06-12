@@ -49,6 +49,13 @@ from sky.ingestion.routing.router import IngestionRouter
 
 logger = get_logger("banking_sync")
 
+# Mensaje único para el ciclo de reconexión (B1/B2, sprint 2026-06-12).
+# El frontend lo muestra tal cual; mantener accionable y sin culpar de más.
+RECONNECT_USER_MSG = (
+    "Tu clave cambió o el banco la rechazó. "
+    "Vuelve a ingresarla para reactivar la sincronización."
+)
+
 # Mantiene referencias a tareas ARIA fire-and-forget para evitar GC prematuro.
 _aria_tasks: set[asyncio.Task[None]] = set()
 
@@ -92,7 +99,7 @@ async def sync_bank_account(
             row = (await conn.execute(
                 text("""
                     SELECT id, user_id, bank_id, encrypted_rut, encrypted_pass,
-                           sync_count, consecutive_errors, last_sync_at
+                           sync_count, consecutive_errors, last_sync_at, status
                       FROM public.bank_accounts
                      WHERE id = :id AND user_id = :uid AND status != 'disconnected'
                 """),
@@ -100,6 +107,16 @@ async def sync_bank_account(
             )).mappings().first()
             if row is None:
                 raise NotFoundError(f"bank_account not found: {bank_account_id}")
+
+            # Hard-stop B2 (sprint 2026-06-12): clave rechazada por el banco →
+            # NUNCA reintentar (ni cron, ni botón, ni job ya encolado) hasta que
+            # el usuario reconecte. Cada intento fallido acerca al bloqueo del
+            # banco (3er fallo). Este check es el backstop de TODOS los caminos.
+            if str(row.get("status") or "") == "needs_reconnection":
+                logger.info(
+                    "sync_skipped_needs_reconnection", bank_account_id=bank_account_id
+                )
+                return {"skipped": True, "reason": "needs_reconnection"}
 
             await conn.execute(
                 text("""
@@ -132,17 +149,31 @@ async def sync_bank_account(
             try:
                 result = await router.ingest(bank_id=bank_id, user_id=user_id, credentials=creds, since=since)
             except BankAuthError as exc:
+                # B1 (sprint 2026-06-12): el banco rechazó la sesión → la cuenta
+                # entra en needs_reconnection y queda fuera de todo reintento
+                # automático hasta que el usuario reconecte con su clave vigente.
                 detail = str(exc)[:200]
-                await _mark_error(bank_account_id, "Credenciales rechazadas por el banco")
+                await _mark_needs_reconnection(bank_account_id)
                 sky_sync_total.labels(bank_id=bank_id, status="error").inc()
                 await log_event(
                     action="sync.error",
                     user_id=user_id,
                     resource_type="bank_account",
                     resource_id=bank_account_id,
-                    metadata={"bank_id": bank_id, "error_type": "AuthenticationError", "detail": detail},
+                    metadata={
+                        "bank_id": bank_id,
+                        "error_type": "AuthenticationError",
+                        "detail": detail,
+                        "new_status": "needs_reconnection",
+                    },
                 )
-                return {"success": False, "skipped": False, "error_type": "AuthenticationError", "bank_id": bank_id}
+                return {
+                    "success": False,
+                    "skipped": False,
+                    "error_type": "AuthenticationError",
+                    "needs_reconnection": True,
+                    "bank_id": bank_id,
+                }
             except AllSourcesFailedError as exc:
                 user_msg = _user_message_for_failure(exc)
                 await _mark_error(bank_account_id, user_msg)
@@ -294,6 +325,29 @@ async def _mark_error(bank_account_id: str, msg: str) -> None:
                  WHERE id = :id
             """),
             {"id": bank_account_id, "msg": msg[:500]},
+        )
+
+
+async def _mark_needs_reconnection(bank_account_id: str) -> None:
+    """B1 (sprint 2026-06-12): clave rechazada de verdad por el banco.
+
+    A diferencia de 'error' (transitorio, el cron reintenta con backoff),
+    'needs_reconnection' es terminal hasta que el usuario reconecte: reintentar
+    con la misma clave solo acerca al bloqueo del banco al 3er fallo.
+    Requiere migración 013 aplicada (CHECK constraint de status).
+    """
+    engine = get_engine()
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("""
+                UPDATE public.bank_accounts
+                   SET status = 'needs_reconnection',
+                       last_sync_error = :msg,
+                       consecutive_errors = COALESCE(consecutive_errors, 0) + 1,
+                       updated_at = NOW()
+                 WHERE id = :id
+            """),
+            {"id": bank_account_id, "msg": RECONNECT_USER_MSG},
         )
 
 

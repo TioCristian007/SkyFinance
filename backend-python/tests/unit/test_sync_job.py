@@ -19,7 +19,9 @@ from sky.ingestion.contracts import (
 )
 from sky.ingestion.contracts import AuthenticationError as BankAuthError
 from sky.worker.banking_sync import (
+    RECONNECT_USER_MSG,
     _mark_error,
+    _mark_needs_reconnection,
     _persist_movements,
     _sanitize_error,
     _user_message_for_failure,
@@ -159,18 +161,19 @@ async def test_sync_success_path(
 
 @pytest.mark.asyncio
 @patch("sky.worker.banking_sync.try_advisory_lock")
-@patch("sky.worker.banking_sync._mark_error", new_callable=AsyncMock)
+@patch("sky.worker.banking_sync._mark_needs_reconnection", new_callable=AsyncMock)
 @patch("sky.worker.banking_sync.get_engine")
 @patch("sky.worker.banking_sync.decrypt", side_effect=lambda x, _k: f"plain_{x}")
-async def test_sync_auth_error_returns_failure_dict(
+async def test_sync_auth_error_marks_needs_reconnection(
     _decrypt: MagicMock,
     mock_get_engine: MagicMock,
-    mock_mark_error: AsyncMock,
+    mock_mark_reconnect: AsyncMock,
     mock_lock: MagicMock,
     fake_router: MagicMock,
     fake_arq_pool: MagicMock,
 ) -> None:
-    """AuthenticationError retorna dict de fallo (sin re-lanzar) y marca error en DB."""
+    """B1: AuthenticationError → needs_reconnection (no 'error' genérico),
+    retorna dict de fallo sin re-lanzar."""
     mock_lock.return_value = _make_advisory_lock_cm(acquired=True)
     mock_row = {
         "id": "acc-uuid", "user_id": "user-uuid", "bank_id": "bchile",
@@ -189,7 +192,42 @@ async def test_sync_auth_error_returns_failure_dict(
 
     assert out["success"] is False
     assert out["error_type"] == "AuthenticationError"
-    mock_mark_error.assert_awaited_once()
+    assert out["needs_reconnection"] is True
+    mock_mark_reconnect.assert_awaited_once_with("acc-uuid")
+
+
+@pytest.mark.asyncio
+@patch("sky.worker.banking_sync.try_advisory_lock")
+@patch("sky.worker.banking_sync.get_engine")
+@patch("sky.worker.banking_sync.decrypt", side_effect=lambda x, _k: f"plain_{x}")
+async def test_sync_skipped_when_status_needs_reconnection(
+    _decrypt: MagicMock,
+    mock_get_engine: MagicMock,
+    mock_lock: MagicMock,
+    fake_router: MagicMock,
+    fake_arq_pool: MagicMock,
+) -> None:
+    """B2 hard-stop: cuenta en needs_reconnection NUNCA llega al banco,
+    aunque el job ya esté encolado (backstop de todos los caminos)."""
+    mock_lock.return_value = _make_advisory_lock_cm(acquired=True)
+    mock_row = {
+        "id": "acc-uuid", "user_id": "user-uuid", "bank_id": "bchile",
+        "encrypted_rut": "enc_rut", "encrypted_pass": "enc_pass",
+        "sync_count": 0, "consecutive_errors": 2,
+        "status": "needs_reconnection",
+    }
+    mock_get_engine.return_value = _make_engine_with_row(mock_row)
+
+    out = await sync_bank_account(
+        router=fake_router,
+        bank_account_id="acc-uuid",
+        user_id="user-uuid",
+        arq_pool=fake_arq_pool,
+    )
+
+    assert out["skipped"] is True
+    assert out["reason"] == "needs_reconnection"
+    fake_router.ingest.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -397,6 +435,49 @@ async def test_mark_error_updates_db(mock_get_engine: MagicMock) -> None:
 
     await _mark_error("some-account-id", "Error de test")
     mock_conn.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@patch("sky.worker.banking_sync.get_engine")
+async def test_mark_needs_reconnection_updates_db(mock_get_engine: MagicMock) -> None:
+    """B1: _mark_needs_reconnection escribe el status terminal + mensaje accionable."""
+    mock_conn = AsyncMock()
+    mock_conn.execute = AsyncMock()
+    mock_ctx = MagicMock()
+    mock_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_ctx.__aexit__ = AsyncMock(return_value=False)
+    mock_get_engine.return_value.begin.return_value = mock_ctx
+
+    await _mark_needs_reconnection("some-account-id")
+
+    mock_conn.execute.assert_awaited_once()
+    sql = str(mock_conn.execute.call_args[0][0])
+    params = mock_conn.execute.call_args[0][1]
+    assert "needs_reconnection" in sql
+    assert params["msg"] == RECONNECT_USER_MSG
+
+
+@pytest.mark.asyncio
+@patch("sky.worker.jobs.sync.get_engine")
+async def test_sync_all_excluye_needs_reconnection(mock_get_engine: MagicMock) -> None:
+    """B2: el SELECT de sync-all excluye cuentas en needs_reconnection."""
+    from sky.worker.jobs.sync import sync_all_user_accounts_job
+
+    mock_rs = MagicMock()
+    mock_rs.fetchall.return_value = []
+    mock_conn = AsyncMock()
+    mock_conn.execute = AsyncMock(return_value=mock_rs)
+    mock_ctx = MagicMock()
+    mock_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_ctx.__aexit__ = AsyncMock(return_value=False)
+    mock_get_engine.return_value.connect.return_value = mock_ctx
+
+    arq_pool = MagicMock()
+    arq_pool.enqueue_job = AsyncMock()
+    await sync_all_user_accounts_job({"arq_pool": arq_pool}, "user-uuid")
+
+    sql = str(mock_conn.execute.call_args[0][0])
+    assert "needs_reconnection" in sql
 
 
 @pytest.mark.asyncio
