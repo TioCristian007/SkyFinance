@@ -25,7 +25,7 @@ async def categorize_pending_job(ctx: dict[str, Any]) -> dict[str, Any]:
     async with engine.connect() as conn:
         rs = await conn.execute(
             text("""
-                SELECT id, raw_description, amount
+                SELECT id, user_id, raw_description, amount
                   FROM public.transactions
                  WHERE categorization_status = 'pending'
                  ORDER BY created_at ASC
@@ -41,7 +41,12 @@ async def categorize_pending_job(ctx: dict[str, Any]) -> dict[str, Any]:
         return {"processed": 0, "skipped": True}
 
     movements = [
-        {"description": r["raw_description"] or "", "amount": int(r["amount"] or 0)}
+        {
+            "description": r["raw_description"] or "",
+            "amount": int(r["amount"] or 0),
+            # los votos propios del usuario resuelven primero (nivel 0)
+            "user_id": str(r["user_id"]) if r["user_id"] else None,
+        }
         for r in rows
     ]
     items = await categorize_movements(movements)

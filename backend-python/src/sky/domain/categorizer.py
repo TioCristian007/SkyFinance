@@ -1,18 +1,25 @@
 """
-sky.domain.categorizer — Categorización 3 capas (paridad con Node v3).
+sky.domain.categorizer — Categorización con feedback loop (5 niveles).
 
-Jerarquía:
-    1. Reglas regex deterministas — sin tokens, instantáneo.
-    2. Cache en `merchant_categories` con prefix matching progresivo.
-    3. Claude Haiku batch 20 keys/call. Resultado se guarda en cache.
+Jerarquía de resolución (sprint "categorización que aprende", 2026-06):
+    0. Voto propio del usuario (`merchant_category_votes`) — override privado
+       inmediato, con prefix matching. Nunca lo pisa nada.
+    1. Caché global `merchant_categories` con source='user' — consenso
+       crowdsourced (>= N usuarios distintos); puede corregir una regla
+       equivocada PARA TODOS. La IA no puede pisar estas filas (guarda en
+       `upsert_merchant_category`, migración 014).
+    2. Reglas regex deterministas — sin tokens, instantáneo.
+    3. Caché global con source 'rule'/'ai' (semillas + resultados IA previos)
+       con prefix matching progresivo — por debajo de las reglas, igual que
+       siempre.
+    4. Claude Haiku batch 20 keys/call. Resultado se guarda en cache.
 
-Si Claude no logra confidence >= 0.75 → "other". Si la 3ra capa falla
+Los votos los escribe sky.domain.merchant_feedback cuando el usuario
+recategoriza (era el "§4 votos crowdsourced" diferido desde Fase 6).
+
+Si Claude no logra confidence >= 0.75 → "other". Si la capa IA falla
 (rate limit, error de red), todas las filas restantes se marcan "fallback"
 para no quedar en loop infinito.
-
-Categoría "other" + source="fallback" significa: el sistema no pudo
-clasificar y el usuario tendrá la oportunidad de declarar manualmente
-(ver §4 — sistema de votos crowdsourced, fuera de scope Fase 6).
 """
 from __future__ import annotations
 
@@ -143,9 +150,12 @@ def _key_variants(merchant_key: str) -> list[str]:
     return [" ".join(words[:i]) for i in range(len(words), 0, -1)]
 
 
-# ── CAPA 2: Cache con prefix matching ────────────────────────────────────────
+# ── Caché global con prefix matching (niveles 1 y 3) ─────────────────────────
 
-async def _lookup_cache(merchant_keys: list[str]) -> dict[str, str]:
+async def _lookup_cache(merchant_keys: list[str]) -> dict[str, tuple[str, str]]:
+    """Devuelve {merchant_key: (category, source)} — el source decide el nivel:
+    'user' (consenso crowdsourced) resuelve ANTES de las reglas; 'rule'/'ai'
+    después, como siempre."""
     if not merchant_keys:
         return {}
     all_variants = sorted({v for k in merchant_keys for v in _key_variants(k)})
@@ -156,19 +166,63 @@ async def _lookup_cache(merchant_keys: list[str]) -> dict[str, str]:
     async with engine.connect() as conn:
         rs = await conn.execute(
             text(
-                "SELECT merchant_key, category FROM public.merchant_categories"
+                "SELECT merchant_key, category, source"
+                "  FROM public.merchant_categories"
                 " WHERE merchant_key = ANY(:keys)"
             ),
             {"keys": all_variants},
         )
         rows = rs.fetchall()
 
-    variant_map = {r.merchant_key: r.category for r in rows}
-    out: dict[str, str] = {}
+    variant_map = {r.merchant_key: (str(r.category), str(r.source)) for r in rows}
+    out: dict[str, tuple[str, str]] = {}
     for key in merchant_keys:
         for v in _key_variants(key):
             if v in variant_map:
                 out[key] = variant_map[v]
+                break
+    return out
+
+
+# ── Nivel 0: votos propios del usuario ───────────────────────────────────────
+
+async def _lookup_user_votes(
+    pairs: list[tuple[str, str]],
+) -> dict[tuple[str, str], str]:
+    """Votos propios por (user_id, merchant_key) con prefix matching progresivo.
+
+    Devuelve {(user_id, merchant_key_original): category}. Una sola consulta
+    para todo el batch (que puede mezclar usuarios); el filtrado por par
+    exacto se hace acá — un voto jamás se aplica a otro usuario.
+    """
+    pairs = [(u, k) for u, k in pairs if u and k]
+    if not pairs:
+        return {}
+    uids = sorted({u for u, _ in pairs})
+    variants = sorted({v for _, k in pairs for v in _key_variants(k)})
+    if not variants:
+        return {}
+
+    engine: AsyncEngine = get_engine()
+    async with engine.connect() as conn:
+        rs = await conn.execute(
+            text(
+                "SELECT user_id, merchant_key, category"
+                "  FROM public.merchant_category_votes"
+                " WHERE user_id = ANY(CAST(:uids AS uuid[]))"
+                "   AND merchant_key = ANY(:keys)"
+            ),
+            {"uids": uids, "keys": variants},
+        )
+        rows = rs.fetchall()
+
+    vote_map = {(str(r.user_id), str(r.merchant_key)): str(r.category) for r in rows}
+    out: dict[tuple[str, str], str] = {}
+    for uid, key in pairs:
+        for v in _key_variants(key):
+            hit = vote_map.get((uid, v))
+            if hit:
+                out[(uid, key)] = hit
                 break
     return out
 
@@ -278,7 +332,7 @@ class CategorizedItem:
     amount: int
     category: str               # categoría final
     label: str                  # etiqueta es-CL para UI
-    source: str                 # "rule" | "cache" | "ai" | "fallback"
+    source: str                 # "vote" | "rule" | "cache" | "ai" | "fallback"
 
 
 # ── Función principal ────────────────────────────────────────────────────────
@@ -287,60 +341,87 @@ async def categorize_movements(
     movements: list[dict[str, Any]],
 ) -> list[CategorizedItem]:
     """
-    Categoriza una lista de movimientos en 3 capas. Devuelve un item por
-    movimiento de entrada, en el mismo orden.
+    Categoriza una lista de movimientos en 5 niveles (ver docstring del
+    módulo). Devuelve un item por movimiento de entrada, en el mismo orden.
 
     Cada `movement` debe tener al menos `amount` (int) y `description` (str).
+    `user_id` es opcional: si viene, los votos propios de ese usuario tienen
+    prioridad máxima (override privado). El batch puede mezclar usuarios.
     """
     _placeholder: CategorizedItem | None = None
     out: list[CategorizedItem | None] = [_placeholder] * len(movements)
-    needs_cache: list[tuple[int, str, int, str]] = []  # (idx, mkey, amount, raw)
 
-    # Capa 1
+    _Pending = tuple[int, str, int, str, str | None]  # (idx, mkey, amount, raw, uid)
+    pending: list[_Pending] = []
     for i, m in enumerate(movements):
         amount = int(m.get("amount", 0) or 0)
         raw = (m.get("description") or "").strip()
         if amount == 0:
             continue
+        uid = m.get("user_id")
+        pending.append((i, normalize_merchant(raw), amount, raw, str(uid) if uid else None))
+
+    def _item(idx: int, mkey: str, amount: int, raw: str, cat: str, source: str) -> CategorizedItem:
+        return CategorizedItem(
+            idx=idx, raw_description=raw, merchant_key=mkey, amount=amount,
+            category=cat, label=CATEGORY_LABELS.get(cat, "Gasto"), source=source,
+        )
+
+    # Nivel 0: votos propios del usuario (override privado inmediato)
+    vote_pairs = sorted({(uid, mkey) for _, mkey, _, _, uid in pending if uid and mkey})
+    vote_hits = await _lookup_user_votes(list(vote_pairs))
+    after_votes: list[_Pending] = []
+    for i, mkey, amount, raw, uid in pending:
+        cat_hit = vote_hits.get((uid, mkey)) if uid and mkey else None
+        if cat_hit:
+            out[i] = _item(i, mkey, amount, raw, cat_hit, "vote")
+        else:
+            after_votes.append((i, mkey, amount, raw, uid))
+
+    # Caché global: una sola consulta alimenta los niveles 1 y 3
+    cache_keys = sorted({mkey for _, mkey, _, _, _ in after_votes if mkey})
+    cache_hits = await _lookup_cache(cache_keys)
+
+    # Nivel 1: consenso crowdsourced (source='user') — corrige incluso reglas
+    after_crowd: list[_Pending] = []
+    for i, mkey, amount, raw, uid in after_votes:
+        hit = cache_hits.get(mkey)
+        if hit is not None and hit[1] == "user":
+            out[i] = _item(i, mkey, amount, raw, hit[0], "cache")
+        else:
+            after_crowd.append((i, mkey, amount, raw, uid))
+
+    # Nivel 2: reglas deterministas
+    after_rules: list[_Pending] = []
+    for i, mkey, amount, raw, uid in after_crowd:
         cat = _apply_layer1(raw, amount)
         if cat:
-            out[i] = CategorizedItem(
-                idx=i, raw_description=raw, merchant_key=normalize_merchant(raw),
-                amount=amount, category=cat, label=CATEGORY_LABELS[cat], source="rule",
-            )
+            out[i] = _item(i, mkey, amount, raw, cat, "rule")
         else:
-            needs_cache.append((i, normalize_merchant(raw), amount, raw))
+            after_rules.append((i, mkey, amount, raw, uid))
 
-    # Capa 2
-    cache_keys = sorted({mkey for _, mkey, _, _ in needs_cache if mkey})
-    cache_hits = await _lookup_cache(cache_keys)
-    needs_ai: list[tuple[int, str, int, str]] = []
-    for i, mkey, amount, raw in needs_cache:
-        if mkey in cache_hits:
-            cat = cache_hits[mkey]
-            out[i] = CategorizedItem(
-                idx=i, raw_description=raw, merchant_key=mkey,
-                amount=amount, category=cat, label=CATEGORY_LABELS.get(cat, "Gasto"), source="cache",
-            )
+    # Nivel 3: caché global (semillas 'rule' + resultados 'ai' previos)
+    needs_ai: list[_Pending] = []
+    for i, mkey, amount, raw, uid in after_rules:
+        hit = cache_hits.get(mkey)
+        if hit is not None:
+            out[i] = _item(i, mkey, amount, raw, hit[0], "cache")
         else:
-            needs_ai.append((i, mkey, amount, raw))
+            needs_ai.append((i, mkey, amount, raw, uid))
 
-    # Capa 3 (en batches)
+    # Nivel 4: IA (en batches)
     if needs_ai:
-        ai_keys = sorted({mkey for _, mkey, _, _ in needs_ai if mkey})
+        ai_keys = sorted({mkey for _, mkey, _, _, _ in needs_ai if mkey})
         ai_results: dict[str, str] = {}
         bs = settings.categorize_max_keys_per_ai_call
         for j in range(0, len(ai_keys), bs):
             batch = ai_keys[j : j + bs]
             ai_results.update(await _categorize_with_ai(batch))
 
-        for i, mkey, amount, raw in needs_ai:
+        for i, mkey, amount, raw, _uid in needs_ai:
             cat = ai_results.get(mkey, "other")
             source = "ai" if mkey in ai_results else "fallback"
-            out[i] = CategorizedItem(
-                idx=i, raw_description=raw, merchant_key=mkey,
-                amount=amount, category=cat, label=CATEGORY_LABELS.get(cat, "Gasto"), source=source,
-            )
+            out[i] = _item(i, mkey, amount, raw, cat, source)
 
     # Rellenar huecos (movimientos con amount=0 saltados arriba)
     for i, m in enumerate(movements):
@@ -355,6 +436,7 @@ async def categorize_movements(
     logger.info(
         "categorize_done",
         total=len(movements),
+        vote=sum(1 for x in out if x and x.source == "vote"),
         rule=sum(1 for x in out if x and x.source == "rule"),
         cache=sum(1 for x in out if x and x.source == "cache"),
         ai=sum(1 for x in out if x and x.source == "ai"),

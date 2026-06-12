@@ -54,7 +54,8 @@ async def test_categorize_pending_job_processes_rows(
 ) -> None:
     """Con filas pendientes → categoriza y actualiza DB."""
     row_id = str(uuid4())
-    rows = [{"id": row_id, "raw_description": "STARBUCKS", "amount": -5000}]
+    user_id = str(uuid4())
+    rows = [{"id": row_id, "user_id": user_id, "raw_description": "STARBUCKS", "amount": -5000}]
     mock_get_engine.return_value = _make_mock_engine(rows=rows)
 
     mock_categorize.return_value = [
@@ -68,6 +69,9 @@ async def test_categorize_pending_job_processes_rows(
     assert result["processed"] == 1
     assert result["failed"] == 0
     mock_categorize.assert_awaited_once()
+    # El job propaga user_id: los votos propios resuelven primero (nivel 0)
+    movements = mock_categorize.await_args.args[0]
+    assert movements[0]["user_id"] == user_id
 
 
 @pytest.mark.asyncio
@@ -79,7 +83,7 @@ async def test_categorize_pending_job_fallback_marks_failed(
 ) -> None:
     """Movimiento con source=fallback y category=other → status='failed'."""
     row_id = str(uuid4())
-    rows = [{"id": row_id, "raw_description": "XYZQWERT", "amount": -1000}]
+    rows = [{"id": row_id, "user_id": str(uuid4()), "raw_description": "XYZQWERT", "amount": -1000}]
     mock_get_engine.return_value = _make_mock_engine(rows=rows)
 
     mock_categorize.return_value = [
@@ -108,7 +112,10 @@ async def test_categorize_does_not_overwrite_description(
 ) -> None:
     """El job NO debe sobreescribir description con el label de categoría (P2)."""
     row_id = str(uuid4())
-    rows = [{"id": row_id, "raw_description": "STARBUCKS PROVIDENCIA", "amount": -4500}]
+    rows = [{
+        "id": row_id, "user_id": str(uuid4()),
+        "raw_description": "STARBUCKS PROVIDENCIA", "amount": -4500,
+    }]
     mock_get_engine.return_value = _make_mock_engine(rows=rows)
 
     mock_categorize.return_value = [
@@ -138,7 +145,7 @@ async def test_categorize_pending_job_db_error_counts_failed(
 ) -> None:
     """Si el UPDATE lanza excepción, se cuenta como failed."""
     row_id = str(uuid4())
-    rows = [{"id": row_id, "raw_description": "NETFLIX", "amount": -8500}]
+    rows = [{"id": row_id, "user_id": str(uuid4()), "raw_description": "NETFLIX", "amount": -8500}]
 
     # Engine especial: SELECT OK pero UPDATE lanza
     mock_mappings_all = MagicMock()

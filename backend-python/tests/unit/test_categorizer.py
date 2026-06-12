@@ -9,6 +9,7 @@ from sky.domain.categorizer import (
     _categorize_with_ai,
     _key_variants,
     _lookup_cache,
+    _lookup_user_votes,
     _save_to_cache,
     categorize_movements,
     normalize_merchant,
@@ -63,20 +64,120 @@ class TestLayer1Rules:
 @patch("sky.domain.categorizer._lookup_cache", new_callable=AsyncMock)
 @patch("sky.domain.categorizer._categorize_with_ai", new_callable=AsyncMock)
 async def test_three_layers_priority(mock_ai: AsyncMock, mock_cache: AsyncMock) -> None:
-    """Layer 1 gana sobre cache y AI. Cache gana sobre AI."""
-    # _lookup_cache retorna key normalizada → categoría
-    mock_cache.return_value = {"misterio compras": "shopping"}
+    """Reglas ganan sobre cache 'rule'/'ai'. Cache gana sobre AI."""
+    # _lookup_cache retorna key normalizada → (categoría, source)
+    mock_cache.return_value = {"misterio compras": ("shopping", "ai")}
     mock_ai.return_value = {"raro nuevo": "entertainment"}
 
     movements = [
-        {"description": "Jumbo Las Condes", "amount": -10000},   # Layer 1 → food
-        {"description": "Misterio Compras", "amount": -5000},    # Layer 2 → shopping
-        {"description": "Raro Nuevo", "amount": -3000},          # Layer 3 → entertainment
+        {"description": "Jumbo Las Condes", "amount": -10000},   # reglas → food
+        {"description": "Misterio Compras", "amount": -5000},    # cache → shopping
+        {"description": "Raro Nuevo", "amount": -3000},          # IA → entertainment
     ]
     items = await categorize_movements(movements)
     assert items[0].category == "food"          and items[0].source == "rule"
     assert items[1].category == "shopping"      and items[1].source == "cache"
     assert items[2].category == "entertainment" and items[2].source == "ai"
+
+
+# ── Resolución 5 niveles (sprint categorización que aprende) ─────────────────
+
+@pytest.mark.asyncio
+@patch("sky.domain.categorizer._lookup_user_votes", new_callable=AsyncMock)
+@patch("sky.domain.categorizer._lookup_cache", new_callable=AsyncMock)
+@patch("sky.domain.categorizer._categorize_with_ai", new_callable=AsyncMock)
+async def test_voto_propio_gana_a_todo(
+    mock_ai: AsyncMock, mock_cache: AsyncMock, mock_votes: AsyncMock
+) -> None:
+    """Regresión override per-user: el voto del usuario le gana a la regla
+    ('jumbo las condes' → food por regex) y al caché global."""
+    mock_votes.return_value = {("u1", "jumbo las condes"): "shopping"}
+    mock_cache.return_value = {"jumbo las condes": ("food", "rule")}
+    mock_ai.return_value = {}
+
+    items = await categorize_movements(
+        [{"description": "Jumbo Las Condes", "amount": -10000, "user_id": "u1"}]
+    )
+    assert items[0].category == "shopping"
+    assert items[0].source == "vote"
+
+
+@pytest.mark.asyncio
+@patch("sky.domain.categorizer._lookup_user_votes", new_callable=AsyncMock)
+@patch("sky.domain.categorizer._lookup_cache", new_callable=AsyncMock)
+@patch("sky.domain.categorizer._categorize_with_ai", new_callable=AsyncMock)
+async def test_voto_no_se_filtra_a_otro_usuario(
+    mock_ai: AsyncMock, mock_cache: AsyncMock, mock_votes: AsyncMock
+) -> None:
+    """El voto de u1 NO aplica a u2 (mismo comercio, otro usuario)."""
+    mock_votes.return_value = {("u1", "jumbo las condes"): "shopping"}
+    mock_cache.return_value = {}
+    mock_ai.return_value = {}
+
+    items = await categorize_movements([
+        {"description": "Jumbo Las Condes", "amount": -10000, "user_id": "u1"},
+        {"description": "Jumbo Las Condes", "amount": -8000, "user_id": "u2"},
+    ])
+    assert items[0].category == "shopping" and items[0].source == "vote"
+    assert items[1].category == "food" and items[1].source == "rule"
+
+
+@pytest.mark.asyncio
+@patch("sky.domain.categorizer._lookup_user_votes", new_callable=AsyncMock)
+@patch("sky.domain.categorizer._lookup_cache", new_callable=AsyncMock)
+@patch("sky.domain.categorizer._categorize_with_ai", new_callable=AsyncMock)
+async def test_consenso_crowdsourced_corrige_la_regla_para_todos(
+    mock_ai: AsyncMock, mock_cache: AsyncMock, mock_votes: AsyncMock
+) -> None:
+    """Caché con source='user' (>= N usuarios) gana sobre la regla regex —
+    así el consenso corrige una regla equivocada PARA TODOS."""
+    mock_votes.return_value = {}
+    mock_cache.return_value = {"jumbo las condes": ("shopping", "user")}
+    mock_ai.return_value = {}
+
+    items = await categorize_movements(
+        [{"description": "Jumbo Las Condes", "amount": -10000, "user_id": "u2"}]
+    )
+    assert items[0].category == "shopping"
+    assert items[0].source == "cache"
+
+
+@pytest.mark.asyncio
+@patch("sky.domain.categorizer._lookup_user_votes", new_callable=AsyncMock)
+@patch("sky.domain.categorizer._lookup_cache", new_callable=AsyncMock)
+@patch("sky.domain.categorizer._categorize_with_ai", new_callable=AsyncMock)
+async def test_cache_ai_no_pisa_la_regla(
+    mock_ai: AsyncMock, mock_cache: AsyncMock, mock_votes: AsyncMock
+) -> None:
+    """Pin del comportamiento original: una fila de caché 'ai'/'rule' NO
+    le gana a la regla regex (solo el consenso 'user' puede)."""
+    mock_votes.return_value = {}
+    mock_cache.return_value = {"jumbo las condes": ("shopping", "ai")}
+    mock_ai.return_value = {}
+
+    items = await categorize_movements(
+        [{"description": "Jumbo Las Condes", "amount": -10000, "user_id": "u1"}]
+    )
+    assert items[0].category == "food"
+    assert items[0].source == "rule"
+
+
+@pytest.mark.asyncio
+@patch("sky.domain.categorizer._lookup_cache", new_callable=AsyncMock)
+@patch("sky.domain.categorizer._categorize_with_ai", new_callable=AsyncMock)
+async def test_sin_user_id_no_consulta_votos(
+    mock_ai: AsyncMock, mock_cache: AsyncMock
+) -> None:
+    """Movimientos sin user_id se comportan exactamente como antes
+    (_lookup_user_votes corta en seco sin tocar la DB)."""
+    mock_cache.return_value = {}
+    mock_ai.return_value = {}
+
+    items = await categorize_movements(
+        [{"description": "Jumbo Las Condes", "amount": -10000}]
+    )
+    assert items[0].category == "food"
+    assert items[0].source == "rule"
 
 
 @pytest.mark.asyncio
@@ -131,6 +232,7 @@ async def test_lookup_cache_hit_by_prefix(mock_get_engine: MagicMock) -> None:
     mock_row = MagicMock()
     mock_row.merchant_key = "jumbo"
     mock_row.category = "food"
+    mock_row.source = "rule"
     mock_rs = MagicMock()
     mock_rs.fetchall.return_value = [mock_row]
     mock_conn = AsyncMock()
@@ -141,7 +243,7 @@ async def test_lookup_cache_hit_by_prefix(mock_get_engine: MagicMock) -> None:
     mock_get_engine.return_value.connect.return_value = mock_ctx
 
     result = await _lookup_cache(["jumbo las condes"])
-    assert result == {"jumbo las condes": "food"}
+    assert result == {"jumbo las condes": ("food", "rule")}
 
 
 @pytest.mark.asyncio
@@ -158,6 +260,38 @@ async def test_lookup_cache_miss_returns_empty(mock_get_engine: MagicMock) -> No
 
     result = await _lookup_cache(["sitio desconocido"])
     assert result == {}
+
+
+# ── Tests de _lookup_user_votes ──────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_lookup_user_votes_empty_input() -> None:
+    assert await _lookup_user_votes([]) == {}
+
+
+@pytest.mark.asyncio
+@patch("sky.domain.categorizer.get_engine")
+async def test_lookup_user_votes_prefix_y_aislamiento(mock_get_engine: MagicMock) -> None:
+    """El voto de u1 sobre 'jumbo' matchea 'jumbo las condes' POR PREFIJO,
+    pero solo para u1 — el mismo par para u2 no resuelve."""
+    mock_row = MagicMock()
+    mock_row.user_id = "u1"
+    mock_row.merchant_key = "jumbo"
+    mock_row.category = "shopping"
+    mock_rs = MagicMock()
+    mock_rs.fetchall.return_value = [mock_row]
+    mock_conn = AsyncMock()
+    mock_conn.execute = AsyncMock(return_value=mock_rs)
+    mock_ctx = MagicMock()
+    mock_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_ctx.__aexit__ = AsyncMock(return_value=False)
+    mock_get_engine.return_value.connect.return_value = mock_ctx
+
+    result = await _lookup_user_votes([
+        ("u1", "jumbo las condes"),
+        ("u2", "jumbo las condes"),
+    ])
+    assert result == {("u1", "jumbo las condes"): "shopping"}
 
 
 # ── Tests de _save_to_cache ───────────────────────────────────────────────────
