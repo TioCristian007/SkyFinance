@@ -225,6 +225,27 @@ class TwoFactorTimeoutError(RecoverableIngestionError):
     pass
 
 
+class FieldFillError(RecoverableIngestionError):
+    """Un campo del form de login no quedó con el valor esperado tras llenarlo.
+
+    Detectado por la verificación post-fill (leer input.value antes del submit).
+    NO es un error de credenciales: el valor correcto nunca llegó al banco —
+    por eso no hereda de AuthenticationError y el router puede hacer failover.
+
+    PII: el mensaje y los atributos solo llevan longitudes — jamás el valor
+    del RUT o la clave (doctrina §20).
+    """
+
+    def __init__(self, field: str, expected_len: int, got_len: int) -> None:
+        self.field = field
+        self.expected_len = expected_len
+        self.got_len = got_len
+        super().__init__(
+            f"El campo '{field}' no quedó con el valor esperado tras llenarlo "
+            f"(esperado {expected_len} caracteres, quedó {got_len})."
+        )
+
+
 class CircuitOpenError(RecoverableIngestionError):
     """El circuit breaker de la fuente está abierto; no se intentó."""
 

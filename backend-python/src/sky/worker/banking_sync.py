@@ -41,6 +41,7 @@ from sky.ingestion.contracts import (
     AllSourcesFailedError,
     BankCredentials,
     CircuitOpenError,
+    FieldFillError,
     TwoFactorTimeoutError,
 )
 from sky.ingestion.contracts import AuthenticationError as BankAuthError
@@ -338,7 +339,16 @@ def _user_message_for_failure(exc: AllSourcesFailedError) -> str:
     if any(isinstance(c, TwoFactorTimeoutError) for c in causes):
         return "No se recibió la aprobación en tu app del banco. Reintenta y aprueba la notificación a tiempo."
 
-    # Prioridad 2: anti-bot / campo no encontrado (bloqueo de red, Incapsula)
+    # Prioridad 2: el form de login no quedó con el valor que quisimos escribir
+    # (verificación post-fill del scraper). Fallo técnico nuestro — NUNCA debe
+    # presentarse como credenciales incorrectas del usuario.
+    if any(isinstance(c, FieldFillError) for c in causes):
+        return (
+            "Tuvimos un problema técnico al ingresar tus datos en el sitio del banco "
+            "(no es un problema de tu clave). Reintenta en unos minutos."
+        )
+
+    # Prioridad 3: anti-bot / campo no encontrado (bloqueo de red, Incapsula)
     _antibot = re.compile(
         r"no se encontr[oó] el campo|campo de rut|campo de clave|incapsula|challenge",
         re.I,
@@ -346,16 +356,16 @@ def _user_message_for_failure(exc: AllSourcesFailedError) -> str:
     if any(_antibot.search(str(c)) for c in causes):
         return "No pudimos conectar con el banco automáticamente en este momento. Reintenta más tarde."
 
-    # Prioridad 3: circuito abierto
+    # Prioridad 4: circuito abierto
     _circuit = re.compile(r"circuito abierto", re.I)
     if any(isinstance(c, CircuitOpenError) or _circuit.search(str(c)) for c in causes):
         return "El servicio de conexión está temporalmente saturado. Reintenta en unos minutos."
 
-    # Prioridad 4: rate limit
+    # Prioridad 5: rate limit
     if any(isinstance(c, RateLimitError) or re.search(r"rate limit", str(c), re.I) for c in causes):
         return "Demasiados intentos seguidos. Espera un momento y reintenta."
 
-    # Prioridad 5: credenciales erróneas
+    # Prioridad 6: credenciales erróneas
     _creds = re.compile(
         r"rut\s+inv[aá]lid|rut\s+invalido|clave\s+incorrecta|credential|password|clave\s+rechazad",
         re.I,
@@ -363,7 +373,7 @@ def _user_message_for_failure(exc: AllSourcesFailedError) -> str:
     if any(_creds.search(str(c)) for c in causes):
         return "RUT o clave incorrectos. Reconecta el banco con tus credenciales."
 
-    # Prioridad 6: timeout / conexión
+    # Prioridad 7: timeout / conexión
     if any(re.search(r"timeout|etimedout|econnrefused", str(c), re.I) for c in causes):
         return "El banco no respondió. Intenta más tarde."
 

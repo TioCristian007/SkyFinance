@@ -44,6 +44,7 @@ from sky.ingestion.contracts import (
     BankCredentials,
     CanonicalMovement,
     DataSource,
+    FieldFillError,
     IngestionCapabilities,
     IngestionResult,
     MovementSource,
@@ -193,7 +194,7 @@ class BChileScraperSource(DataSource):
                     metadata={"account_count": len(account_movs), "credit_card_count": len(cc_movs)},
                 )
 
-            except (AuthenticationError, TwoFactorTimeoutError):
+            except (AuthenticationError, TwoFactorTimeoutError, FieldFillError):
                 raise
             except Exception as exc:
                 logger.error("bchile_fetch_failed", error=str(exc), tb=traceback.format_exc())
@@ -208,15 +209,20 @@ class BChileScraperSource(DataSource):
         formatted_rut = self._format_rut(rut)
         clean_rut = re.sub(r"[.\-]", "", rut)
 
-        if not await self._fill_rut(page, formatted_rut, clean_rut):
+        rut_fill = await self._fill_rut(page, formatted_rut, clean_rut)
+        if not rut_fill:
             await self._capture_debug(page, "fill_rut_failed")
             raise RecoverableIngestionError("No se encontró el campo de RUT")
 
         await asyncio.sleep(0.5)
 
-        if not await self._fill_password(page, password):
+        pass_selector = await self._fill_password(page, password)
+        if not pass_selector:
             await self._capture_debug(page, "fill_password_failed")
             raise RecoverableIngestionError("No se encontró el campo de clave")
+
+        rut_selector, rut_typed = rut_fill
+        await self._verify_login_fields(page, rut_selector, rut_typed, pass_selector, password)
 
         progress("Enviando credenciales...")
         submitted = False
@@ -305,7 +311,14 @@ class BChileScraperSource(DataSource):
             raise last_exc
         return None
 
-    async def _fill_rut(self, page: Page, formatted: str, clean: str) -> bool:
+    async def _fill_rut(self, page: Page, formatted: str, clean: str) -> tuple[str, str] | None:
+        """Llena el RUT con type() — SE QUEDA con type().
+
+        El input tiene la directiva Angular `delete-zero-left` que requiere
+        keystrokes reales; cambiarlo a fill() lo rompe (error del commit 6fdae84).
+
+        Devuelve (selector, valor_tecleado) para la verificación post-fill, o None.
+        """
         for sel in RUT_SELECTORS:
             try:
                 el = await page.query_selector(sel)
@@ -317,12 +330,22 @@ class BChileScraperSource(DataSource):
                 await el.click(click_count=3)
                 value = clean if (0 < max_len <= 10) else formatted
                 await el.type(value, delay=45)
-                return True
+                return sel, value
             except Exception:
                 continue
-        return False
+        return None
 
-    async def _fill_password(self, page: Page, password: str) -> bool:
+    async def _fill_password(self, page: Page, password: str) -> str | None:
+        """Llena la clave con fill() — setea el valor por DOM y dispara input/change.
+
+        type() teclea por keyboard events, y en Chromium bundled headless los
+        caracteres con Shift (ej. '$') llegan mal al input → el banco recibe una
+        clave incorrecta (causa raíz del sprint 2026-06-12). El campo password
+        NO tiene `delete-zero-left` (esa directiva es exclusiva del RUT), así
+        que fill() es seguro aquí.
+
+        Devuelve el selector usado para la verificación post-fill, o None.
+        """
         for sel in PASS_SELECTORS:
             try:
                 el = await page.query_selector(sel)
@@ -335,11 +358,58 @@ class BChileScraperSource(DataSource):
                 if is_readonly:
                     continue
                 await el.click(click_count=3)
-                await el.type(password, delay=45)
-                return True
+                await el.fill(password)
+                return sel
             except Exception:
                 continue
-        return False
+        return None
+
+    @staticmethod
+    def _normalize_rut_value(value: str) -> str:
+        """Normaliza un RUT para comparación post-fill: sin puntos/guion/espacios,
+        mayúsculas y sin ceros a la izquierda (delete-zero-left los elimina)."""
+        return re.sub(r"[.\-\s]", "", value or "").upper().lstrip("0")
+
+    async def _verify_login_fields(
+        self, page: Page, rut_selector: str, rut_typed: str, pass_selector: str, password: str
+    ) -> None:
+        """Verificación post-fill (keystone del sprint 2026-06-12).
+
+        Lee de vuelta input.value de RUT y clave ANTES del submit y compara con
+        lo que se quiso escribir. Un mismatch significa que el valor correcto
+        nunca va a llegar al banco — eso es FieldFillError (técnico, recoverable),
+        no AuthenticationError. RUT se compara normalizado (el sitio reformatea
+        con puntos/guion); la clave, exacta.
+
+        PII: jamás se loguean los valores — solo longitudes (doctrina §20).
+        Tampoco se captura debug acá: el form ya tiene el RUT en pantalla.
+        """
+        values = await page.evaluate(
+            """(sels) => sels.map((s) => {
+                const el = document.querySelector(s);
+                return el ? el.value : null;
+            })""",
+            [rut_selector, pass_selector],
+        )
+        rut_value, pass_value = values[0], values[1]
+
+        if self._normalize_rut_value(rut_value or "") != self._normalize_rut_value(rut_typed):
+            logger.warning(
+                "bchile_field_mismatch", field="rut",
+                expected_len=len(rut_typed), got_len=len(rut_value or ""),
+            )
+            raise FieldFillError("rut", expected_len=len(rut_typed), got_len=len(rut_value or ""))
+
+        if pass_value != password:
+            logger.warning(
+                "bchile_field_mismatch", field="password",
+                expected_len=len(password), got_len=len(pass_value or ""),
+            )
+            raise FieldFillError(
+                "password", expected_len=len(password), got_len=len(pass_value or "")
+            )
+
+        logger.info("bchile_fields_verified", rut_len=len(rut_typed), password_len=len(password))
 
     async def _check_login_error(self, page: Page) -> str | None:
         return await page.evaluate(
