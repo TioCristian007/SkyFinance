@@ -1,4 +1,4 @@
-# check_gates.ps1 — Corre los gates de calidad de Sky manualmente.
+# check_gates.ps1 - Corre los gates de calidad de Sky manualmente.
 # Equivalente PowerShell al hook .githooks/pre-push.
 #
 # Uso:
@@ -7,11 +7,16 @@
 #   .\scripts\check_gates.ps1
 #
 # Saltar gate (emergencia): $env:SKY_SKIP_GATE = "1"
+#
+# NOTA encoding: el cuerpo del script es ASCII a proposito. PowerShell 5.1 lee
+# .ps1 sin BOM como ANSI (Windows-1252): el segundo byte UTF-8 de una "O" con
+# tilde (0x93) se interpreta como comilla tipografica y cierra strings antes
+# de tiempo -> error de parser. No agregar acentos ni simbolos Unicode aca.
 
 Set-StrictMode -Version Latest
 
 if ($env:SKY_SKIP_GATE -eq "1") {
-    Write-Host "[check_gates] SKY_SKIP_GATE=1 → gate OMITIDO" -ForegroundColor Yellow
+    Write-Host "[check_gates] SKY_SKIP_GATE=1 -> gate OMITIDO" -ForegroundColor Yellow
     exit 0
 }
 
@@ -31,9 +36,9 @@ if ($LASTEXITCODE -ne 0) { $failed += "pytest" }
 
 Write-Host ""
 if ($failed.Count -eq 0) {
-    Write-Host "[check_gates] OK ✓ — todos los gates en verde" -ForegroundColor Green
+    Write-Host "[check_gates] OK - todos los gates en verde" -ForegroundColor Green
     exit 0
 } else {
-    Write-Host "[check_gates] FALLÓ: $($failed -join ', ')" -ForegroundColor Red
+    Write-Host "[check_gates] FALLO: $($failed -join ', ')" -ForegroundColor Red
     exit 1
 }

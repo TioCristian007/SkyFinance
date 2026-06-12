@@ -23,7 +23,6 @@ from sky.worker.banking_sync import (
     _mark_error,
     _mark_needs_reconnection,
     _persist_movements,
-    _sanitize_error,
     _user_message_for_failure,
     sync_bank_account,
 )
@@ -341,31 +340,6 @@ async def test_sync_unexpected_exception_marks_error_and_reraises(
 
 
 # ── Tests de helpers puros ────────────────────────────────────────────────────
-
-class TestSanitizeError:
-    def test_empty_returns_generic(self) -> None:
-        assert _sanitize_error("") == "Error de sincronización"
-
-    def test_password_in_msg_sanitized(self) -> None:
-        assert "clave" in _sanitize_error("wrong password for user").lower() or \
-               "credencial" in _sanitize_error("wrong password for user").lower() or \
-               "rut" in _sanitize_error("wrong password for user").lower()
-
-    def test_antibot_campo_rut_no_es_auth_error(self) -> None:
-        """No se encontró el campo de RUT es bloqueo anti-bot, NO error de credenciales."""
-        msg = _sanitize_error("No se encontró el campo de RUT")
-        assert "autenticación" not in msg.lower()
-        assert "reintenta más tarde" in msg.lower() or "automáticamente" in msg.lower()
-
-    def test_timeout_message(self) -> None:
-        result = _sanitize_error("ETIMEDOUT connecting to bank")
-        assert result == "El banco no respondió. Intenta más tarde."
-
-    def test_generic_error_truncated(self) -> None:
-        long_msg = "A" * 300
-        result = _sanitize_error(long_msg)
-        assert len(result) == 200
-
 
 class TestUserMessageForFailure:
     def _exc(self, causes: list[tuple[str, Exception]]) -> AllSourcesFailedError:

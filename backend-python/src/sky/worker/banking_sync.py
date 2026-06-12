@@ -373,24 +373,6 @@ async def _load_anon_profile(user_id: str) -> Any:
     return build_anon_profile(profile_dict)
 
 
-def _sanitize_error(msg: str) -> str:
-    """Eliminar PII y stack traces antes de mostrar al usuario en paths genéricos."""
-    if not msg:
-        return "Error de sincronización"
-    # Anti-bot / campo no encontrado: evaluar ANTES de credenciales para no confundir
-    if re.search(
-        r"no se encontr[oó] el campo|campo de rut|campo de clave|incapsula|challenge",
-        msg, re.I,
-    ):
-        return "No pudimos conectar con el banco automáticamente en este momento. Reintenta más tarde."
-    if re.search(r"ETIMEDOUT|ECONNREFUSED|timeout", msg, re.I):
-        return "El banco no respondió. Intenta más tarde."
-    # Credenciales: patrones específicos (evitar falsos positivos por la palabra "rut" sola)
-    if re.search(r"rut\s+inv[aá]lid|rut\s+no|clave\s+incorrecta|clave\s+rechazad|password|credential", msg, re.I):
-        return "RUT o clave incorrectos. Reconecta el banco con tus credenciales."
-    return msg[:200]
-
-
 def _user_message_for_failure(exc: AllSourcesFailedError) -> str:
     """Mapea AllSourcesFailedError a mensaje accionable vía la taxonomía C1.
 
