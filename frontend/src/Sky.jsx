@@ -445,6 +445,31 @@ export default function Sky({ userId, userEmail }) {
     }
   };
 
+  // ── Auto-refresh post-categorización (C4, sprint 2026-06-12) ─────────────────
+  // El sync inserta transacciones con categorization_status='pending'
+  // ("Procesando...") y un job async las categoriza después — los números
+  // llegaban en dos tiempos y había que recargar a mano. Mientras haya
+  // pendientes, refrescamos tx + summary solos hasta que el job termine.
+  const pendingTxCount = txs.filter((t) => t.categorization_status === "pending").length;
+  useEffect(() => {
+    if (pendingTxCount === 0) return;
+    let attempts = 0;
+    const iv = setInterval(async () => {
+      attempts++;
+      try {
+        const txR = await api.getTransactions();
+        setTxs(txR.transactions);
+        await refreshSummary();
+      } catch (e) {
+        console.error("[Sky] poll categorización:", e.message);
+      }
+      // ~2 min por ciclo: si el job no drenó las pendientes, paramos hasta
+      // que algo cambie (nuevo sync re-dispara el efecto vía pendingTxCount).
+      if (attempts >= 24) clearInterval(iv);
+    }, 5000);
+    return () => clearInterval(iv);
+  }, [pendingTxCount]);
+
   // ── Ajustes de perfil ─────────────────────────────────────────────────────────
   const handleToggleTransfersAsIncome = async (val) => {
     setCountTransfersAsIncome(val);
@@ -1385,13 +1410,18 @@ export default function Sky({ userId, userEmail }) {
                     <div style={{ background: P.surface, borderRadius: 16, border: `1px solid ${P.border}` }}>
                       <BankConnect
                         onSyncComplete={async () => {
-                          const [summaryRes, bankAccRes] = await Promise.all([
+                          // Traer también las transacciones: el sync inserta tx
+                          // 'pending' y el efecto de auto-refresh (C4) las ve y
+                          // sigue refrescando hasta que la categorización termine.
+                          const [summaryRes, bankAccRes, txRes] = await Promise.all([
                             api.getSummary(),
                             api.getBankAccounts().catch(() => ({ accounts: [], totalBalance: 0 })),
+                            api.getTransactions().catch(() => null),
                           ]);
                           setSummary(summaryRes.summary);
                           setProfile(summaryRes.profile);
                           setBankBalances(bankAccRes);
+                          if (txRes) setTxs(txRes.transactions);
                         }}
                       />
                     </div>
