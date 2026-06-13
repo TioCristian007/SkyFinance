@@ -126,8 +126,20 @@ async def test_delete_transaction_no_jwt_returns_401(unauth_client: AsyncClient)
 
 # ── GET /api/transactions ─────────────────────────────────────────────────────
 
+def _fallback_displays(user_id: str | None, raws: list) -> list:
+    """Simulacro de merchant_display_batch sin DB: Title Case puro."""
+    return [r.title() if r else None for r in raws]
+
+
 async def test_get_transactions_returns_list(client: AsyncClient) -> None:
-    with patch("sky.api.routers.transactions.get_engine", return_value=_make_engine([_ROW])):
+    with (
+        patch("sky.api.routers.transactions.get_engine", return_value=_make_engine([_ROW])),
+        patch(
+            "sky.api.routers.transactions.merchant_display_batch",
+            new_callable=AsyncMock,
+            side_effect=_fallback_displays,
+        ),
+    ):
         resp = await client.get("/api/transactions")
 
     assert resp.status_code == 200
@@ -138,12 +150,39 @@ async def test_get_transactions_returns_list(client: AsyncClient) -> None:
 
 
 async def test_get_transactions_empty_list(client: AsyncClient) -> None:
-    with patch("sky.api.routers.transactions.get_engine", return_value=_make_engine([], count=0)):
+    with (
+        patch("sky.api.routers.transactions.get_engine", return_value=_make_engine([], count=0)),
+        patch(
+            "sky.api.routers.transactions.merchant_display_batch",
+            new_callable=AsyncMock,
+            side_effect=_fallback_displays,
+        ),
+    ):
         resp = await client.get("/api/transactions")
 
     assert resp.status_code == 200
     assert resp.json()["total"] == 0
     assert resp.json()["transactions"] == []
+
+
+async def test_get_transactions_merchant_viene_del_batch(client: AsyncClient) -> None:
+    """El display de comercio sale de merchant_display_batch (aliases),
+    no del Title Case directo — el alias del usuario gana."""
+    with (
+        patch("sky.api.routers.transactions.get_engine", return_value=_make_engine([_ROW])),
+        patch(
+            "sky.api.routers.transactions.merchant_display_batch",
+            new_callable=AsyncMock,
+            return_value=["Mi Jumbo"],
+        ) as mock_batch,
+    ):
+        resp = await client.get("/api/transactions")
+
+    assert resp.status_code == 200
+    assert resp.json()["transactions"][0]["merchant"] == "Mi Jumbo"
+    args = mock_batch.await_args.args
+    assert args[0] == _TEST_USER  # los aliases propios son del usuario del JWT
+    assert args[1] == ["JUMBO LAS CONDES"]
 
 
 # ── PATCH /api/transactions/{id} ─────────────────────────────────────────────
@@ -227,6 +266,142 @@ async def test_patch_insurance_is_valid(client: AsyncClient) -> None:
         resp = await client.patch("/api/transactions/tx-1", json={"category": "insurance"})
 
     assert resp.status_code == 200
+
+
+# ── PATCH /api/transactions/{id}/merchant (Fase 2: renombre) ─────────────────
+
+def _make_rename_engine(
+    raw_description: str | None, category: str = "food"
+) -> MagicMock:
+    """Engine mock para el SELECT de la tx en rename_merchant."""
+    rs = MagicMock()
+    if raw_description is None:
+        rs.first.return_value = None
+    else:
+        row = MagicMock()
+        row.raw_description = raw_description
+        row.category = category
+        rs.first.return_value = row
+    mock_conn = AsyncMock()
+    mock_conn.execute = AsyncMock(return_value=rs)
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=mock_conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    engine = MagicMock()
+    engine.connect.return_value = ctx
+    return engine
+
+
+async def test_rename_merchant_no_jwt_returns_401(unauth_client: AsyncClient) -> None:
+    resp = await unauth_client.patch(
+        "/api/transactions/tx-1/merchant", json={"display_name": "Copec"}
+    )
+    assert resp.status_code == 401
+
+
+async def test_rename_merchant_ok(client: AsyncClient) -> None:
+    """El rename registra el alias con la raw_description y categoría DE LA TX
+    (el cliente jamás manda keys) y devuelve la elegibilidad para el copy."""
+    with (
+        patch(
+            "sky.api.routers.transactions.get_engine",
+            return_value=_make_rename_engine("60092 PROVIDENCIA", "transport"),
+        ),
+        patch(
+            "sky.api.routers.transactions.record_user_rename",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_rename,
+    ):
+        resp = await client.patch(
+            "/api/transactions/tx-1/merchant", json={"display_name": "  Copec  "}
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["merchant"] == "Copec"  # trim aplicado
+    assert data["crowdsource_eligible"] is True
+    mock_rename.assert_awaited_once_with(
+        user_id=_TEST_USER,
+        raw_description="60092 PROVIDENCIA",
+        current_category="transport",
+        display_name="Copec",
+    )
+
+
+async def test_rename_merchant_transferencia_es_privado(client: AsyncClient) -> None:
+    """Renombrar una transferencia funciona, pero la respuesta avisa que el
+    nombre NO se comparte (la UI ajusta el copy)."""
+    with (
+        patch(
+            "sky.api.routers.transactions.get_engine",
+            return_value=_make_rename_engine("Transferencia a: Juan Perez", "transfer"),
+        ),
+        patch(
+            "sky.api.routers.transactions.record_user_rename",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+    ):
+        resp = await client.patch(
+            "/api/transactions/tx-1/merchant", json={"display_name": "Arriendo"}
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["crowdsource_eligible"] is False
+
+
+async def test_rename_merchant_tx_ajena_404_y_no_aprende(client: AsyncClient) -> None:
+    with (
+        patch(
+            "sky.api.routers.transactions.get_engine",
+            return_value=_make_rename_engine(None),
+        ),
+        patch(
+            "sky.api.routers.transactions.record_user_rename",
+            new_callable=AsyncMock,
+        ) as mock_rename,
+    ):
+        resp = await client.patch(
+            "/api/transactions/tx-1/merchant", json={"display_name": "Copec"}
+        )
+
+    assert resp.status_code == 404
+    mock_rename.assert_not_awaited()
+
+
+async def test_rename_merchant_nombre_vacio_422(client: AsyncClient) -> None:
+    resp = await client.patch(
+        "/api/transactions/tx-1/merchant", json={"display_name": "   "}
+    )
+    assert resp.status_code == 422
+
+
+async def test_rename_merchant_nombre_largo_422(client: AsyncClient) -> None:
+    resp = await client.patch(
+        "/api/transactions/tx-1/merchant", json={"display_name": "x" * 61}
+    )
+    assert resp.status_code == 422
+
+
+async def test_rename_merchant_sin_comercio_renombrable_422(client: AsyncClient) -> None:
+    """Una tx con raw_description vacía no tiene key que aliasar."""
+    with (
+        patch(
+            "sky.api.routers.transactions.get_engine",
+            return_value=_make_rename_engine(""),
+        ),
+        patch(
+            "sky.api.routers.transactions.record_user_rename",
+            new_callable=AsyncMock,
+        ) as mock_rename,
+    ):
+        resp = await client.patch(
+            "/api/transactions/tx-1/merchant", json={"display_name": "Copec"}
+        )
+
+    assert resp.status_code == 422
+    mock_rename.assert_not_awaited()
 
 
 # ── DELETE /api/transactions/{id} ────────────────────────────────────────────

@@ -92,6 +92,13 @@ export async function patchTransaction(id, category) {
   });
 }
 
+export async function renameMerchant(id, displayName) {
+  return request(`/transactions/${id}/merchant`, {
+    method: "PATCH",
+    body: JSON.stringify({ display_name: displayName }),
+  });
+}
+
 export async function deleteTransaction(id) {
   return request(`/transactions/${id}`, { method: "DELETE" });
 }

@@ -34,3 +34,15 @@ class TransactionPatchResponse(BaseModel):
     id: str
     category: str
     updated: bool = True
+
+
+class MerchantRenameRequest(BaseModel):
+    display_name: str
+
+
+class MerchantRenameResponse(BaseModel):
+    id: str
+    merchant: str
+    # Para el copy de UI: True → "se comparte si varios coinciden",
+    # False → "solo visible para ti" (transferencias, pasarelas).
+    crowdsource_eligible: bool

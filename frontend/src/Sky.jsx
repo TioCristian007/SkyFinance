@@ -323,6 +323,8 @@ export default function Sky({ userId, userEmail }) {
   const [dateFilter,        setDateFilter]        = useState("mes-actual"); // "mes-actual" | "ultimos-30"
   const [selectedCategory,  setSelectedCategory]  = useState(null);
   const [sortBy,            setSortBy]            = useState("fecha-desc"); // "fecha-desc"|"fecha-asc"|"monto-desc"|"monto-asc"|"nombre-asc"|"nombre-desc"
+  const [renamingTxId,      setRenamingTxId]      = useState(null);
+  const [renameDraft,       setRenameDraft]       = useState("");
   const [privacyMode,  setPrivacyMode]  = useState(false);
   const [simMode,      setSimMode]      = useState("quick");
   const [activeSim,    setActiveSim]    = useState(null);
@@ -559,6 +561,25 @@ export default function Sky({ userId, userEmail }) {
     } catch (e) {
       console.error("[Sky] recategorizeTx:", e.message);
       showToast("No se pudo recategorizar", "red");
+    }
+  };
+
+  const renameMerchantTx = async (id) => {
+    const name = renameDraft.trim();
+    setRenamingTxId(null);
+    if (!name) return;
+    try {
+      const res = await api.renameMerchant(id, name);
+      // El backend deriva el display al leer: re-fetch para que TODAS las tx
+      // del mismo comercio muestren el nombre nuevo, no solo esta fila.
+      const txR = await api.getTransactions();
+      setTxs(txR.transactions);
+      showToast(res.crowdsource_eligible
+        ? "Nombre guardado · si varios coinciden, se comparte con todos"
+        : "Nombre guardado · solo visible para ti");
+    } catch (e) {
+      console.error("[Sky] renameMerchantTx:", e.message);
+      showToast("No se pudo renombrar el comercio", "red");
     }
   };
 
@@ -1654,9 +1675,36 @@ export default function Sky({ userId, userEmail }) {
 
                               {/* Descripción + meta */}
                               <div style={{ flex: 1, minWidth: 0 }}>
-                                <div title={tx.merchant || cat.label} style={{ fontSize: 13, fontWeight: 600, color: P.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                                  {tx.merchant || cat.label}
-                                </div>
+                                {renamingTxId === tx.id ? (
+                                  <input
+                                    autoFocus
+                                    value={renameDraft}
+                                    maxLength={60}
+                                    onChange={(e) => setRenameDraft(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") renameMerchantTx(tx.id);
+                                      if (e.key === "Escape") setRenamingTxId(null);
+                                    }}
+                                    onBlur={() => setRenamingTxId(null)}
+                                    placeholder="Nombre del comercio"
+                                    title="Enter guarda · Esc cancela. Si varios usuarios coinciden, el nombre se comparte con todos."
+                                    style={{
+                                      fontSize: 13, fontWeight: 600, color: P.text,
+                                      border: `1px solid ${P.green}`, borderRadius: 5,
+                                      padding: "1px 6px", outline: "none",
+                                      width: "100%", maxWidth: 220, fontFamily: "inherit",
+                                    }}
+                                  />
+                                ) : (
+                                  <div title={tx.merchant || cat.label} style={{ fontSize: 13, fontWeight: 600, color: P.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", display: "flex", alignItems: "center", gap: 6 }}>
+                                    <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{tx.merchant || cat.label}</span>
+                                    <button
+                                      onClick={() => { setRenamingTxId(tx.id); setRenameDraft(tx.merchant || ""); }}
+                                      title="Renombrar comercio"
+                                      style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 11, color: P.text3, padding: 0, flexShrink: 0, lineHeight: 1 }}
+                                    >✏️</button>
+                                  </div>
+                                )}
                                 <div style={{ fontSize: 11, color: P.text3, marginTop: 2, display: "flex", gap: 5, alignItems: "center", flexWrap: "nowrap" }}>
                                   <span style={{ fontSize: 12, flexShrink: 0 }}>{cat.icon}</span>
                                   <select

@@ -6,6 +6,8 @@ from sqlalchemy import text
 
 from sky.api.deps import require_user_id
 from sky.api.schemas.transactions import (
+    MerchantRenameRequest,
+    MerchantRenameResponse,
     RecategorizeRequest,
     TransactionListResponse,
     TransactionOut,
@@ -13,8 +15,15 @@ from sky.api.schemas.transactions import (
 )
 from sky.core.db import get_engine
 from sky.core.logging import get_logger
-from sky.domain.categorizer import CATEGORIES, merchant_display
-from sky.domain.merchant_feedback import record_user_categorization
+from sky.domain.categorizer import (
+    CATEGORIES,
+    merchant_display_batch,
+    normalize_merchant,
+)
+from sky.domain.merchant_feedback import (
+    record_user_categorization,
+    record_user_rename,
+)
 
 logger = get_logger("api.transactions")
 router = APIRouter(prefix="/api/transactions", tags=["transactions"])
@@ -67,6 +76,10 @@ async def list_transactions(
         )
         rows = rs.mappings().all()
 
+    # Display con aliases (Fase 2): propio del usuario → global → Title Case.
+    raws = [str(r["raw_description"]) if r["raw_description"] else None for r in rows]
+    merchants = await merchant_display_batch(user_id, raws)
+
     txs = [
         TransactionOut(
             id=str(r["id"]),
@@ -78,9 +91,9 @@ async def list_transactions(
             bank_account_id=str(r["bank_account_id"]) if r["bank_account_id"] is not None else None,
             movement_source=str(r["movement_source"] or ""),
             categorization_status=str(r["categorization_status"] or "pending"),
-            merchant=merchant_display(str(r["raw_description"]) if r["raw_description"] else None),
+            merchant=merchants[i],
         )
-        for r in rows
+        for i, r in enumerate(rows)
     ]
     return TransactionListResponse(
         transactions=txs, total=int(total), page=page, page_size=page_size,
@@ -126,6 +139,62 @@ async def recategorize(
 
     logger.info("tx_recategorized", tx_id=tx_id, category=body.category)
     return TransactionPatchResponse(id=tx_id, category=body.category)
+
+
+@router.patch("/{tx_id}/merchant", response_model=MerchantRenameResponse)
+async def rename_merchant(
+    tx_id: str,
+    body: MerchantRenameRequest,
+    user_id: str = Depends(require_user_id),
+) -> MerchantRenameResponse:
+    """Renombra el comercio de una tx (sprint Fase 2).
+
+    La tx NO se muta: el display se deriva al leer (merchant_display_batch),
+    así el renombre aplica de inmediato a TODAS las tx del mismo comercio.
+    La raw_description se toma de la tx del propio usuario — el cliente
+    nunca manda keys arbitrarias.
+    """
+    name = (body.display_name or "").strip()
+    if not 1 <= len(name) <= 60:
+        raise HTTPException(
+            status_code=422,
+            detail="El nombre debe tener entre 1 y 60 caracteres",
+        )
+
+    engine = get_engine()
+    async with engine.connect() as conn:
+        rs = await conn.execute(
+            text("""
+                SELECT raw_description, category
+                  FROM public.transactions
+                 WHERE id = :id AND user_id = :uid AND deleted_at IS NULL
+            """),
+            {"id": tx_id, "uid": user_id},
+        )
+        row = rs.first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Transacción no encontrada")
+
+    raw = str(row.raw_description or "")
+    if not normalize_merchant(raw):
+        raise HTTPException(
+            status_code=422,
+            detail="Esta transacción no tiene comercio renombrable",
+        )
+
+    # A diferencia del voto de categoría (best-effort tras el UPDATE), acá
+    # el alias ES la acción: si falla, el request falla.
+    eligible = await record_user_rename(
+        user_id=user_id,
+        raw_description=raw,
+        current_category=str(row.category or "other"),
+        display_name=name,
+    )
+
+    logger.info("tx_merchant_renamed", tx_id=tx_id, eligible=eligible)
+    return MerchantRenameResponse(
+        id=tx_id, merchant=name, crowdsource_eligible=eligible,
+    )
 
 
 @router.delete("/{tx_id}", status_code=204)
