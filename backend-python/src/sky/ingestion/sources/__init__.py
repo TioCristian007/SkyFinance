@@ -51,14 +51,14 @@ def build_all_sources(*, include_browser_sources: bool) -> dict[str, DataSource]
     if include_browser_sources:
         # Importar dentro del bloque para que la API jamás cargue Playwright.
         from sky.ingestion.sources.bchile_scraper import BChileScraperSource
-        from sky.ingestion.sources.bci_direct import BCIDirectSource
+        from sky.ingestion.sources.bci_scraper import BCIScraperSource
 
         # FalabellaScraperSource es un skeleton no implementado y `falabella` no
         # está en SUPPORTED_BANKS (el endpoint de conexión lo rechaza). No se
         # registra para no exponer una fuente muerta. Ver R-3 en 08_ESTADO_Y_DEUDA.
         for src in (
             BChileScraperSource(),
-            BCIDirectSource(),
+            BCIScraperSource(),
         ):
             sources[src.source_identifier] = src
 

@@ -151,7 +151,7 @@ class DataSource(ABC):
         - BChileScraperSource   (scraper Playwright)
         - FalabellaScraperSource (scraper Playwright)
         - FintocSource          (API Fintoc)
-        - BCIDirectSource       (API directa BCI)
+        - BCIScraperSource      (scraper BCI Playwright + JWT)
         - SFASource             (Open Banking regulado)
         - ManualUploadSource    (CSV)
 

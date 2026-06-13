@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from sky.ingestion.browser_pool import BrowserPool, set_browser_pool
 from sky.ingestion.contracts import BankCredentials
-from sky.ingestion.sources.bci_direct import BCIDirectSource
+from sky.ingestion.sources.bci_scraper import BCIScraperSource
 
 
 async def main():
@@ -53,7 +53,7 @@ async def main():
     set_browser_pool(pool)
 
     try:
-        scraper = BCIDirectSource(two_fa_timeout_sec=args.timeout_2fa)
+        scraper = BCIScraperSource(two_fa_timeout_sec=args.timeout_2fa)
         creds = BankCredentials(rut=args.rut, password=args.password)
 
         def on_progress(msg: str):
