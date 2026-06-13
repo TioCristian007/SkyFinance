@@ -78,6 +78,17 @@ Estructura esperada (a confirmar con el discovery):
 4. **R-2**: renombrar a `BCIScraperSource`/`bci_scraper.py` + actualizar `SUPPORTED_BANKS`, `build_all_sources`, routing rules, tests.
 5. **Activar `bci` en `SUPPORTED_BANKS`** (hoy `pending`) recién cuando el sync real funcione end-to-end en prod.
 
+### ✅ Rework CONSTRUIDO (2026-06-13, commit `69a03e3`)
+
+`bci_scraper.py` (ex `bci_direct.py` — **R-2 cerrado**: `BCIScraperSource`). Gated verde (ruff + mypy + 682 tests, 32 nuevos en `tests/unit/test_bci_source.py`). **NO activa `bci`** (sigue `pending`).
+
+- **Login**: entry `www.bci.cl/corporativo/banco-en-linea/personas`. RUT con `type()` en `#rut_aux`; clave con `fill()` en `#clave`. Verificación post-fill extendida: relee `#rut_aux`/`#clave` Y confirma que los hidden `#rut`/`#dig` se poblaron (prueba que el `type()` disparó el JS del form) → `FieldFillError` (recoverable, no auth) si no. Submit acotado al form que contiene `#clave`.
+- **`_post_submit_flow`** (portado de BChile): éxito = dejar el marcador de URL `corporativo/banco-en-linea` **o** JWT capturado; clave mala SOLO con el mensaje del banco; ambigüedad → asume 2FA + captura `pii_safe` (jamás `AuthenticationError`); form pegado → `RecoverableIngestionError` ANTIBOT (flag tipo B-1 del DetectCA easysol).
+- **API**: JWT Bearer interceptado del host `apilocal.bci.cl`; `cuentas-busquedas/por-rut` (lista), `por-numero-cuenta` (saldo `saldoContable`), `cuentas-movimientos/por-numero-cuenta` (movs). **Body capture-and-replay**: el listener captura el `post_data` real del frontend (`por-rut`, movimientos) al navegar a "Saldos y movimientos", lo loguea PII-safe y replica la forma exacta; fallbacks `{rut,dig}` / `{numero,tipo}`.
+- **Normalización**: `idMovimiento`→`native_id` (idempotencia), `monto` str→int (formato chileno), `tipo`→signo, `fechaMovimiento`→date, `glosa`→`raw_description`; `since` filtra.
+
+**Pendiente (discovery de runtime — gating de la activación)**: el discovery fijó login + endpoints + shapes, pero NO el post-submit completo ni los bodies. El primer test manual con la cuenta BCI real confirma/refina, vía captura `pii_safe`: (1) la señal post-submit exacta; (2) las keywords 2FA del portal nuevo; (3) los bodies de `por-rut`/movimientos; (4) el formato real de `monto`/`tipo`/`fecha`. Recién con un sync real end-to-end en prod → activar `bci` → **dos bancos a la vez**.
+
 ---
 
 ## Invariantes (doctrina + lecciones BChile)

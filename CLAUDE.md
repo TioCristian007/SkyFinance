@@ -97,7 +97,7 @@ sky_OFFICIAL/
 │   │   ├── core/                ← config, db, encryption, locks, logging, errors, metrics, audit
 │   │   ├── ingestion/           ← router + scrapers + rate limit + circuit breaker + rules DB
 │   │   │   ├── routing/         ← router.py, rules.py
-│   │   │   ├── sources/         ← bchile_scraper (validado), bci_direct (roto), __init__ (SUPPORTED_BANKS)
+│   │   │   ├── sources/         ← bchile_scraper (validado), bci_scraper (rework construido, pending prod), __init__ (SUPPORTED_BANKS)
 │   │   │   └── parsers/         ← bchile_parser
 │   │   ├── api/                 ← FastAPI: main + jwt_auth + routers/* + schemas/* (implementados)
 │   │   ├── worker/              ← ARQ: main + jobs/* + banking_sync (implementados)
@@ -136,7 +136,7 @@ Vive en `backend-python/src/sky/ingestion/contracts.py`. Modificarlo requiere RF
 | Identifier | Capa · Auth | Estado |
 |---|---|---|
 | `bchile` | SCRAPER · PASSWORD | **active** — ✅ validado **en producción** (2026-06-12: sync real desde Railway, 42 movs, channel=chrome). 2FA app. RUT se llena con `type()` (directiva Angular), clave con `fill()` — NO cambiar (tests lo pinean). |
-| `bci` | SCRAPER · PASSWORD | **pending** — scraper roto: BCI cambió el dominio del portal (`portalpersonas.bci.cl` ya no resuelve). Requiere rework. |
+| `bci` | SCRAPER · PASSWORD | **pending** — rework construido (2026-06-13, `bci_scraper.py`): portal nuevo `www.bci.cl` (widget embebido) + endpoints BFF v3.2 + body capture-and-replay. Gated verde; pendiente verificación en prod antes de activar. RUT `type()` en `#rut_aux`, clave `fill()` en `#clave`. 2FA Digital Pass. |
 | `falabella` | SCRAPER · PASSWORD | removido del listado (skeleton, no operativo) |
 | `mercadopago`, `fintoc`, `*.direct`, `sfa.*`, `manual` | varios | 🔴 Futuro |
 
@@ -204,7 +204,7 @@ Fuente: **`docs/estado-del-arte/08_ESTADO_Y_DEUDA.md`** + `backend-python/docs/R
 | ID | Item | Nota |
 |---|---|---|
 | ✅ **B-1** | ~~Scraping bloqueado desde datacenter (anti-bot Incapsula)~~ — **obsoleto, cerrado 2026-06-12** | Con la migración a Auth0 el bloqueo de datacenter dejó de aplicar: el scraper llena y envía el form desde Railway sin challenge. Confirmado con sync real en prod. La fragilidad del scraping sigue reforzando la tesis SFA. |
-| **B-2** | Scraper BCI roto — dominio cambiado | `portalpersonas.bci.cl` ya no resuelve. Requiere rework (sprint propio). |
+| **B-2** | Scraper BCI — rework construido, pendiente prod | El portal migró a `www.bci.cl` (widget) + endpoints BFF v3.2; `bci_scraper.py` reconstruido y gated (commit `69a03e3`, 32 tests). **R-2 cerrado** (rename a `BCIScraperSource`, identificador `scraper.bci` intacto). Falta discovery de runtime (test manual cuenta real → refinar post-submit/2FA/bodies con captura PII-safe) + sync prod → activar `bci`. Riesgo: DetectCA easysol (tipo B-1). |
 | ✅ **B-3** | ~~Audit log roto en runtime~~ — **cerrado 2026-05-25** | `:detail::jsonb` rompía asyncpg con named params → 0 filas escritas. Corregido: `CAST(:detail AS jsonb)`. Test de regresión en `test_audit.py`. Pendiente: verificar runtime con Postgres staging (10 min). + vocabulario de event_type/outcome en `audit.py` reconciliado con la DB (cerrado 2026-05-27). |
 | ✅ **B-4** | ~~Balance post-disconnect~~ — **cerrado 2026-05-27** | cerrado 2026-05-27: summary filtra deleted_at + balance nunca cae a net_flow; KPI muestra '—' sin banco. |
 | **B-5** | Lentitud general | Sin profiling. **Medir antes de optimizar.** |
@@ -232,7 +232,7 @@ Clave rechazada de verdad por el banco → status **`needs_reconnection`** (migr
 - Capturas debug `pii_safe` (post-submit): solo HTML scrubeado, sin screenshot (doctrina §20).
 
 ### Prioridades sugeridas
-1. **B-2 — rework scraper BCI** (próximo sprint): dominio `portalpersonas.bci.cl` cambió; reconstruir para tener **dos bancos operativos a la vez** (BChile + BCI). · 2. **Onboarding testers** (sync BChile verificado en prod + 2FA endurecido; bucket `scraper-debug` + `SCRAPER_DEBUG_CAPTURE=true` ya activos en el worker — **apagar post-onboarding**). · 3. **Prep pitch BCI**. · 4. **B-5** performance (medir antes de optimizar). · 5. Fase 3 categorización (identidad canónica, sprint propio). · (Cierre operativo de hoy: categorización 014/015 en prod ✅, `appealing-benevolence` apagado ✅, D2 no-op ✅.)
+1. **B-2 — verificar el rework BCI en prod** (construido y gated 2026-06-13): test manual con cuenta real → refinar señal post-submit / keywords 2FA / bodies con la captura PII-safe → sync end-to-end → activar `bci` para tener **dos bancos operativos a la vez** (BChile + BCI). · 2. **Onboarding testers** (sync BChile verificado en prod + 2FA endurecido; bucket `scraper-debug` + `SCRAPER_DEBUG_CAPTURE=true` ya activos en el worker — **apagar post-onboarding**). · 3. **Prep pitch BCI**. · 4. **B-5** performance (medir antes de optimizar). · 5. Fase 3 categorización (identidad canónica, sprint propio). · (Cierre operativo de hoy: categorización 014/015 en prod ✅, `appealing-benevolence` apagado ✅, D2 no-op ✅.)
 
 ---
 
@@ -376,6 +376,8 @@ No confundir con las 13 fases técnicas (ya cerradas).
 ---
 
 ## 📅 Última actualización
+
+`2026-06-13 (tarde)` · **Rework scraper BCI (B-2) construido — segundo banco en camino (commit `69a03e3`).** El portal BCI migró del muerto `portalpersonas.bci.cl` (NXDOMAIN) al widget embebido en `www.bci.cl/corporativo/banco-en-linea/personas`; la API interna (`apilocal.bci.cl`, BFF v3.2) conservó la base, cambiaron los endpoints. `bci_scraper.py` (ex `bci_direct.py` — **R-2 cerrado**: `BCIScraperSource`, sin tocar el identificador `scraper.bci` → sin migración de routing) reconstruido con el discovery (Fase 0) y las lecciones BChile pineadas: **RUT `type()` en `#rut_aux`** + **clave `fill()` en `#clave`** + **verificación post-fill** (relee ambos campos Y confirma que los hidden `#rut`/`#dig` que el JS del form puebla quedaron poblados → `FieldFillError` si no), **`_post_submit_flow`** (éxito = dejar el marcador de URL `corporativo/banco-en-linea` o JWT capturado; **la ambigüedad jamás es clave mala**; form pegado → ANTIBOT, flag tipo B-1 del DetectCA easysol), endpoints `cuentas-busquedas/por-rut` · `por-numero-cuenta` · `cuentas-movimientos/por-numero-cuenta` con JWT Bearer interceptado del host `apilocal`, y **body capture-and-replay** (el listener captura el `post_data` real del frontend para las formas que el discovery no fijó, lo loguea PII-safe y lo replica; fallbacks `{rut,dig}` / `{numero,tipo}`). Normalización con `idMovimiento`→`native_id` (idempotencia), `monto` str→int (formato chileno), `tipo`→signo. 682 tests (32 nuevos en `tests/unit/test_bci_source.py`), ruff+mypy verdes. **`bci` sigue `pending`**: falta el discovery de runtime (test manual con la cuenta BCI real → refinar señal post-submit / keywords 2FA / bodies vía captura `pii_safe`) y un sync real end-to-end en prod antes de activar. Plan: `backend-python/docs/SPRINT_BCI_SCRAPER_REWORK.md`.
 
 `2026-06-13` · **Sprint categorización que aprende — COMPLETO Y VERIFICADO EN PROD (migraciones 014 + 015 aplicadas).** **Bloque 0 (endurecer elegibilidad)**: hallazgo de diseño — `merchant_key` no es identidad de comercio, es etiqueta de pago; las etiquetas de pasarela (`mercadopago <token>`, paypal, sumup, khipu, webpay, transbank) son comercios distintos para gente distinta → `is_crowdsource_eligible` (función única, reusada por votos Y aliases) las excluye del global por primera palabra (`GATEWAY_LABEL_FIRST_WORDS`, lista corta deliberada — el quórum es el backstop), `_key_is_promotable` re-chequea al promover (cubre votos viejos sin backfill); override per-user intacto. **Fase 2 (renombre + nombre canónico)**: migración 015 (`merchant_aliases` per-user + `merchant_display_names` global por consenso; esta última sin guarda de prioridad porque no tiene escritor IA), endpoint `PATCH …/{id}/merchant` (la tx no se muta, la key se deriva de la tx del usuario), display resuelto al leer (`merchant_display_batch`: propio → global → Title Case, con guarda de lectura: las keys de transferencia jamás consultan el global), UI lápiz inline en Movimientos con copy según elegibilidad. Fase 3 (identidad canónica) solo diseño, motivada por el hallazgo del Bloque 0. 650 tests. **Verificación en prod (2026-06-13, vía conexión directa con OK del usuario)**: migraciones 014+015 aplicadas en orden, `audit_rls_policies.py` + `verify_merchant_priority_guard.py` exit 0; smoke real → renombres `60092 providencia`→Copec / `toledo`→Oxxo (eligible=true, aplicados a todas las tx), `mercadopago decop`→food quedó `eligible=false` (Bloque 0 confirmado en vivo), transferencia eligible=false, sin promoción al global con 1 usuario. Las 3 invariantes confirmadas con dato real.
 

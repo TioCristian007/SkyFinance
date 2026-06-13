@@ -44,11 +44,12 @@ Documentación **modular**. Este índice da el panorama; cada sección profundiz
 - **Sync BChile verificado end-to-end EN PRODUCCIÓN (2026-06-12)** — sprint ingesta cerrado: fill()+verificación post-fill, Chrome real en el worker, ciclo `needs_reconnection` anti-bloqueo, taxonomía de fallos + panel de operador. MVP para testers desbloqueado.
 - **Onboarding de testers endurecido (2026-06-12, segunda tanda)**: detección positiva del 2FA "aprueba en tu app" sobre el form Auth0 (la ambigüedad ya no se castiga como clave mala), status `waiting_2fa` visible en la app (wiring de progreso que faltaba), cobertura completa del ciclo `needs_reconnection`, capturas debug PII-safe, panel operador con resumen por status. Node legacy apagado (B-6 cerrado).
 - **Categorización que aprende (2026-06-12/13)**: Fase 1 (recategorizar enseña: voto per-user + consenso crowdsourced con quórum, frontera de privacidad) verificada en prod. Bloque 0 + Fase 2 construidos (pendiente migración 015 + deploy): el renombre de comercios enseña un alias per-user + nombre canónico global por consenso, con la misma frontera de identidad — las etiquetas de pasarela (`mercadopago*`, …) jamás se comparten porque no identifican UN comercio. Detalle en [08](estado-del-arte/08_ESTADO_Y_DEUDA.md).
+- **Scraper BCI reworkeado (2026-06-13)**: el portal BCI migró a `www.bci.cl` (widget embebido) + endpoints BFF v3.2; `bci_scraper.py` (ex `bci_direct.py`, **R-2 cerrado**) reconstruido con las lecciones BChile (fill/type por campo, verificación post-fill, ambigüedad nunca = clave mala) + body capture-and-replay. Gated verde (682 tests); `bci` sigue `pending` hasta sync real en prod. Detalle en [08](estado-del-arte/08_ESTADO_Y_DEUDA.md) B-2.
 
 **Lo que funciona**: ingesta canónica (BChile en prod), categorización, Mr. Money, ARIA, metas/desafíos, cifrado AES-256-GCM, RLS, audit log, data export Ley 19.628.
 
 **Lo que NO funciona hoy** (ver [08](estado-del-arte/08_ESTADO_Y_DEUDA.md)):
-- **Scraper BCI roto**: BCI cambió el dominio de su portal (`portalpersonas.bci.cl` ya no resuelve). Rework pendiente (sprint propio).
+- **Scraper BCI**: rework construido y gated (2026-06-13, `bci_scraper.py` — portal nuevo `www.bci.cl` + endpoints BFF v3.2); pendiente verificación en prod (test manual con cuenta real → refinar señal post-submit / 2FA / bodies → sync → activar `bci`). Ver [08](estado-del-arte/08_ESTADO_Y_DEUDA.md) B-2.
 - Lentitud general sin profiling (B-5) · `Sky.jsx` god-component (P1-1).
 
 **Dirección estratégica**: migrar de scraping a **SFA (Open Banking chileno, CMF)** en cuanto los bancos liberen sus APIs. El scraping queda como fallback. La fragilidad del scraping (anti-bot, cambios de portal) es precisamente el argumento para el SFA.

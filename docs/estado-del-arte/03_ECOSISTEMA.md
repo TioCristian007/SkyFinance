@@ -52,7 +52,7 @@ Definido en `backend-python/src/sky/ingestion/sources/__init__.py`. Estado a may
 | Identifier | Banco | Capa · Auth | Estado | Notas |
 |---|---|---|---|---|
 | `bchile` | Banco de Chile | SCRAPER · PASSWORD | **active** | Validado funcionando desde IP residencial. Bloqueado por anti-bot (Incapsula) desde datacenter Railway. 2FA app. |
-| `bci` | BCI | SCRAPER · PASSWORD | **pending** | Scraper roto: BCI cambió el dominio del portal (`portalpersonas.bci.cl` ya no resuelve). Requiere rework. 2FA. |
+| `bci` | BCI | SCRAPER · PASSWORD | **pending** | Rework construido (2026-06-13, `bci_scraper.py`): portal nuevo `www.bci.cl` + endpoints BFF v3.2 + body capture-and-replay. Gated verde; pendiente verificación en prod antes de activar. 2FA (Digital Pass). |
 | `falabella` | Banco Falabella | SCRAPER · PASSWORD | (removido del listado) | Skeleton, no operativo. |
 | `mercadopago`, `fintoc`, `santander.direct`, `bci.direct`, `sfa.<bank>`, `manual` | varios | AGGREGATOR/DIRECT/SFA/MANUAL | 🔴 Futuro | No implementados. |
 
@@ -61,7 +61,7 @@ Definido en `backend-python/src/sky/ingestion/sources/__init__.py`. Estado a may
 ## Scrapers — cómo funcionan
 
 - **BChile** (`bchile_scraper.py`): login en el portal → detecta 2FA (app BancoChile) → usa las **APIs REST internas** de BChile vía `page.evaluate()` con el token XSRF de las cookies. Más estable que scrapear HTML. Extrae balance + cartola (cuenta) + movimientos de tarjeta. Soporta sync incremental (`since`).
-- **BCI** (`bci_direct.py`): login → intercepta el JWT Bearer del tráfico a `apilocal.bci.cl` → llama directo a la API interna. **Actualmente roto** por cambio de dominio del portal.
+- **BCI** (`bci_scraper.py`): login en el widget de `www.bci.cl` (`#rut_aux` con `type()` + `#clave` con `fill()`, verificación post-fill incl. los hidden `#rut`/`#dig`) → intercepta el JWT Bearer del tráfico a `apilocal.bci.cl` → API interna BFF v3.2 (`cuentas-busquedas/por-rut`, `por-numero-cuenta`, `cuentas-movimientos/por-numero-cuenta`) con body capture-and-replay. **Rework construido 2026-06-13** (B-2); pendiente verificación en prod antes de activar.
 
 ## Open Banking — SFA (la dirección estratégica)
 

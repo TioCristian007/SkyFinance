@@ -191,8 +191,10 @@ PATCH solo actualizaba la tx y `upsert_merchant_category` sobrescribía ciego
 
 **Verificación en prod (2026-06-12)**: sync real desde Railway — login OK, 42 movimientos, balance correcto, `channel="chrome"`, categorización OK.
 
-### B-2 · Scraper BCI roto — dominio cambiado
-`portalpersonas.bci.cl` ya no resuelve (NXDOMAIN desde toda red probada; antes funcionaba). BCI cambió el dominio de su portal. Requiere rework: nuevo dominio + probablemente nuevos selectores y endpoints de API interna. BCI está en `pending`. Sprint propio pendiente.
+### B-2 · Scraper BCI — rework construido (2026-06-13), pendiente verificación en prod
+El portal migró del muerto `portalpersonas.bci.cl` (NXDOMAIN) al widget embebido en `www.bci.cl/corporativo/banco-en-linea/personas`; la API interna (`apilocal.bci.cl`, BFF v3.2) NO cambió de base, sí los endpoints. **Rework construido y gated** (commit `69a03e3`, `bci_scraper.py`) con el discovery (Fase 0) y las lecciones BChile: login `#rut_aux` (`type()`) + `#clave` (`fill()`) + verificación post-fill (incl. hidden `#rut`/`#dig` que el JS del form puebla), `_post_submit_flow` (ambigüedad jamás = clave mala), endpoints `cuentas-busquedas/por-rut` · `por-numero-cuenta` · `cuentas-movimientos/por-numero-cuenta` con JWT Bearer interceptado, y **body capture-and-replay** para las formas que el discovery no fijó. 32 tests nuevos.
+
+**Sigue abierto** hasta el discovery de runtime: un test manual con la cuenta BCI real (founder/cofundador) que confirme el redirect post-submit exacto, las keywords 2FA del portal nuevo y los bodies reales de `por-rut`/movimientos (capturados PII-safe al navegar a "Saldos y movimientos"), y luego un sync real end-to-end en prod. `bci` queda en `pending` hasta entonces. Riesgo a vigilar: anti-fraude **DetectCA easysol** desde datacenter (tipo B-1). Plan: `backend-python/docs/SPRINT_BCI_SCRAPER_REWORK.md`.
 
 ### ✅ B-3 · Auditoría — bug de runtime corregido (2026-05-25)
 
@@ -271,7 +273,7 @@ Hallazgos del barrido de calidad. No bloquean, pero se documentan para no acumul
 | ID | Item | Nota |
 |---|---|---|
 | ✅ **R-1** | ~~Lista de bancos duplicada en 4+ lugares~~ | **Cerrado 2026-05-23.** `SUPPORTED_BANKS` (incl. `account_type`) es la fuente única. `_DEFAULT_ACCOUNT_TYPE` eliminado de `banking.py` y `summary.py`. `DEFAULT_RULES` alineado a bchile+bci. |
-| **R-2** | Naming engañoso de BCI | `BCIDirectSource` (archivo `bci_direct.py`) tiene `source_identifier == "scraper.bci"` y BCI es un scraper (no API directa). Renombrar a `BCIScraperSource`/`bci_scraper.py` cuando se haga el rework B-2. |
+| ✅ **R-2** | ~~Naming engañoso de BCI~~ | **Cerrado 2026-06-13** (con el rework B-2). `BCIDirectSource`→`BCIScraperSource`, `bci_direct.py`→`bci_scraper.py` (+ registry, script, ruff/mypy/pyproject). El identificador `scraper.bci` se conserva (sin migración de routing rules). |
 | ✅ **R-3** | ~~`FalabellaScraperSource` muerto~~ | **Cerrado 2026-05-23.** Dejó de registrarse en `build_all_sources`; el archivo se conserva como skeleton de referencia. |
 | ✅ **R-4** | ~~`RuntimeWarning: coroutine never awaited`~~ | **Cerrado 2026-05-24.** Fixture autouse en `test_sync_job` deshabilita la tarea fire-and-forget de ARIA (no la verifican). Suite sin warnings (`pytest -W error::RuntimeWarning` verde). |
 | **R-5** | Webhooks sin verificación de firma | `webhooks.py`: TODO de validar HMAC-SHA256 nunca implementado. Confirmar que la ruta no haga nada sensible mientras Fintoc no esté cableado. Cerrar cuando se cablee Fintoc (agregar HMAC primero). |
@@ -304,6 +306,6 @@ Hallazgos del barrido de calidad. No bloquean, pero se documentan para no acumul
 1. **Cierre operativo restante**: correr `cleanup_bchile_accounts.sql` (D2) si no se corrió; crear bucket `scraper-debug` + `SCRAPER_DEBUG_BUCKET` en el worker (recomendado para el onboarding — captura el DOM del 2FA real). Verificar migración 013 aplicada antes del deploy del worker si hubiera duda.
 2. **Onboarding de testers reales** — sync BChile verificado en prod + 2FA endurecido (sprint testers). Cada tester conecta con su clave vigente; si tiene BChile Pass, la espera de aprobación ahora es visible (waiting_2fa).
 3. **Prep del pitch BCI** (objetivo de negocio inmediato — ver `Documentacion_Externa_Reuniones_Bancos/`).
-4. **B-2** rework scraper BCI (sprint propio).
+4. **B-2** — verificación en prod del rework BCI (construido y gated 2026-06-13): test manual con cuenta real → refinar señal post-submit / keywords 2FA / bodies con la captura PII-safe → sync end-to-end → activar `bci`. **Dos bancos a la vez.**
 5. **B-5** performance (profiling primero).
 6. Limpiar `api-v2` + warm standby Fly.io.
