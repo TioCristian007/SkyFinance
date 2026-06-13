@@ -65,7 +65,21 @@ Otros con Bearer (no esenciales): `ms-gestiondatoscliente-neg/v2.1/obtenerDatosC
 
 **Normalización** (mapear en `_to_canonical`): `idMovimiento` → `native_id` (idempotencia, como BChile); `monto` (str) → int; `tipo` (cargo/abono/débito/crédito) → signo; `fechaMovimiento` → date; `glosa` → `raw_description`.
 
-**Único gap restante (lo resuelve Fable en el primer test)**: los **bodies** de los POST. `por-numero-cuenta` ya usa `{numero, tipo}` (el código viejo lo hacía y funcionaba). Para `por-rut` (probable `{rut, dig}` o `{rut}`) y `cuentas-movimientos` (probable `{numero, tipo}` + quizá rango/paginación): interceptar el `request.post_data` que dispara el frontend durante la navegación a "Saldos y movimientos" en el primer test (el scraper ya escucha requests para el JWT — extender para loguear esos bodies PII-safe y replicarlos).
+### ✅ Test #1 + captura de bodies (2026-06-13) — login OK, bodies confirmados
+
+**Login VERIFICADO en local**: `bci_fields_verified` (RUT `type()` en `#rut_aux` pobló los hidden `#rut`/`#dig`; clave `fill()` en `#clave`) → `_post_submit_flow` dio "Sesión iniciada correctamente". El 2FA no se disparó en ese intento.
+
+**Lo que falló y el fix**: el scraper no extrajo datos porque (a) la captura del JWT estaba limitada al path del BFF de saldos, y (b) el heurístico de click al menú "Saldos y movimientos" no matchea el DOM nuevo (`bci_accounts_menu_not_found`). **Atajo robusto**: el dashboard dispara SOLO (sin navegar) `usuarios/<rut>`, `cashback/<rut>`, `obtenerDatosCliente` — todas con el JWT Bearer al host `apilocal.bci.cl`. → **Capturar el JWT de CUALQUIER request a `apilocal.bci.cl`** (no solo el BFF de saldos) y llamar los 3 endpoints **directo, sin navegar menú** (eliminar `_navigate_to_accounts_menu` como dependencia).
+
+**Bodies CONFIRMADOS** (captura PII-safe del `request.post_data` real):
+| Endpoint | Body exacto |
+|---|---|
+| `cuentas-busquedas/por-rut` | `{"rut": "<rut>-<dv>"}` — RUT **sin puntos**, con guion-dv (ej. `"22141522-1"`). NO `{rut,dig}`. |
+| `cuentas-busquedas/por-numero-cuenta` (saldo) | `{"cuentaNumero": "<numero>"}` — key **`cuentaNumero`**, SIN `tipo`. |
+| `cuentas-movimientos/por-numero-cuenta` (movs) | `{"numeroCuenta": "<numero>"}` — key **`numeroCuenta`** (≠ la de saldo), SIN `tipo`. |
+| `obtenerDatosCliente` | body vacío (no esencial). |
+
+⚠️ Trampas: las dos APIs de cuenta usan **nombres de clave distintos** para el número (`cuentaNumero` vs `numeroCuenta`); ninguna lleva `tipo` (el código viejo mandaba `{numero,tipo}` → incorrecto). El `numero` sale de la respuesta de `por-rut` (`{cuentas:[{numero,tipo}]}`).
 
 ---
 
