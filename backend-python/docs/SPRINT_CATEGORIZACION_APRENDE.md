@@ -1,6 +1,6 @@
 # SPRINT — Categorización que aprende (feedback loop + comercios canónicos)
 
-> **Estado**: Fase 1 VERIFICADA EN PROD (migración 014 aplicada). Bloque 0 (endurecimiento de elegibilidad) + Fase 2 (renombre + nombre canónico) CONSTRUIDOS (2026-06-13) — pendiente aplicar migración 015 + deploy + verificación en prod (ver §5). Fase 3 solo diseño.
+> **Estado**: ✅ **COMPLETO Y VERIFICADO EN PROD (2026-06-13)**. Fase 1 + Bloque 0 + Fase 2 desplegados; migraciones 014 y 015 aplicadas; smoke real en prod confirmado (ver §5 → "Verificación en prod"). Fase 3 solo diseño.
 > **Objetivo**: que cada categorización/renombre de un usuario mejore el sistema — para esa persona y, con respaldo de varios, para todos. Es el "§4 votos crowdsourced" que `categorizer.py:14` dejó diferido desde Fase 6.
 > **Doble valor**: producto (el diferencial "aprende de la comunidad") + dato más limpio para ARIA (tesis B2B). Avanza y solidifica a la vez.
 
@@ -88,7 +88,7 @@ CREATE TABLE public.merchant_category_votes (
 
 ## 5. Estado de ejecución (2026-06-12)
 
-### Fase 1 — ✅ CONSTRUIDA (pendiente: aplicar migración + deploy + verificación en prod)
+### Fase 1 — ✅ VERIFICADA EN PROD (migración 014 aplicada 2026-06-13)
 
 Commits: `fc3de31` (migración 014 + `verify_merchant_priority_guard.py` + pin del
 archivo) · `74e9650` (dominio `merchant_feedback` + umbral config) · `67c0a22`
@@ -198,6 +198,16 @@ nombre global) · `a63e3d7` (endpoint + UI). Tests: 598 → 650.
    → fila con `crowdsource_eligible=false`, nombre visible solo para el
    usuario y NADA en `merchant_display_names`; renombrar `mercadopago*…` →
    también `crowdsource_eligible=false`.
+
+### ✅ Verificación en prod (2026-06-13)
+
+Migraciones **014 y 015 aplicadas** vía conexión directa (orden migración-antes-de-deploy, como la 013). `audit_rls_policies.py` exit 0 (ambas tablas nuevas con RLS + policies correctas: `ma_user_own` per-user, `mdn_service_role_full_access` solo backend); `verify_merchant_priority_guard.py` exit 0 (la IA NO pisa un voto `user`, ejercido contra la DB real con ROLLBACK). Smoke real del fundador en prod:
+
+- **Renombres**: `60092 providencia` → **Copec** y `toledo` → **Oxxo**, ambos `crowdsource_eligible=true`, aplicados a TODAS las tx del comercio (display resuelto al leer). `merchant_display_names`: 0 filas (sin quórum con 1 usuario — sin promoción global).
+- **Recategorización** `mercadopago decop` → **food** quedó `crowdsource_eligible=false` → **Bloque 0 confirmado en vivo**: la etiqueta de pasarela no se promueve al global (en el smoke de Fase 1, antes del Bloque 0, esa misma key había quedado `true`; la re-categorización la corrigió sin backfill). El override per-user sigue vigente — aplica a las tx del fundador. Una sola fila de voto (recategorizar shopping→food actualizó en su lugar, sin duplicar).
+- **Transferencia** (`traspaso de:…`) → `crowdsource_eligible=false`. `merchant_categories source='user'`: 0 filas (anti-envenenamiento OK).
+
+Las tres invariantes (prioridad `user>ai`, frontera privacidad/identidad, anti-envenenamiento) confirmadas con **dato real en prod**, no solo por tests.
 
 ### Fase 3 — Propuesta de diseño (NO construir en este sprint)
 

@@ -13,7 +13,7 @@
 
 - **Producción viva**: `app.skyfinanzas.com` + `api.skyfinanzas.com` responden 200.
 - **Migración Python completa**: 13 fases cerradas, cutover hecho, Node archivado.
-- **Categorización**: feedback loop de 5 niveles **verificado en prod** (Fase 1, migración 014 aplicada). El renombre de comercios (Fase 2: aliases per-user + nombre canónico global) está construido y commiteado, **pendiente de aplicar migración 015 + deploy** (ver el bloque del sprint abajo).
+- **Categorización que aprende**: feedback loop de 5 niveles + Bloque 0 (elegibilidad de pasarelas) + renombre de comercios (Fase 2: aliases per-user + nombre canónico global) **verificados en prod** (migraciones 014 y 015 aplicadas 2026-06-13; smoke real confirmado — ver el bloque del sprint abajo).
 - **Display ingreso/gasto**: por signo del monto — ingresos en verde, gastos en rojo.
 - **Cifrado, RLS, audit (parcial), data export, rate limit, idempotencia**: implementados.
 - **Scraper BChile**: ✅ **validado end-to-end EN PRODUCCIÓN (2026-06-12)** — sync real desde Railway: login OK, 42 movimientos, balance correcto, `channel="chrome"`, categorización OK. El MVP para testers está desbloqueado.
@@ -135,7 +135,7 @@ PATCH solo actualizaba la tx y `upsert_merchant_category` sobrescribía ciego
   diseñada en el sprint doc — candidata a sprint propio.
 - Tests: 555 → 598.
 
-### Actualización 2026-06-13 — Fase 1 verificada en prod · Bloque 0 + Fase 2 construidos
+### Actualización 2026-06-13 — Categorización que aprende COMPLETA y verificada en prod (Fase 1 + Bloque 0 + Fase 2)
 
 - **Fase 1 VERIFICADA EN PROD** (migración 014 aplicada): votos, frontera de
   privacidad y anti-envenenamiento OK.
@@ -161,9 +161,11 @@ PATCH solo actualizaba la tx y `upsert_merchant_category` sobrescribía ciego
   Title Case; **guarda de lectura**: keys de transferencia jamás consultan el
   global, el alias propio sí aplica como renombre privado de la contraparte;
   fail-open). UI: lápiz inline en Movimientos (`Sky.jsx`) con copy según
-  elegibilidad. **⚠️ Migración 015 pendiente de aplicar — va ANTES del deploy**
-  (preflight `to_regclass` de ambas tablas → NULL; el código viejo no lee las
-  tablas nuevas, el nuevo las necesita).
+  elegibilidad. **✅ Migración 015 aplicada y verificada en prod (2026-06-13)**
+  (orden migración-antes-de-deploy; `audit_rls_policies.py` exit 0; smoke real:
+  `60092 providencia`→Copec y `toledo`→Oxxo `eligible=true` aplicados a todas las
+  tx; `mercadopago decop`→food quedó `eligible=false` confirmando Bloque 0;
+  transferencia `eligible=false`; sin promoción global con 1 usuario).
 - **Fase 3** (identidad canónica por variantes) sigue solo diseño — ahora
   motivada explícitamente por el hallazgo del Bloque 0 (¿una key = un comercio
   o varios?).
