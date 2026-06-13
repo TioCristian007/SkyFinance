@@ -559,7 +559,7 @@ async def test_list_accounts_usa_body_confirmado(monkeypatch) -> None:
     scraper = BCIScraperSource()
     sent: list[dict[str, Any]] = []
 
-    async def fake_post(page, jwt, path, body):
+    async def fake_post(page, jwt, path, body, headers=None):
         sent.append({"path": path, "body": body})
         return {"cuentas": [{"numero": "123", "tipo": "CCT"}]}
 
@@ -579,7 +579,7 @@ async def test_list_accounts_fallback_replay_si_confirmado_vacio(monkeypatch) ->
     scraper = BCIScraperSource()
     sent: list[dict[str, Any]] = []
 
-    async def fake_post(page, jwt, path, body):
+    async def fake_post(page, jwt, path, body, headers=None):
         sent.append(body)
         if len(sent) == 1:
             return {"cuentas": []}  # el confirmado no trajo cuentas
@@ -599,7 +599,7 @@ async def test_fetch_movements_usa_numero_cuenta_confirmado(monkeypatch) -> None
     scraper = BCIScraperSource()
     sent: dict[str, Any] = {}
 
-    async def fake_post(page, jwt, path, body):
+    async def fake_post(page, jwt, path, body, headers=None):
         sent["path"], sent["body"] = path, body
         return {"movimientos": [{"idMovimiento": "1"}]}
 
@@ -616,7 +616,7 @@ async def test_fetch_balance_usa_cuenta_numero_con_fallback(monkeypatch) -> None
     saldoContable con fallback a saldoDisponible."""
     scraper = BCIScraperSource()
 
-    async def fake_post(page, jwt, path, body):
+    async def fake_post(page, jwt, path, body, headers=None):
         assert path == BALANCE_PATH
         assert body == {"cuentaNumero": "123"}  # key exacta, sin tipo
         return {"saldoContable": 50000, "saldoDisponible": 48000}
@@ -624,7 +624,7 @@ async def test_fetch_balance_usa_cuenta_numero_con_fallback(monkeypatch) -> None
     monkeypatch.setattr(scraper, "_api_post", fake_post)
     assert await scraper._fetch_balance(None, "jwt", "123") == 50000
 
-    async def fake_post_disp(page, jwt, path, body):
+    async def fake_post_disp(page, jwt, path, body, headers=None):
         return {"saldoDisponible": 48000}
 
     monkeypatch.setattr(scraper, "_api_post", fake_post_disp)
@@ -671,6 +671,38 @@ async def test_api_post_omite_credenciales_y_bearer_minuscula() -> None:
     assert page.arg[1] == "JWT" and page.arg[0].endswith(ACCOUNTS_PATH)
 
 
+async def test_api_post_replica_headers_custom_sin_pisar_los_propios() -> None:
+    """Los headers custom capturados del frontend (x-apikey/canal/…) se mergean
+    en el fetch — el gateway BFF los exige (400 'Cabeceras incompletas', test
+    #5). Pero los nuestros (authorization/content-type/accept) SIEMPRE ganan: se
+    asignan DESPUÉS del merge. El apikey va como arg, nunca interpolado."""
+    page = FakeEvalPage(result={"cuentas": []})
+    extra = {"x-apikey": "SECRET_APIKEY_VALUE", "canal": "WEB"}
+    out = await BCIScraperSource()._api_post(page, "JWT", ACCOUNTS_PATH, {"rut": "x"}, extra)
+
+    assert out == {"cuentas": []}
+    assert page.script is not None
+    # mergea `extra` y recién DESPUÉS fija los nuestros → ganan los propios
+    assert "for (const k in extra)" in page.script
+    assert page.script.index("for (const k in extra)") < page.script.index(
+        'headers["Authorization"]'
+    )
+    # el apikey va como arg (4º), nunca interpolado en el source del fetch
+    assert page.arg[3] == {"x-apikey": "SECRET_APIKEY_VALUE", "canal": "WEB"}
+    assert "SECRET_APIKEY_VALUE" not in page.script
+    assert "x-apikey" not in page.script
+
+
+async def test_api_post_sin_headers_capturados_degrada() -> None:
+    """Sin headers capturados, _api_post manda {} como extra: degrada al
+    comportamiento previo (no rompe)."""
+    page = FakeEvalPage(result={"ok": 1})
+    out = await BCIScraperSource()._api_post(page, "JWT", ACCOUNTS_PATH, {"rut": "x"})
+
+    assert out == {"ok": 1}
+    assert page.arg[3] == {}  # extra_headers None → {}
+
+
 # ── _scrub_headers: instrumentación PII-safe (§20) ───────────────────────────
 
 
@@ -708,6 +740,85 @@ def test_scrub_headers_authorization_mayuscula_y_sin_esquema() -> None:
     out2 = BCIScraperSource._scrub_headers({"authorization": "eyJraw.tok.value"})
     assert out2["authorization"] == "[redacted]"
     assert "eyJraw" not in str(out2)
+
+
+def test_scrub_headers_redacta_credencial_por_nombre() -> None:
+    """El VALOR de un header con nombre de credencial (x-apikey/token/…) se
+    redacta en el log; canal queda visible y la key siempre visible (§20)."""
+    out = BCIScraperSource._scrub_headers(
+        {"x-apikey": "SECRET_APIKEY_VALUE", "x-session-token": "abc", "canal": "WEB"}
+    )
+    assert out["x-apikey"] == "[redacted]"
+    assert out["x-session-token"] == "[redacted]"
+    assert out["canal"] == "WEB"  # no sensible → valor visible
+    assert "SECRET_APIKEY_VALUE" not in str(out) and "abc" not in str(out)
+
+
+# ── _replayable_headers + _capture_headers: replay de headers (fix test #5) ──
+
+
+def test_replayable_headers_excluye_browser_managed_y_propios() -> None:
+    """Quedan solo los custom (x-apikey/canal/id-*…); se excluyen los forbidden
+    header names (cookie/origin/user-agent/sec-*) y los que seteamos nosotros
+    (authorization/content-type/accept). Keys a minúscula."""
+    raw = {
+        "Host": "apilocal.bci.cl",
+        "Cookie": "cf_clearance=x",
+        "Origin": "https://www.bci.cl",
+        "User-Agent": "UA",
+        "Sec-Fetch-Mode": "cors",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": "bearer TOK",
+        "X-ApiKey": "K",
+        "canal": "WEB",
+        "id-transaccion": "ABC123",
+    }
+    out = BCIScraperSource._replayable_headers(raw)
+    assert out == {"x-apikey": "K", "canal": "WEB", "id-transaccion": "ABC123"}
+
+
+class FakeRequest:
+    """Request falsa: all_headers() async devuelve el set completo (o explota)."""
+
+    def __init__(self, headers: dict[str, str], boom: bool = False):
+        self._headers = headers
+        self._boom = boom
+
+    async def all_headers(self) -> dict[str, str]:
+        if self._boom:
+            raise RuntimeError("all_headers falló")
+        return self._headers
+
+
+async def test_capture_headers_guarda_solo_replicables() -> None:
+    """Lee all_headers (set completo) y guarda en el store SOLO los replicables;
+    cookie/authorization/forbidden nunca entran (los pone el browser o nosotros)."""
+    store: dict[str, str] = {}
+    req = FakeRequest(
+        {
+            "authorization": "bearer TOK",
+            "cookie": "x=y",
+            "origin": "https://www.bci.cl",
+            "user-agent": "UA",
+            "sec-fetch-mode": "cors",
+            "content-type": "application/json",
+            "x-apikey": "K",
+            "canal": "WEB",
+        }
+    )
+    await BCIScraperSource()._capture_headers([req], store)
+    assert store == {"x-apikey": "K", "canal": "WEB"}
+
+
+async def test_capture_headers_vacio_o_error_no_rompen() -> None:
+    """Sin requests, o si all_headers explota, el store queda intacto y no se
+    levanta excepción (un fallo de captura jamás rompe el flujo, §20)."""
+    store: dict[str, str] = {}
+    await BCIScraperSource()._capture_headers([], store)
+    assert store == {}
+    await BCIScraperSource()._capture_headers([FakeRequest({}, boom=True)], store)
+    assert store == {}
 
 
 # ── Captura del JWT: cualquier path de apilocal.bci.cl (fix test #1) ──────────

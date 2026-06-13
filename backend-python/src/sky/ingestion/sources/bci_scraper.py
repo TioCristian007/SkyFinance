@@ -105,6 +105,30 @@ MOVEMENTS_PATH = "cuentas-movimientos/por-numero-cuenta"
 # si el confirmado no devuelve cuentas.
 BODY_CAPTURE_PATHS = (ACCOUNTS_PATH, MOVEMENTS_PATH)
 
+# Headers que NO se replican en _api_post (test #5): forbidden header names que
+# el browser gestiona/descarta igual, o los que seteamos nosotros. Lo que queda
+# (x-apikey, canal, id-transaccion, x-bci-*…) es lo que el gateway BFF exige —
+# faltaban y respondía 400 "Cabeceras incompletas".
+HEADER_REPLAY_DENY = frozenset(
+    {
+        "host",
+        "content-length",
+        "connection",
+        "cookie",
+        "origin",
+        "referer",
+        "user-agent",
+        "accept-encoding",
+        "content-type",
+        "accept",
+        "authorization",
+    }
+)
+HEADER_REPLAY_DENY_PREFIXES = ("sec-",)
+# Nombres de header cuyo VALOR se redacta al loguear (un x-apikey del BFF no debe
+# quedar en logs). La KEY siempre queda visible — es el diagnóstico.
+SENSITIVE_HEADER_HINTS = ("apikey", "api-key", "token", "secret", "auth", "session", "csrf")
+
 RUT_SELECTORS = [
     "#rut_aux",
     'input[name="rut_aux"]',
@@ -278,6 +302,12 @@ class BCIScraperSource(DataSource):
             # cuya forma exacta el discovery no fijó (por-rut, movimientos).
             jwt_token: list[str] = []
             captured_bodies: dict[str, str] = {}
+            # Headers custom del frontend (x-apikey/canal/id-*…) para replicar en
+            # _api_post: el gateway BFF los exige (400 "Cabeceras incompletas").
+            # Se leen de la 1ª request a apilocal con all_headers (async) fuera
+            # del listener sync — request.headers (sync) es parcial.
+            captured_headers: dict[str, str] = {}
+            apilocal_requests: list[Request] = []
             # Censo PII-safe de TODA request a *.bci.cl (dedup por host|seg|
             # método|scheme). Diagnóstico: saber si apilocal se llama, desde
             # qué host y con qué auth. Solo se acumula con debug activo.
@@ -292,6 +322,12 @@ class BCIScraperSource(DataSource):
                     if token:
                         jwt_token.append(token)
                         logger.info("bci_jwt_captured", url_prefix=request.url[:80])
+                # 1ª request a apilocal: se guarda el Request para leer su set
+                # COMPLETO de headers (all_headers, async) fuera del listener y
+                # replicar los custom que el gateway exige (test #5). El sync
+                # request.headers es parcial: omite origin/cookie/custom.
+                if JWT_HOST in request.url and not apilocal_requests:
+                    apilocal_requests.append(request)
                 # Refuerzo: capturar el post_data real del frontend (PII-safe).
                 if request.method == "POST" and JWT_HOST in request.url:
                     for suffix in BODY_CAPTURE_PATHS:
@@ -304,15 +340,6 @@ class BCIScraperSource(DataSource):
                                     path=suffix,
                                     body=self._scrub_body(post_data),
                                 )
-                                # Headers del frontend (gated, PII-safe): si
-                                # "Failed to fetch" persiste pese al fix de
-                                # credentials/scheme, replicamos su forma exacta.
-                                if settings.scraper_debug_capture:
-                                    logger.info(
-                                        "bci_request_headers",
-                                        path=suffix,
-                                        headers=self._scrub_headers(request.headers),
-                                    )
                 # Censo de red (gated): resumen PII-safe deduplicado.
                 if settings.scraper_debug_capture:
                     entry = self._census_entry(request)
@@ -339,9 +366,13 @@ class BCIScraperSource(DataSource):
                 await self._navigate_to_accounts_menu(page)
                 jwt = await self._await_jwt(page, jwt_token, network_census)
 
+                # Set COMPLETO de headers del frontend (para replicar los custom
+                # que el gateway exige). all_headers es async → se lee acá.
+                await self._capture_headers(apilocal_requests, captured_headers)
+
                 progress("Listando cuentas...")
                 accounts = await self._list_accounts(
-                    page, jwt, credentials.rut, captured_bodies
+                    page, jwt, credentials.rut, captured_bodies, captured_headers
                 )
                 if not accounts:
                     raise RecoverableIngestionError("BCI no devolvió cuentas")
@@ -355,11 +386,11 @@ class BCIScraperSource(DataSource):
                     if not numero:
                         continue
 
-                    balance = await self._fetch_balance(page, jwt, numero)
+                    balance = await self._fetch_balance(page, jwt, numero, captured_headers)
                     if first_balance is None and balance is not None:
                         first_balance = balance
 
-                    movs_raw = await self._fetch_movements(page, jwt, numero)
+                    movs_raw = await self._fetch_movements(page, jwt, numero, captured_headers)
                     for mov in movs_raw:
                         cm = self._to_canonical(mov, "bci", since)
                         if cm is not None:
@@ -944,7 +975,14 @@ class BCIScraperSource(DataSource):
 
     # ── API REST con JWT Bearer ───────────────────────────────────────────────
 
-    async def _api_post(self, page: Page, jwt: str, path: str, body: dict) -> Any:
+    async def _api_post(
+        self,
+        page: Page,
+        jwt: str,
+        path: str,
+        body: dict,
+        extra_headers: dict[str, str] | None = None,
+    ) -> Any:
         """POST a la API interna (BFF v3.2) desde el render de Chrome real.
 
         El fetch se emite IN-PAGE (no con el cliente HTTP de Playwright) a
@@ -952,14 +990,22 @@ class BCIScraperSource(DataSource):
         TLS fingerprint y el WAF (Cloudflare cf_clearance/__cf_bm + DetectCA
         easysol) que un cliente HTTP plano no pasa.
 
-        Espeja el request del propio frontend (test #4) para no gatillar un
-        bloqueo CORS a nivel red ("Failed to fetch"):
+        Espeja el request del propio frontend (tests #4/#5) para no romperse:
           · credentials: "omit" — apilocal autentica por Bearer, NO por cookies;
             "include" fuerza el modo CORS-con-credenciales y la respuesta de
             apilocal (ACAO '*' sin Allow-Credentials:true) no lo satisface → el
-            browser bloquea ANTES de ver el status.
+            browser bloquea ANTES de ver el status ("Failed to fetch", test #4).
           · esquema "bearer" en minúscula — exacto como lo manda el frontend
             (el censo del test #3 mostró auth_scheme='bearer').
+          · `extra_headers` — los headers custom que el frontend manda y el
+            gateway BFF exige (x-apikey, canal, id-transaccion, x-bci-*…): sin
+            ellos respondía 400 "Cabeceras incompletas" (test #5). Se capturan
+            con all_headers (_capture_headers) y se mergean acá; los nuestros
+            (authorization/content-type/accept) SIEMPRE ganan. Vacío → se
+            degrada al comportamiento previo (sin custom, no rompe).
+
+        Los args (url, jwt, body, extra) van por evaluate, nunca interpolados en
+        el script — el token y el apikey jamás entran al source del fetch.
 
         FALLBACK (no implementado): si el fetch in-page siguiera fallando, la
         alternativa es page.context.request.post() (APIRequestContext, no sujeto
@@ -967,15 +1013,18 @@ class BCIScraperSource(DataSource):
         con riesgo de fingerprint anti-bot. Por eso el in-page va primero.
         """
         return await page.evaluate(
-            """async ([url, jwt, bodyStr]) => {
+            """async ([url, jwt, bodyStr, extra]) => {
+                const headers = {};
+                if (extra) { for (const k in extra) headers[k] = extra[k]; }
+                // Los nuestros SIEMPRE ganan (el denylist ya sacó accept/
+                // content-type/authorization de extra; esto es defensa).
+                headers["Accept"] = "application/json";
+                headers["Content-Type"] = "application/json";
+                headers["Authorization"] = `bearer ${jwt}`;
                 const r = await fetch(url, {
                     method: "POST",
                     credentials: "omit",
-                    headers: {
-                        "Accept": "application/json",
-                        "Content-Type": "application/json",
-                        "Authorization": `bearer ${jwt}`,
-                    },
+                    headers: headers,
                     body: bodyStr,
                     referrer: window.location.href,
                 });
@@ -985,11 +1034,16 @@ class BCIScraperSource(DataSource):
                 }
                 return r.json();
             }""",
-            [f"{BCI_API_BASE}/{path}", jwt, json.dumps(body)],
+            [f"{BCI_API_BASE}/{path}", jwt, json.dumps(body), extra_headers or {}],
         )
 
     async def _list_accounts(
-        self, page: Page, jwt: str, rut: str, captured: dict[str, str]
+        self,
+        page: Page,
+        jwt: str,
+        rut: str,
+        captured: dict[str, str],
+        headers: dict[str, str] | None = None,
     ) -> list[dict]:
         """POST cuentas-busquedas/por-rut → lista de cuentas.
 
@@ -999,7 +1053,7 @@ class BCIScraperSource(DataSource):
         """
         body = self._accounts_body(rut)
         accounts = self._extract_accounts(
-            await self._api_post(page, jwt, ACCOUNTS_PATH, body)
+            await self._api_post(page, jwt, ACCOUNTS_PATH, body, headers)
         )
         if accounts:
             return accounts
@@ -1007,7 +1061,7 @@ class BCIScraperSource(DataSource):
         if replay != body:
             logger.info("bci_accounts_replay_fallback")
             accounts = self._extract_accounts(
-                await self._api_post(page, jwt, ACCOUNTS_PATH, replay)
+                await self._api_post(page, jwt, ACCOUNTS_PATH, replay, headers)
             )
         return accounts
 
@@ -1019,14 +1073,16 @@ class BCIScraperSource(DataSource):
             return cuentas if isinstance(cuentas, list) else []
         return raw if isinstance(raw, list) else []
 
-    async def _fetch_balance(self, page: Page, jwt: str, numero: str) -> int | None:
+    async def _fetch_balance(
+        self, page: Page, jwt: str, numero: str, headers: dict[str, str] | None = None
+    ) -> int | None:
         """POST cuentas-busquedas/por-numero-cuenta → saldoContable (fallback
         saldoDisponible). Body CONFIRMADO: {"cuentaNumero": "<n>"} (SIN tipo)."""
         if not numero:
             return None
         try:
             data = await self._api_post(
-                page, jwt, BALANCE_PATH, {"cuentaNumero": numero}
+                page, jwt, BALANCE_PATH, {"cuentaNumero": numero}, headers
             )
         except Exception as exc:
             logger.warning("bci_balance_fetch_failed", error=str(exc))
@@ -1038,7 +1094,9 @@ class BCIScraperSource(DataSource):
             saldo = data.get("saldoDisponible")
         return self._parse_int(saldo) if saldo is not None else None
 
-    async def _fetch_movements(self, page: Page, jwt: str, numero: str) -> list[dict]:
+    async def _fetch_movements(
+        self, page: Page, jwt: str, numero: str, headers: dict[str, str] | None = None
+    ) -> list[dict]:
         """POST cuentas-movimientos/por-numero-cuenta → movimientos.
 
         Body CONFIRMADO: {"numeroCuenta": "<n>"} (key ≠ la del saldo, SIN tipo).
@@ -1047,7 +1105,7 @@ class BCIScraperSource(DataSource):
             return []
         try:
             raw = await self._api_post(
-                page, jwt, MOVEMENTS_PATH, {"numeroCuenta": numero}
+                page, jwt, MOVEMENTS_PATH, {"numeroCuenta": numero}, headers
             )
         except Exception as exc:
             logger.warning("bci_movements_fetch_failed", numero_len=len(numero), error=str(exc))
@@ -1101,11 +1159,13 @@ class BCIScraperSource(DataSource):
     def _scrub_headers(headers: dict[str, str]) -> dict[str, str]:
         """Headers de un request del frontend, PII-safe (doctrina §20).
 
-        Redacta el token (`authorization` → solo el esquema + '[redacted]', lo
-        que confirma que el frontend manda 'bearer' en minúscula) y las cookies
-        por completo; en el resto redacta RUTs y corridas de dígitos. Las keys y
-        los headers no sensibles (content-type, accept, origin, x-*) quedan
-        visibles — es lo que necesitamos para replicar la forma del request.
+        Redacta: el token (`authorization` → solo el esquema + '[redacted]', lo
+        que confirma que el frontend manda 'bearer' en minúscula); las cookies
+        por completo; y el VALOR de headers cuyo nombre sugiere credencial
+        (apikey, token, secret, x-auth*…) — un x-apikey del BFF no debe quedar en
+        logs. En el resto redacta RUTs y corridas de dígitos. Las keys SIEMPRE
+        quedan visibles (es el diagnóstico: QUÉ headers manda el frontend) y los
+        no sensibles (content-type, accept, origin, canal…) muestran su valor.
         """
         out: dict[str, str] = {}
         for key, value in headers.items():
@@ -1118,12 +1178,64 @@ class BCIScraperSource(DataSource):
                     out[key] = f"{scheme} [redacted]"
                 else:
                     out[key] = "[redacted]"
-            elif lk in ("cookie", "set-cookie"):
+            elif lk in ("cookie", "set-cookie") or any(
+                hint in lk for hint in SENSITIVE_HEADER_HINTS
+            ):
                 out[key] = "[redacted]"
             else:
                 v = re.sub(r"\b\d{1,2}(?:\.?\d{3}){2}\s*-\s*[\dkK]\b", "[rut]", value)
                 out[key] = re.sub(r"\d{6,}", "[digits]", v)
         return out
+
+    @staticmethod
+    def _replayable_headers(headers: dict[str, str]) -> dict[str, str]:
+        """Subconjunto de headers del frontend que SÍ se replican en _api_post.
+
+        El gateway BFF respondía 400 "Cabeceras incompletas" (test #5): faltaban
+        los headers custom que el frontend manda. Se replican TODOS salvo (a) los
+        forbidden header names que el browser gestiona/descarta igual (host,
+        cookie, origin, user-agent, sec-*…) y (b) los que seteamos nosotros
+        (authorization, content-type, accept). Lo que queda — x-apikey, canal,
+        id-transaccion, x-bci-*… — es lo que faltaba. Keys a minúscula (como las
+        devuelve all_headers)."""
+        out: dict[str, str] = {}
+        for key, value in headers.items():
+            lk = key.lower()
+            if lk in HEADER_REPLAY_DENY:
+                continue
+            if any(lk.startswith(p) for p in HEADER_REPLAY_DENY_PREFIXES):
+                continue
+            out[lk] = value
+        return out
+
+    async def _capture_headers(
+        self, requests: list[Request], store: dict[str, str]
+    ) -> None:
+        """Lee el set COMPLETO de headers de la 1ª request a apilocal y guarda
+        los replicables en `store` (los consume _api_post).
+
+        `request.headers` (sync, en el listener) es PARCIAL — omite origin/
+        cookie/custom: el header que el gateway exige no aparece ahí.
+        `all_headers()` es async, por eso se lee acá (fuera del listener sync).
+        First-wins: el 400 es global del gateway, con la 1ª request (la del JWT,
+        garantizada) basta. Un fallo jamás rompe el flujo ni la captura del JWT
+        (§20). Real para replay; el log va scrubeado."""
+        if not requests:
+            return
+        try:
+            complete = await requests[0].all_headers()
+        except Exception as exc:
+            logger.warning("bci_all_headers_failed", error=str(exc))
+            return
+        replayable = self._replayable_headers(complete)
+        if replayable:
+            store.update(replayable)
+        if settings.scraper_debug_capture:
+            logger.info(
+                "bci_request_headers",
+                replayed=sorted(replayable.keys()),
+                headers=self._scrub_headers(complete),
+            )
 
     # ── Normalización ─────────────────────────────────────────────────────────
 
