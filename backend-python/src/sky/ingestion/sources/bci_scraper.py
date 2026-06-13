@@ -46,6 +46,7 @@ import tempfile
 import traceback
 from datetime import date, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 from playwright.async_api import Page, Request
 
@@ -160,7 +161,53 @@ ACCOUNTS_MENU_TEXT = [
     "mis cuentas",
     "cuentas",
     "saldos",
+    "cartola",
+    "cartolas",
+    "mis productos",
+    "productos",
+    "cuenta corriente",
+    "movimientos",
 ]
+
+# Sonda PII-safe de storage: el test JWT-shaped se hace EN JS y solo vuelve
+# {store: {key: bool}} — el valor NUNCA cruza a Python (doctrina §20).
+STORAGE_PROBE_JS = """() => {
+    const JWT_RE = /^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$/;
+    const probe = (store) => {
+        const out = {};
+        try {
+            for (let i = 0; i < store.length; i++) {
+                const k = store.key(i);
+                let v = "";
+                try { v = store.getItem(k) || ""; } catch (e) { v = ""; }
+                out[k] = JWT_RE.test(v);
+            }
+        } catch (e) {}
+        return out;
+    };
+    return { local: probe(window.localStorage), session: probe(window.sessionStorage) };
+}"""
+
+# Nudge best-effort: clickea el acceso a cuentas/movimientos/cartola por texto
+# (innerText / aria-label / title) o por substring de href. Solo navegación,
+# nunca submit de forms. Devuelve true si clickeó algo.
+MENU_CLICK_JS = """(keywords) => {
+    const hitText = (s) => !!s && keywords.some((kw) => s === kw || s.startsWith(kw));
+    const els = Array.from(document.querySelectorAll(
+        "a, button, li, span, [role='menuitem'], [role='link']"
+    ));
+    for (const el of els) {
+        const text = (el.innerText || el.textContent || "").trim().toLowerCase();
+        const aria = ((el.getAttribute && el.getAttribute("aria-label")) || "").trim().toLowerCase();
+        const title = ((el.getAttribute && el.getAttribute("title")) || "").trim().toLowerCase();
+        const href = ((el.getAttribute && el.getAttribute("href")) || "").toLowerCase();
+        if (hitText(text) || hitText(aria) || hitText(title)
+            || keywords.some((kw) => href.includes(kw))) {
+            try { el.click(); return true; } catch (e) {}
+        }
+    }
+    return false;
+}"""
 
 
 class BCIScraperSource(DataSource):
@@ -172,12 +219,17 @@ class BCIScraperSource(DataSource):
         *,
         post_submit_grace_sec: float = 25.0,
         poll_interval_sec: float = 1.0,
+        jwt_wait_sec: float = 30.0,
     ):
         self._timeout_sec = two_fa_timeout_sec
         # Cuánto esperar señales post-submit (error / 2FA / redirect) antes de
         # decidir por estructura. Override solo en tests (acelerar el loop).
         self._post_submit_grace_sec = post_submit_grace_sec
         self._poll_interval_sec = poll_interval_sec
+        # Ventana para que el dashboard emita el JWT a apilocal.bci.cl. El
+        # supuesto "lo dispara solo" resultó frágil (test #2) → se re-nudgea a
+        # mitad. Override solo en tests.
+        self._jwt_wait_sec = jwt_wait_sec
 
     @property
     def source_identifier(self) -> str:
@@ -224,6 +276,10 @@ class BCIScraperSource(DataSource):
             # cuya forma exacta el discovery no fijó (por-rut, movimientos).
             jwt_token: list[str] = []
             captured_bodies: dict[str, str] = {}
+            # Censo PII-safe de TODA request a *.bci.cl (dedup por host|seg|
+            # método|scheme). Diagnóstico: saber si apilocal se llama, desde
+            # qué host y con qué auth. Solo se acumula con debug activo.
+            network_census: dict[str, dict[str, Any]] = {}
 
             def capture_request(request: Request) -> None:
                 # JWT: cualquier request a apilocal.bci.cl con Bearer — el
@@ -246,6 +302,15 @@ class BCIScraperSource(DataSource):
                                     path=suffix,
                                     body=self._scrub_body(post_data),
                                 )
+                # Censo de red (gated): resumen PII-safe deduplicado.
+                if settings.scraper_debug_capture:
+                    entry = self._census_entry(request)
+                    if entry is not None:
+                        sig = (
+                            f"{entry['host']}|{entry['seg']}|"
+                            f"{entry['method']}|{entry['auth_scheme']}"
+                        )
+                        network_census[sig] = entry
 
             page.on("request", capture_request)
 
@@ -261,7 +326,7 @@ class BCIScraperSource(DataSource):
                 # (su heurístico puede no matchear el DOM del dashboard).
                 progress("Capturando token de sesión...")
                 await self._navigate_to_accounts_menu(page)
-                jwt = await self._await_jwt(jwt_token)
+                jwt = await self._await_jwt(page, jwt_token, network_census)
 
                 progress("Listando cuentas...")
                 accounts = await self._list_accounts(
@@ -681,52 +746,182 @@ class BCIScraperSource(DataSource):
             return auth[len("Bearer "):]
         return None
 
-    async def _await_jwt(self, jwt_token: list[str]) -> str:
-        """Espera ~15s a que el dashboard emita el primer Bearer a
-        apilocal.bci.cl (el listener lo captura). El flujo depende de ESTO, no
-        de la navegación al menú."""
-        for _ in range(30):
+    async def _await_jwt(
+        self, page: Page, jwt_token: list[str], network_census: dict[str, dict[str, Any]]
+    ) -> str:
+        """Espera ~`jwt_wait_sec` a que el dashboard emita el primer Bearer a
+        apilocal.bci.cl (el listener lo captura). A mitad de la espera re-corre
+        el nudge una vez (la home no pega apilocal hasta navegar — test #2).
+        Si nunca llega → diagnóstico PII-safe de máxima información (censo +
+        sonda de token + DOM) y raise."""
+        iters = max(2, int(self._jwt_wait_sec / self._poll_interval_sec))
+        midpoint = iters // 2
+        renudged = False
+        for i in range(iters):
             if jwt_token:
+                if settings.scraper_debug_capture:
+                    logger.info("bci_network_census", entries=list(network_census.values()))
                 return jwt_token[0]
-            await asyncio.sleep(0.5)
+            if i == midpoint and not renudged:
+                renudged = True
+                await self._navigate_to_accounts_menu(page)
+            await asyncio.sleep(self._poll_interval_sec)
+        await self._emit_jwt_timeout_diagnostics(page, network_census)
         raise RecoverableIngestionError(
             "No se capturó el JWT de BCI — el dashboard autenticado no emitió "
             "ninguna request con Bearer a apilocal.bci.cl en la ventana de espera."
         )
 
+    async def _emit_jwt_timeout_diagnostics(
+        self, page: Page, network_census: dict[str, dict[str, Any]]
+    ) -> None:
+        """Máxima información PII-safe antes del raise por timeout (§20).
+
+        Gated tras scraper_debug_capture. Censo de red + sonda de
+        storage/cookies + URLs de frames + captura DOM scrubeada. Todo
+        envuelto: un fallo de diagnóstico jamás enmascara el raise."""
+        if not settings.scraper_debug_capture:
+            return
+        try:
+            logger.info("bci_network_census", entries=list(network_census.values()))
+        except Exception as exc:
+            logger.warning("bci_network_census_failed", error=str(exc))
+        await self._probe_tokens(page)
+        try:
+            logger.info("bci_frames", urls=[self._safe_url(f.url) for f in page.frames])
+        except Exception as exc:
+            logger.info("bci_frames_failed", error=str(exc))
+        await self._capture_debug(page, "jwt_timeout", pii_safe=True)
+
+    async def _probe_tokens(self, page: Page) -> None:
+        """Sonda PII-safe de localStorage/sessionStorage/cookies en busca del
+        token (§20: solo key names, hosts, booleans — jamás valores).
+
+        Si el token vive en storage/cookie, el fix real lo lee directo, sin
+        depender de que el dashboard dispare una request a apilocal."""
+        findings: list[dict[str, Any]] = []
+        for frame in page.frames:
+            try:
+                data = await frame.evaluate(STORAGE_PROBE_JS)
+            except Exception:
+                continue  # cross-origin / contexto destruido → se ignora
+            if not isinstance(data, dict):
+                continue
+            frame_host = urlsplit(frame.url).hostname or ""
+            findings.extend(
+                self._safe_storage_findings(
+                    frame_host, data.get("local", {}), data.get("session", {})
+                )
+            )
+        logger.info("bci_token_probe_storage", findings=findings)
+        try:
+            cookies = await page.context.cookies()
+        except Exception as exc:
+            logger.info("bci_token_probe_cookies_failed", error=str(exc))
+            return
+        logger.info(
+            "bci_token_probe_cookies", cookies=self._safe_cookie_summary(cookies)
+        )
+
+    @staticmethod
+    def _census_entry(request: Request) -> dict[str, Any] | None:
+        """Resumen PII-safe de una request a *.bci.cl para el censo de red.
+
+        host + primer segmento de path (dígitos redactados) + método +
+        has_auth + auth_scheme (primera palabra del header Authorization;
+        '[opaque]' si no parece un esquema — nunca se filtra un token crudo).
+        None si el host no es *.bci.cl (§20)."""
+        parts = urlsplit(request.url)
+        host = parts.hostname or ""
+        if not host.endswith("bci.cl"):
+            return None
+        segs = [s for s in parts.path.split("/") if s]
+        seg = BCIScraperSource._redact_digits(segs[0]) if segs else ""
+        auth = request.headers.get("authorization", "")
+        scheme: str | None = None
+        if auth:
+            scheme = auth.split(" ", 1)[0]
+            if len(scheme) > 12 or not scheme.isalpha():
+                scheme = "[opaque]"
+        return {
+            "host": host,
+            "seg": seg,
+            "method": request.method,
+            "has_auth": bool(auth),
+            "auth_scheme": scheme,
+        }
+
+    @staticmethod
+    def _safe_storage_findings(
+        frame_host: str, local: Any, session: Any
+    ) -> list[dict[str, Any]]:
+        """Findings PII-safe de storage: frame_host + store + key (dígitos
+        redactados) + looks_like_jwt (bool). El VALOR nunca entra — el test
+        JWT-shaped se hizo en JS y solo vuelve el booleano (§20)."""
+        out: list[dict[str, Any]] = []
+        for store_name, items in (("local", local), ("session", session)):
+            if not isinstance(items, dict):
+                continue
+            for key, looks in items.items():
+                out.append(
+                    {
+                        "frame_host": frame_host,
+                        "store": store_name,
+                        "key": BCIScraperSource._redact_digits(str(key)),
+                        "looks_like_jwt": bool(looks),
+                    }
+                )
+        return out
+
+    @staticmethod
+    def _safe_cookie_summary(cookies: list[Any]) -> list[dict[str, str]]:
+        """Nombre + dominio de las cookies de bci.cl. NUNCA el valor ni la
+        expiración (§20)."""
+        out: list[dict[str, str]] = []
+        for c in cookies:
+            domain = str(c.get("domain", ""))
+            if "bci.cl" not in domain:
+                continue
+            out.append(
+                {"name": BCIScraperSource._redact_digits(str(c.get("name", ""))), "domain": domain}
+            )
+        return out
+
+    @staticmethod
+    def _safe_url(url: str) -> str:
+        """URL sin query/fragment y con RUT/dígitos largos redactados (§20)."""
+        base = url.split("?", 1)[0].split("#", 1)[0]
+        base = re.sub(r"\b\d{1,2}(?:\.?\d{3}){2}\s*-\s*[\dkK]\b", "[rut]", base)
+        return BCIScraperSource._redact_digits(base)
+
+    @staticmethod
+    def _redact_digits(s: str) -> str:
+        """Redacta corridas de 6+ dígitos (RUT sin formato, número de cuenta)."""
+        return re.sub(r"\d{6,}", "[digits]", s or "")
+
     # ── Navegación al menú de cuentas (nudge best-effort) ─────────────────────
 
     async def _navigate_to_accounts_menu(self, page: Page) -> None:
-        """Nudge best-effort: intenta clickear "Saldos y movimientos" para
-        empujar al frontend a disparar requests.
+        """Nudge best-effort en TODOS los frames: clickea el acceso a
+        cuentas/movimientos/cartola para empujar al frontend a pegarle a
+        apilocal.bci.cl (la home no lo hace sola — test #2).
 
-        NO es crítico: el dashboard autenticado dispara solo las requests con
-        el JWT a apilocal.bci.cl, así que el flujo espera el token vía
-        _await_jwt encuentre o no este menú. Cualquier excepción (DOM distinto,
-        contexto destruido por una navegación en curso) se traga."""
-        try:
-            clicked = await page.evaluate(
-                """(keywords) => {
-                    for (const el of Array.from(document.querySelectorAll("a, button, li, span"))) {
-                        const text = el.innerText?.trim().toLowerCase() || "";
-                        if (keywords.some((kw) => text === kw || text.startsWith(kw))) {
-                            el.click();
-                            return true;
-                        }
-                    }
-                    return false;
-                }""",
-                ACCOUNTS_MENU_TEXT,
-            )
-        except Exception as exc:
-            logger.info("bci_dashboard_nudge_skipped", error=str(exc))
-            return
-        if clicked:
-            logger.info("bci_dashboard_nudge_clicked")
-            await asyncio.sleep(4)
-        else:
-            logger.info("bci_dashboard_nudge_no_menu")
-            await asyncio.sleep(2)
+        NO es crítico ni fatal: el flujo espera el JWT vía _await_jwt encuentre
+        o no este menú. Matchea por innerText / aria-label / title y por
+        substring de href; itera frames (el view de cuentas puede ser un
+        iframe). Solo clicks de navegación, nunca submit. Cualquier excepción
+        por frame se traga."""
+        for frame in page.frames:
+            try:
+                clicked = await frame.evaluate(MENU_CLICK_JS, ACCOUNTS_MENU_TEXT)
+            except Exception:
+                continue  # cross-origin / contexto destruido → siguiente frame
+            if clicked:
+                logger.info("bci_dashboard_nudge_clicked")
+                await asyncio.sleep(4)
+                return
+        logger.info("bci_dashboard_nudge_no_menu")
+        await asyncio.sleep(2)
 
     # ── API REST con JWT Bearer ───────────────────────────────────────────────
 
@@ -1030,7 +1225,9 @@ class BCIScraperSource(DataSource):
         html = re.sub(r'value="[^"]*"', 'value="[redacted]"', html)
         html = re.sub(r"value='[^']*'", "value='[redacted]'", html)
         html = re.sub(r"\b\d{1,2}(?:\.?\d{3}){2}\s*-\s*[\dkK]\b", "[rut]", html)
-        html = re.sub(r"\b\d{7,10}\b", "[digits]", html)
+        # \d{6,} (no \d{7,10}): el DOM autenticado puede mostrar números de
+        # cuenta de cualquier largo — mejor redactar de más que de menos (§20).
+        html = re.sub(r"\d{6,}", "[digits]", html)
         return html
 
     async def _upload_debug_capture(

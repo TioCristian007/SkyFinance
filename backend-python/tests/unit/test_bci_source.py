@@ -61,13 +61,26 @@ PERSONAS_URL = "https://www.bci.cl/personas"
 TWOFA_BODY = "aprueba el ingreso desde tu app bci digital pass para continuar"
 
 
-def _scraper(two_fa_timeout_sec: int = 0, grace: float = 0.05) -> BCIScraperSource:
-    """Scraper con timings de test: poll rápido, grace y timeout cortos."""
+def _scraper(
+    two_fa_timeout_sec: int = 0, grace: float = 0.05, jwt_wait: float = 0.04
+) -> BCIScraperSource:
+    """Scraper con timings de test: poll rápido, grace/timeout/jwt-wait cortos."""
     return BCIScraperSource(
         two_fa_timeout_sec=two_fa_timeout_sec,
         post_submit_grace_sec=grace,
         poll_interval_sec=0.01,
+        jwt_wait_sec=jwt_wait,
     )
+
+
+@pytest.fixture
+def no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Anula asyncio.sleep en el módulo para que los nudges/poll no bloqueen."""
+
+    async def _fast(*_a: Any, **_k: Any) -> None:
+        return None
+
+    monkeypatch.setattr("sky.ingestion.sources.bci_scraper.asyncio.sleep", _fast)
 
 
 # ── Harness de login (fill / verify) ─────────────────────────────────────────
@@ -647,6 +660,187 @@ def test_jwt_capture_ignora_otro_host_o_sin_bearer() -> None:
     # apilocal pero sin Bearer → no captura
     assert f(f"https://{JWT_HOST}/x", {"authorization": "Basic abc"}) is None
     assert f(f"https://{JWT_HOST}/x", {}) is None
+
+
+# ── Diagnóstico de timeout del JWT: censo + sonda (PII-safe, §20) ─────────────
+
+
+class FakeReq:
+    """Request falsa para _census_entry (url/method/headers)."""
+
+    def __init__(self, url: str, method: str = "GET", auth: str | None = None):
+        self.url = url
+        self.method = method
+        self.headers = {"authorization": auth} if auth is not None else {}
+
+
+def test_census_entry_pii_safe() -> None:
+    e = BCIScraperSource._census_entry(
+        FakeReq("https://apilocal.bci.cl/bci-produccion/api-bci/x", "POST", "Bearer T.T.T")
+    )
+    assert e == {
+        "host": "apilocal.bci.cl", "seg": "bci-produccion",
+        "method": "POST", "has_auth": True, "auth_scheme": "Bearer",
+    }
+    # host no-bci.cl (ej. el anti-fraude easysol) → fuera del censo
+    assert BCIScraperSource._census_entry(FakeReq("https://detectca.easysol.net/x")) is None
+    # sin auth
+    e2 = BCIScraperSource._census_entry(FakeReq("https://www.bci.cl/personas"))
+    assert e2 is not None
+    assert e2["has_auth"] is False and e2["auth_scheme"] is None and e2["seg"] == "personas"
+
+
+def test_census_entry_redacta_digitos_y_opaca_scheme() -> None:
+    # primer segmento con corrida de dígitos → redactado
+    e = BCIScraperSource._census_entry(FakeReq("https://www.bci.cl/12345678/x"))
+    assert e is not None and e["seg"] == "[digits]"
+    # Authorization con token crudo (sin esquema reconocible) → nunca se filtra
+    e2 = BCIScraperSource._census_entry(
+        FakeReq("https://apilocal.bci.cl/x", "GET", "eyJhbGciOiJIUzI1Ni.abc.def")
+    )
+    assert e2 is not None and e2["auth_scheme"] == "[opaque]"
+    assert "eyJ" not in str(e2)
+
+
+def test_safe_cookie_summary_solo_nombre_y_dominio() -> None:
+    cookies = [
+        {"name": "JSESSIONID", "value": "SECRET-VALUE", "domain": ".bci.cl", "expires": 123},
+        {"name": "tok12345678", "value": "x", "domain": "apilocal.bci.cl"},
+        {"name": "ga", "value": "y", "domain": ".google.com"},  # fuera de bci.cl
+    ]
+    out = BCIScraperSource._safe_cookie_summary(cookies)
+
+    assert {"name": "JSESSIONID", "domain": ".bci.cl"} in out
+    assert {"name": "tok[digits]", "domain": "apilocal.bci.cl"} in out  # key redactada
+    assert all("google" not in c["domain"] for c in out)  # filtrado por dominio
+    flat = str(out)
+    assert "SECRET-VALUE" not in flat and "123" not in flat  # ni valor ni expiry
+
+
+def test_safe_storage_findings_no_filtra_valores() -> None:
+    out = BCIScraperSource._safe_storage_findings(
+        "www.bci.cl",
+        {"access_token": True, "theme": False, "uid_987654": True},
+        {"id_token": True},
+    )
+
+    assert {"frame_host": "www.bci.cl", "store": "local", "key": "access_token",
+            "looks_like_jwt": True} in out
+    assert {"frame_host": "www.bci.cl", "store": "session", "key": "id_token",
+            "looks_like_jwt": True} in out
+    assert any(f["key"] == "uid_[digits]" for f in out)  # key con dígitos redactada
+    assert all("value" not in f for f in out)  # jamás el valor, solo el booleano
+
+
+def test_safe_url_quita_query_y_redacta() -> None:
+    safe = BCIScraperSource._safe_url(
+        "https://www.bci.cl/personas/cuenta/12345678?rut=22.141.522-1&t=abc#frag"
+    )
+    assert "?" not in safe and "#" not in safe
+    assert "12345678" not in safe and "22.141.522-1" not in safe
+    assert safe.startswith("https://www.bci.cl/personas/cuenta/")
+
+
+# ── Nudge: itera frames + best-effort ────────────────────────────────────────
+
+
+class FakeFrame:
+    def __init__(
+        self, url: str, *, menu_hit: bool = False, raises: bool = False,
+        storage: dict | None = None,
+    ):
+        self.url = url
+        self._menu_hit = menu_hit
+        self._raises = raises
+        self._storage = storage
+        self.evaluated = False
+
+    async def evaluate(self, script: str, arg: Any = None) -> Any:
+        self.evaluated = True
+        if self._raises:
+            raise RuntimeError("cross-origin frame")
+        if "localStorage" in script:  # STORAGE_PROBE_JS
+            return self._storage or {"local": {}, "session": {}}
+        return self._menu_hit  # MENU_CLICK_JS
+
+
+class FakeCtx:
+    def __init__(self, cookies: list[Any]):
+        self._cookies = cookies
+
+    async def cookies(self) -> list[Any]:
+        return self._cookies
+
+
+class FakeFramesPage:
+    def __init__(self, frames: list[FakeFrame], cookies: list[Any] | None = None):
+        self.frames = frames
+        self.context = FakeCtx(cookies or [])
+
+
+async def test_navigate_itera_todos_los_frames(no_sleep) -> None:
+    """El view de cuentas puede ser un iframe: el nudge prueba todos los frames
+    (y traga la excepción del cross-origin) hasta el primer click."""
+    f1 = FakeFrame("https://www.bci.cl/personas", raises=True)       # cross-origin → swallow
+    f2 = FakeFrame("https://www.bci.cl/personas/x", menu_hit=False)  # sin match
+    f3 = FakeFrame("https://apilocal.bci.cl/iframe", menu_hit=True)  # acá clickea
+    page = FakeFramesPage([f1, f2, f3])
+
+    await BCIScraperSource()._navigate_to_accounts_menu(page)
+
+    assert f1.evaluated and f2.evaluated and f3.evaluated  # iteró hasta el hit
+
+
+async def test_navigate_sin_menu_no_revienta(no_sleep) -> None:
+    page = FakeFramesPage([FakeFrame("https://www.bci.cl/x", menu_hit=False)])
+    await BCIScraperSource()._navigate_to_accounts_menu(page)  # no lanza
+
+
+# ── _await_jwt: éxito, timeout-diagnóstico y re-nudge ─────────────────────────
+
+
+async def test_await_jwt_retorna_token_apenas_aparece(no_sleep) -> None:
+    token = await _scraper(jwt_wait=0.1)._await_jwt(object(), ["TOK"], {})
+    assert token == "TOK"
+
+
+async def test_await_jwt_timeout_emite_diagnostico_y_renudge(no_sleep, monkeypatch) -> None:
+    """Sin JWT: re-nudge UNA vez (mitad de la espera) y diagnóstico de máxima
+    información antes de raise — el test #2 no dejó captura por esto."""
+    scraper = _scraper(jwt_wait=0.04)  # poll 0.01 → ~4 iters, mitad en 2
+    nudges: list[int] = []
+    diag: list[dict] = []
+
+    async def fake_nudge(self, page) -> None:
+        nudges.append(1)
+
+    async def fake_diag(self, page, census) -> None:
+        diag.append(census)
+
+    monkeypatch.setattr(BCIScraperSource, "_navigate_to_accounts_menu", fake_nudge)
+    monkeypatch.setattr(BCIScraperSource, "_emit_jwt_timeout_diagnostics", fake_diag)
+
+    with pytest.raises(RecoverableIngestionError):
+        await scraper._await_jwt(object(), [], {"sig": {"host": "x"}})
+
+    assert len(nudges) == 1  # re-nudge una sola vez
+    assert diag and diag[0] == {"sig": {"host": "x"}}  # diagnóstico con el censo
+
+
+async def test_probe_tokens_wiring_corre_sonda_por_frame(no_sleep) -> None:
+    """Smoke del wiring: corre el JS de storage por frame + cookies, sin lanzar.
+    La garantía PII-safe fuerte vive en los helpers puros de arriba
+    (_safe_storage_findings / _safe_cookie_summary)."""
+    frame = FakeFrame(
+        "https://www.bci.cl/personas",
+        storage={"local": {"access_token": True}, "session": {}},
+    )
+    cookies = [{"name": "SID", "value": "SECRET", "domain": ".bci.cl"}]
+    page = FakeFramesPage([frame], cookies=cookies)
+
+    await BCIScraperSource()._probe_tokens(page)
+
+    assert frame.evaluated  # corrió la sonda en el frame
 
 
 # ── R-2: rename + registro ───────────────────────────────────────────────────

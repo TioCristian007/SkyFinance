@@ -96,6 +96,21 @@ Cambios quirúrgicos en `bci_scraper.py` (NO se tocó el login que ya andaba). G
 
 **Pendiente**: test #2 (mismo comando, headful) → debería listar cuentas + movimientos. Si entra, sync real end-to-end en prod → activar `bci`.
 
+### ⚠️ Test #2 (2026-06-13) — login OK, JWT NO se captura + instrumentación de diagnóstico
+
+**Resultado**: login end-to-end OK (`bci_fields_verified` + "Sesión iniciada correctamente"). Falló la captura del JWT: `_await_jwt` hizo timeout (15s) sin interceptar **ninguna** request Bearer a `apilocal.bci.cl`, y el nudge no encontró menú (`bci_dashboard_nudge_no_menu`). **El supuesto "el dashboard dispara apilocal solo, sin navegar" resultó falso**: la home `www.bci.cl/personas` no pega `apilocal` hasta navegar al view de cuentas/movimientos, y el nudge era ciego al DOM real (solo top frame, solo innerText). **Peor**: el timeout hacía `raise` sin captura debug → se gastó un intento de cuenta real (lockout doctrinal) sin aprender nada.
+
+**Fix (commit siguiente, solo `bci_scraper.py` + tests; login y bodies intactos; `bci` sigue `pending`; todo gated tras `scraper_debug_capture`, PII-safe §20)** — el próximo test es de **máxima información**:
+
+1. **Censo de red** (`_census_entry` + listener): por cada request a `*.bci.cl`, resumen PII-safe deduplicado `{host, seg(1er path, dígitos redactados), método, has_auth, auth_scheme}` (`[opaque]` si el scheme no parece esquema → nunca un token crudo). Se loguea `bci_network_census` en éxito y en timeout. Objetivo: saber si `apilocal` se llama, desde qué host y con qué auth.
+2. **Sonda de token** (`_probe_tokens`, en el timeout antes del raise): recorre `page.frames`, enumera keys de local/sessionStorage y testea **en JS** si el valor es JWT-shaped (`^[\w-]+\.[\w-]+\.[\w-]+$`) → vuelve solo `key→bool` (el valor jamás cruza a Python); `context.cookies()` → nombres+dominios de cookies bci.cl. `bci_token_probe_storage` / `_cookies`. Objetivo: si el token vive en storage/cookie, el fix real lo lee directo sin depender de una request.
+3. **Captura DOM + frames** (`_emit_jwt_timeout_diagnostics`): `_capture_debug(page, "jwt_timeout", pii_safe=True)` + URLs de `page.frames` (sin query, RUT/dígitos redactados vía `_safe_url`). `_scrub_pii` endurecido `\d{7,10}`→`\d{6,}` (DOM autenticado = más PII). Objetivo: ver el menú real y si el view de cuentas es un iframe.
+4. **Nudge mejorado + ventana**: `_navigate_to_accounts_menu` itera **todos** los frames, matchea innerText/aria-label/title + substring de href, candidatos ampliados (`cartola`, `cartolas`, `mis productos`, `productos`, `cuenta corriente`, `movimientos`). `_await_jwt` sube ~15s→~30s (`jwt_wait_sec`) y re-corre el nudge **una vez** a mitad de la espera. Solo clicks de navegación, nunca submit.
+
+Tests: `test_bci_source.py` 35→45 (censo PII-safe + opaque guard, cookie/storage no filtran valores, `_safe_url`, nudge itera frames y traga excepciones, `_await_jwt` timeout → diagnóstico + re-nudge una vez). Gates verdes.
+
+**Pendiente**: **test #3** (mismo comando, headful, con `SCRAPER_DEBUG_CAPTURE=true`) → leer `bci_network_census` + `bci_token_probe_*` + la captura `jwt_timeout` para decidir el fix real (¿token en storage/cookie? ¿qué click dispara `apilocal`? ¿iframe?). Recién ahí, sync real → activar `bci`.
+
 ---
 
 ## FASE 1+ — Rework (build, tras la captura)
