@@ -637,6 +637,79 @@ def test_scrub_body_redacta_pii_preserva_keys() -> None:
     assert '"rut"' in out and '"tipo"' in out and "CCT" in out
 
 
+# ── _api_post: espeja el request del frontend (fix CORS test #4) ──────────────
+
+
+class FakeEvalPage:
+    """Page falsa que registra el script/arg pasados a evaluate()."""
+
+    def __init__(self, result: Any = None):
+        self.script: str | None = None
+        self.arg: Any = None
+        self._result = result
+
+    async def evaluate(self, script: str, arg: Any = None) -> Any:
+        self.script = script
+        self.arg = arg
+        return self._result
+
+
+async def test_api_post_omite_credenciales_y_bearer_minuscula() -> None:
+    """El fetch in-page espeja el frontend: credentials 'omit' (apilocal auth
+    por Bearer, no cookies → evita el bloqueo CORS) + esquema 'bearer' en
+    minúscula. Una regresión a 'include'/'Bearer' rompe la llamada."""
+    page = FakeEvalPage(result={"cuentas": []})
+    out = await BCIScraperSource()._api_post(page, "JWT", ACCOUNTS_PATH, {"rut": "x"})
+
+    assert out == {"cuentas": []}
+    assert page.script is not None
+    assert 'credentials: "omit"' in page.script
+    assert 'credentials: "include"' not in page.script
+    assert "`bearer ${jwt}`" in page.script
+    assert "`Bearer ${jwt}`" not in page.script
+    # url + jwt + body van como args (el jwt nunca se interpola en el script)
+    assert page.arg[1] == "JWT" and page.arg[0].endswith(ACCOUNTS_PATH)
+
+
+# ── _scrub_headers: instrumentación PII-safe (§20) ───────────────────────────
+
+
+def test_scrub_headers_redacta_token_cookie_y_digitos() -> None:
+    raw = {
+        "authorization": "bearer eyJhbGciOiJIUzI1NiJ9.payload.sig",
+        "cookie": "cf_clearance=SECRET; __cf_bm=ALSO-SECRET",
+        "content-type": "application/json",
+        "accept": "application/json",
+        "origin": "https://www.bci.cl",
+        "x-cuenta": "00012345678",
+    }
+    out = BCIScraperSource._scrub_headers(raw)
+
+    # token: queda el esquema (confirma 'bearer' minúscula), nunca el valor
+    assert out["authorization"] == "bearer [redacted]"
+    # cookie: redactada por completo (cf_clearance/__cf_bm anti-bot)
+    assert out["cookie"] == "[redacted]"
+    # dígitos largos redactados; headers no sensibles visibles
+    assert out["x-cuenta"] == "[digits]"
+    assert out["content-type"] == "application/json"
+    assert out["accept"] == "application/json"
+    assert out["origin"] == "https://www.bci.cl"
+    # nada del token ni de la cookie sobrevive en el dict serializado
+    flat = str(out)
+    assert "eyJhbGci" not in flat and "SECRET" not in flat and "00012345678" not in flat
+
+
+def test_scrub_headers_authorization_mayuscula_y_sin_esquema() -> None:
+    # 'Bearer' mayúscula → esquema preservado
+    out = BCIScraperSource._scrub_headers({"Authorization": "Bearer TOK.tok.tok"})
+    assert out["Authorization"] == "Bearer [redacted]"
+    assert "TOK.tok.tok" not in str(out)
+    # authorization sin espacio (token crudo, sin esquema) → todo redactado
+    out2 = BCIScraperSource._scrub_headers({"authorization": "eyJraw.tok.value"})
+    assert out2["authorization"] == "[redacted]"
+    assert "eyJraw" not in str(out2)
+
+
 # ── Captura del JWT: cualquier path de apilocal.bci.cl (fix test #1) ──────────
 
 

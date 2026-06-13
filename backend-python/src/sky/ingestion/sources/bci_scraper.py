@@ -304,6 +304,15 @@ class BCIScraperSource(DataSource):
                                     path=suffix,
                                     body=self._scrub_body(post_data),
                                 )
+                                # Headers del frontend (gated, PII-safe): si
+                                # "Failed to fetch" persiste pese al fix de
+                                # credentials/scheme, replicamos su forma exacta.
+                                if settings.scraper_debug_capture:
+                                    logger.info(
+                                        "bci_request_headers",
+                                        path=suffix,
+                                        headers=self._scrub_headers(request.headers),
+                                    )
                 # Censo de red (gated): resumen PII-safe deduplicado.
                 if settings.scraper_debug_capture:
                     entry = self._census_entry(request)
@@ -936,15 +945,36 @@ class BCIScraperSource(DataSource):
     # ── API REST con JWT Bearer ───────────────────────────────────────────────
 
     async def _api_post(self, page: Page, jwt: str, path: str, body: dict) -> Any:
+        """POST a la API interna (BFF v3.2) desde el render de Chrome real.
+
+        El fetch se emite IN-PAGE (no con el cliente HTTP de Playwright) a
+        propósito: conserva el path de red de Chrome real — cookies de sesión,
+        TLS fingerprint y el WAF (Cloudflare cf_clearance/__cf_bm + DetectCA
+        easysol) que un cliente HTTP plano no pasa.
+
+        Espeja el request del propio frontend (test #4) para no gatillar un
+        bloqueo CORS a nivel red ("Failed to fetch"):
+          · credentials: "omit" — apilocal autentica por Bearer, NO por cookies;
+            "include" fuerza el modo CORS-con-credenciales y la respuesta de
+            apilocal (ACAO '*' sin Allow-Credentials:true) no lo satisface → el
+            browser bloquea ANTES de ver el status.
+          · esquema "bearer" en minúscula — exacto como lo manda el frontend
+            (el censo del test #3 mostró auth_scheme='bearer').
+
+        FALLBACK (no implementado): si el fetch in-page siguiera fallando, la
+        alternativa es page.context.request.post() (APIRequestContext, no sujeto
+        a CORS) — pero usa el cliente HTTP de Playwright, no el render de Chrome,
+        con riesgo de fingerprint anti-bot. Por eso el in-page va primero.
+        """
         return await page.evaluate(
             """async ([url, jwt, bodyStr]) => {
                 const r = await fetch(url, {
                     method: "POST",
-                    credentials: "include",
+                    credentials: "omit",
                     headers: {
                         "Accept": "application/json",
                         "Content-Type": "application/json",
-                        "Authorization": `Bearer ${jwt}`,
+                        "Authorization": `bearer ${jwt}`,
                     },
                     body: bodyStr,
                     referrer: window.location.href,
@@ -1066,6 +1096,34 @@ class BCIScraperSource(DataSource):
         s = re.sub(r"\b\d{1,2}(?:\.?\d{3}){2}\s*-\s*[\dkK]\b", "[rut]", post_data)
         s = re.sub(r"\d{6,}", "[digits]", s)
         return s
+
+    @staticmethod
+    def _scrub_headers(headers: dict[str, str]) -> dict[str, str]:
+        """Headers de un request del frontend, PII-safe (doctrina §20).
+
+        Redacta el token (`authorization` → solo el esquema + '[redacted]', lo
+        que confirma que el frontend manda 'bearer' en minúscula) y las cookies
+        por completo; en el resto redacta RUTs y corridas de dígitos. Las keys y
+        los headers no sensibles (content-type, accept, origin, x-*) quedan
+        visibles — es lo que necesitamos para replicar la forma del request.
+        """
+        out: dict[str, str] = {}
+        for key, value in headers.items():
+            lk = key.lower()
+            if lk == "authorization":
+                # Solo se preserva el esquema si tiene forma "<scheme> <token>":
+                # un valor sin espacio sería el token crudo → se redacta entero.
+                scheme = value.split(" ", 1)[0] if value else ""
+                if " " in value and scheme.isalpha() and len(scheme) <= 12:
+                    out[key] = f"{scheme} [redacted]"
+                else:
+                    out[key] = "[redacted]"
+            elif lk in ("cookie", "set-cookie"):
+                out[key] = "[redacted]"
+            else:
+                v = re.sub(r"\b\d{1,2}(?:\.?\d{3}){2}\s*-\s*[\dkK]\b", "[rut]", value)
+                out[key] = re.sub(r"\d{6,}", "[digits]", v)
+        return out
 
     # ── Normalización ─────────────────────────────────────────────────────────
 

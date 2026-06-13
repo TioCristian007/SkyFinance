@@ -134,6 +134,20 @@ La instrumentación pagó: el diagnóstico apuntó al bug exacto en una corrida 
 
 **Pendiente para activar `bci`**: (1) **test #4** local (mismo comando) → con la captura del `bearer` arreglada debería **listar cuentas + movimientos + saldo** end-to-end; (2) **sync real en prod** (worker con Chrome real) → vigilar `DetectCA easysol` desde datacenter (riesgo tipo B-1); (3) recién ahí activar `bci` en `SUPPORTED_BANKS` → **dos bancos a la vez**.
 
+### ✅ Test #4 (2026-06-13) — JWT capturado, falla la API por CORS (`Failed to fetch`)
+
+El fix del `bearer` minúscula funcionó: `bci_jwt_captured` ✅, el nudge disparó `apilocal` hands-off, el token se capturó. Ahora falla **en la llamada a la API**: `_list_accounts` → `_api_post(por-rut)` → el `fetch()` in-page lanza `TypeError: Failed to fetch` (stack vía el wrapper Dynatrace `dtAWF/fetch` en `contenido.jsf` — ruido; la falla real es de red).
+
+**ROOT CAUSE**: `Failed to fetch` en un fetch cross-origin (`www.bci.cl` → `apilocal.bci.cl`) = **bloqueo CORS a nivel red**, no un 4xx. El endpoint anda (el frontend pegó a `por-rut` y capturamos su body). Causa: `_api_post` usaba `credentials: "include"`, que fuerza el **modo CORS-con-credenciales**; `apilocal` autentica por **Bearer (no cookies)** y su respuesta CORS (ACAO `*` sin `Allow-Credentials: true`) no satisface ese modo → el browser bloquea **antes** de ver el status. El frontend usa `credentials: omit`.
+
+**Fix aplicado** (solo `bci_scraper.py` + tests; login/bodies intactos; `bci` sigue `pending`; PII-safe §20):
+1. **`_api_post` espeja el frontend**: `credentials: "include"` → **`"omit"`** + `Authorization: \`Bearer ${jwt}\`` → **`\`bearer ${jwt}\``** (minúscula, como el censo). Accept/Content-Type/body/referrer intactos. Docstring documenta el porqué + el **fallback** `page.context.request.post()` (APIRequestContext, no sujeto a CORS, pero riesgo de fingerprint anti-bot con cf_clearance/__cf_bm + DetectCA → el in-page va primero para conservar el path de red de Chrome real que pasa el WAF; **no implementado**).
+2. **Instrumentación (gated, PII-safe)**: el listener ahora loguea `bci_request_headers` (headers del request del frontend a los `BODY_CAPTURE_PATHS`) vía `_scrub_headers` — `authorization` → solo el esquema + `[redacted]`, `cookie` → `[redacted]`, RUTs/dígitos redactados, resto visible. Si `Failed to fetch` persiste pese al fix, replicamos los headers exactos del frontend.
+
+Tests: `test_bci_source.py` 46→49 (`_api_post` pina `credentials:"omit"` + `` `bearer ${jwt}` ``; `_scrub_headers` no filtra authorization/cookie/dígitos y deja visible content-type/origin). Gates: ruff ✅ · mypy ✅ · pytest ✅ **699 passed, 1 skipped**.
+
+**Pendiente**: **test #5** local (mismo comando) → con `credentials:omit` + `bearer` minúscula, `por-rut` debería responder y listar cuentas → saldo + movimientos end-to-end. Si aún diera `Failed to fetch`, leer `bci_request_headers` para replicar la forma exacta. Después: sync prod → activar `bci`.
+
 ---
 
 ## FASE 1+ — Rework (build, tras la captura)
