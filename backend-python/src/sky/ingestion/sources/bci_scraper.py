@@ -3,18 +3,20 @@ sky.ingestion.sources.bci_scraper — Scraper BCI (Playwright + JWT Bearer).
 
 ESTRATEGIA:
     BCI expone APIs REST internas en apilocal.bci.cl (BFF v3.2) autenticadas
-    con JWT Bearer. El scraper hace login en el portal web; el dashboard
-    autenticado dispara SOLO requests a apilocal.bci.cl con el JWT (no hace
-    falta navegar al menú). El scraper intercepta ese Bearer del tráfico de red
-    y luego llama directamente a la API con los bodies CONFIRMADOS (test #1).
+    con JWT Bearer. El scraper hace login en el portal web; el portal autenticado
+    (app JSF en www.bci.cl/cl/bci/aplicaciones/) dispara las requests a
+    apilocal.bci.cl con el JWT al NAVEGAR a Saldos/Movimientos — NO desde la home
+    (test #2/#3). El scraper navega (nudge) e intercepta ese Bearer del tráfico
+    de red (esquema en MINÚSCULA, `bearer …` — test #3), luego llama directamente
+    a la API con los bodies CONFIRMADOS (test #1).
 
 FLUJO:
     1. goto portal BCI (www.bci.cl/corporativo/banco-en-linea/personas)
     2. type RUT en #rut_aux (el form parte en los hidden #rut/#dig) + fill #clave
     3. verificación post-fill (incl. que los hidden #rut/#dig se poblaron)
     4. submit DENTRO del form de #clave → resolver post-submit (error/2FA/éxito)
-    5. esperar el JWT Bearer que el dashboard dispara solo a apilocal.bci.cl
-       (nudge best-effort al menú; el flujo NO depende del click — test #1)
+    5. nudge a Saldos/Movimientos (la home no pega apilocal — test #2/#3) y
+       esperar el JWT `bearer` que esa navegación dispara a apilocal.bci.cl
     6. API: POST cuentas-busquedas/por-rut          body {"rut":"<rut>-<dv>"}
     7. API: POST cuentas-busquedas/por-numero-cuenta body {"cuentaNumero":"<n>"}
     8. API: POST cuentas-movimientos/por-numero-cuenta body {"numeroCuenta":"<n>"}
@@ -320,10 +322,10 @@ class BCIScraperSource(DataSource):
                     page, credentials.rut, credentials.password, jwt_token, progress
                 )
 
-                # El dashboard autenticado dispara SOLO requests con el JWT a
-                # apilocal.bci.cl; el listener las intercepta. La navegación al
-                # menú es un nudge best-effort — el flujo NO depende del click
-                # (su heurístico puede no matchear el DOM del dashboard).
+                # El portal autenticado pega apilocal.bci.cl (con el JWT) al
+                # navegar a Saldos/Movimientos, NO desde la home (test #2/#3).
+                # El nudge dispara esa navegación; _await_jwt lo re-corre a mitad
+                # de la espera. El listener intercepta el Bearer (case-insensitive).
                 progress("Capturando token de sesión...")
                 await self._navigate_to_accounts_menu(page)
                 jwt = await self._await_jwt(page, jwt_token, network_census)
@@ -733,17 +735,25 @@ class BCIScraperSource(DataSource):
     @staticmethod
     def _is_jwt_request(url: str, headers: dict[str, str]) -> str | None:
         """Token Bearer si la request es a apilocal.bci.cl con `Authorization:
-        Bearer …`, SIN importar el path.
+        bearer …`, SIN importar el path NI la capitalización del esquema.
 
         El dashboard dispara el JWT desde usuarios/<rut>, cashback/<rut> y
         obtenerDatosCliente — no solo el BFF de saldos. Capturar por host (no
         por el path del BFF) hace que el token aparezca sin depender del menú
-        (fix del test #1). None si no aplica."""
+        (fix del test #1).
+
+        CASE-INSENSITIVE (fix del test #3): el frontend de BCI manda el esquema
+        en MINÚSCULA (`authorization: bearer <token>`) — el censo de red lo
+        confirmó (`auth_scheme='bearer'`). El `startswith("Bearer ")`
+        case-sensitive anterior dejaba pasar el token pese a estar en CADA
+        request a apilocal → `_await_jwt` siempre hacía timeout. None si no
+        aplica."""
         if JWT_HOST not in url:
             return None
         auth = headers.get("authorization", "")
-        if auth.startswith("Bearer "):
-            return auth[len("Bearer "):]
+        prefix = "bearer "
+        if auth[: len(prefix)].lower() == prefix:
+            return auth[len(prefix):].strip() or None
         return None
 
     async def _await_jwt(

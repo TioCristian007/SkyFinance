@@ -662,6 +662,24 @@ def test_jwt_capture_ignora_otro_host_o_sin_bearer() -> None:
     assert f(f"https://{JWT_HOST}/x", {}) is None
 
 
+def test_jwt_capture_case_insensitive_bearer() -> None:
+    """El frontend de BCI manda el esquema en MINÚSCULA (`bearer <token>`) —
+    confirmado por el censo de red del test #3 (`auth_scheme='bearer'`). La
+    captura debe ser case-insensitive: el `startswith("Bearer ")` anterior
+    dejaba pasar el token pese a estar en CADA request a apilocal (root cause
+    del timeout del JWT)."""
+    f = BCIScraperSource._is_jwt_request
+    url = f"https://{JWT_HOST}/bci-produccion/api-bci/x"
+    # minúscula (lo que BCI manda de verdad), mayúscula y mixta → todas capturan
+    assert f(url, {"authorization": "bearer tok.abc.123"}) == "tok.abc.123"
+    assert f(url, {"authorization": "Bearer tok.abc.123"}) == "tok.abc.123"
+    assert f(url, {"authorization": "BEARER tok.abc.123"}) == "tok.abc.123"
+    # esquema bearer sin token → None (no hay nada que capturar)
+    assert f(url, {"authorization": "bearer "}) is None
+    # otro esquema (case-insensitive) sigue ignorado
+    assert f(url, {"authorization": "basic abc"}) is None
+
+
 # ── Diagnóstico de timeout del JWT: censo + sonda (PII-safe, §20) ─────────────
 
 

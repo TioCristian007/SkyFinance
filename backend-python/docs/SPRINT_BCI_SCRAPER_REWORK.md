@@ -113,6 +113,29 @@ Tests: `test_bci_source.py` 35→45 (censo PII-safe + opaque guard, cookie/stora
 
 ---
 
+### ✅ Test #3 (2026-06-13) — ROOT CAUSE: el JWT llega en `bearer` minúscula
+
+La instrumentación pagó: el diagnóstico apuntó al bug exacto en una corrida (el fundador navegó manualmente por Movimientos y Cartola para forzar el tráfico).
+
+**`bci_network_census`** — la línea de oro:
+```
+{'host': 'apilocal.bci.cl', 'seg': 'bci-produccion', 'method': 'GET',  'has_auth': True, 'auth_scheme': 'bearer'}
+{'host': 'apilocal.bci.cl', 'seg': 'bci-produccion', 'method': 'POST', 'has_auth': True, 'auth_scheme': 'bearer'}
+```
+`apilocal.bci.cl` **se llamó** (GET + POST) con `Authorization` presente y esquema **`bearer` en MINÚSCULA**. Pero `_is_jwt_request` matcheaba `auth.startswith("Bearer ")` (B mayúscula) → `"bearer eyJ…".startswith("Bearer ")` = `False`. **El token estuvo en cada request a apilocal; lo dejábamos pasar por un check case-sensitive.** El frontend de BCI manda el esquema en minúscula (común en JS: `headers: {Authorization: 'bearer ' + token}`).
+
+**Las otras sondas cerraron los caminos alternativos:**
+- **Storage**: todas las keys `looks_like_jwt: False` → el token **NO** vive en local/sessionStorage. Interceptar del request header (lo que ya hace el código) es el camino correcto, no leer storage.
+- **`bci_body_captured`**: `por-rut` → `{"rut":"[rut]"}` y `cuentas-movimientos/por-numero-cuenta` → `{"numeroCuenta":"[digits]"}` aparecieron en vivo → endpoints y bodies confirmados (test #1) correctos, y el frontend realmente los pega.
+- **`bci_frames`**: la app autenticada es un portal **JSF** (`www.bci.cl/cl/bci/aplicaciones/contenido.jsf` + `.../cartola/cuenta/cartolaCuenta.jsf`), **no** `www.bci.cl/personas`. El nudge clickeó OK (`bci_dashboard_nudge_clicked` ×2). Cookies de sesión: `JSESSIONID`, `X-CSRF-TOKEN`, `persist`, `userID`, `banca_cliente` (el JWT no está acá; va dinámico en el header).
+- **Cookies/host del anti-fraude**: `detectca.easysol.net` no apareció en el censo de esta corrida (sigue siendo el riesgo tipo B-1 a vigilar en datacenter; en local no bloqueó).
+
+**Fix aplicado** (solo `bci_scraper.py` + 1 test; quirúrgico; `bci` sigue `pending`): `_is_jwt_request` ahora matchea el esquema **case-insensitive** (`auth[:7].lower() == "bearer "`, devuelve el token con `.strip() or None`). Comentarios del módulo (ESTRATEGIA/FLUJO + inline en `fetch`) corregidos: el JWT lo dispara la **navegación** a Saldos/Movimientos, NO la home (test #2/#3); el esquema es minúscula. Test `test_jwt_capture_case_insensitive_bearer` (minúscula/mayúscula/mixta capturan, `bearer ` vacío y otros esquemas → None). Gates: ruff ✅ · mypy ✅ · pytest ✅ **696 passed, 1 skipped** (`test_bci_source.py` 45→46).
+
+**Pendiente para activar `bci`**: (1) **test #4** local (mismo comando) → con la captura del `bearer` arreglada debería **listar cuentas + movimientos + saldo** end-to-end; (2) **sync real en prod** (worker con Chrome real) → vigilar `DetectCA easysol` desde datacenter (riesgo tipo B-1); (3) recién ahí activar `bci` en `SUPPORTED_BANKS` → **dos bancos a la vez**.
+
+---
+
 ## FASE 1+ — Rework (build, tras la captura)
 
 Estructura esperada (a confirmar con el discovery):
