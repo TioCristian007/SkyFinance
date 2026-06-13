@@ -13,7 +13,7 @@
 
 - **Producción viva**: `app.skyfinanzas.com` + `api.skyfinanzas.com` responden 200.
 - **Migración Python completa**: 13 fases cerradas, cutover hecho, Node archivado.
-- **Categorización**: 3 capas funcionando en prod (~1.283 transacciones, 0 en `pending`, ~1.231 `done`, ~52 `failed` fallback "other"). El feedback loop de 5 niveles (sprint 2026-06-12 tercera tanda, ver abajo) está construido y commiteado, **pendiente de aplicar migración 014 + deploy**.
+- **Categorización**: feedback loop de 5 niveles **verificado en prod** (Fase 1, migración 014 aplicada). El renombre de comercios (Fase 2: aliases per-user + nombre canónico global) está construido y commiteado, **pendiente de aplicar migración 015 + deploy** (ver el bloque del sprint abajo).
 - **Display ingreso/gasto**: por signo del monto — ingresos en verde, gastos en rojo.
 - **Cifrado, RLS, audit (parcial), data export, rate limit, idempotencia**: implementados.
 - **Scraper BChile**: ✅ **validado end-to-end EN PRODUCCIÓN (2026-06-12)** — sync real desde Railway: login OK, 42 movimientos, balance correcto, `channel="chrome"`, categorización OK. El MVP para testers está desbloqueado.
@@ -134,6 +134,40 @@ PATCH solo actualizaba la tx y `upsert_merchant_category` sobrescribía ciego
   prod de la Fase 1. **Fase 3** (identidad canónica por variantes) solo
   diseñada en el sprint doc — candidata a sprint propio.
 - Tests: 555 → 598.
+
+### Actualización 2026-06-13 — Fase 1 verificada en prod · Bloque 0 + Fase 2 construidos
+
+- **Fase 1 VERIFICADA EN PROD** (migración 014 aplicada): votos, frontera de
+  privacidad y anti-envenenamiento OK.
+- **Bloque 0 (endurecer elegibilidad)**: un hallazgo de diseño obligó a
+  refinar la frontera ANTES del renombre — `merchant_key` NO es una identidad
+  de comercio, es una **etiqueta de pago**. Las etiquetas de pasarela/terminal
+  (`mercadopago <token>`, paypal, sumup, khipu, webpay, transbank) pueden ser
+  comercios distintos para gente distinta → crowdsourcearlas mezcla negocios
+  ajenos (y en wallets P2P filtra contrapartes). `is_crowdsource_eligible`
+  (**función única**, reusada por votos de categoría Y aliases) las excluye del
+  global por **primera palabra** de la key (`GATEWAY_LABEL_FIRST_WORDS`, sin
+  substring; lista corta deliberada — mejor sub-excluir, el quórum es el
+  backstop). `_key_is_promotable` re-chequea al promover (cubre votos viejos
+  persistidos como elegibles, sin backfill). Override per-user intacto.
+- **Fase 2 (renombre + nombre canónico)** construida: **migración 015**
+  (`merchant_aliases` per-user con RLS por usuario + `merchant_display_names`
+  global por consenso, RLS service_role only). `merchant_display_names` NO
+  lleva guarda de prioridad — a diferencia de `merchant_categories` no tiene
+  escritor IA, solo la promoción con quórum escribe. Endpoint
+  `PATCH /api/transactions/{id}/merchant` (la tx NO se muta; la `merchant_key`
+  se deriva de la tx del usuario, el cliente nunca la manda). Display resuelto
+  al leer (`categorizer.merchant_display_batch`: alias propio → alias global →
+  Title Case; **guarda de lectura**: keys de transferencia jamás consultan el
+  global, el alias propio sí aplica como renombre privado de la contraparte;
+  fail-open). UI: lápiz inline en Movimientos (`Sky.jsx`) con copy según
+  elegibilidad. **⚠️ Migración 015 pendiente de aplicar — va ANTES del deploy**
+  (preflight `to_regclass` de ambas tablas → NULL; el código viejo no lee las
+  tablas nuevas, el nuevo las necesita).
+- **Fase 3** (identidad canónica por variantes) sigue solo diseño — ahora
+  motivada explícitamente por el hallazgo del Bloque 0 (¿una key = un comercio
+  o varios?).
+- Tests: 598 → 650. Smoke `/api/health` 200 OK.
 
 ## ❌ Lo que NO funciona / bloqueadores
 
@@ -264,7 +298,7 @@ Hallazgos del barrido de calidad. No bloquean, pero se documentan para no acumul
 
 ## Prioridades sugeridas (orden)
 
-0. **Deploy Fase 1 categorización que aprende**: aplicar migración 014 en staging → `audit_rls_policies.py` + `verify_merchant_priority_guard.py` → prod → deploy Railway api+worker → smoke (recategorizar una tx → voto en `merchant_category_votes`; recategorizar una "Transferencia a:…" → `crowdsource_eligible=false` y nada en el global).
+0. **Deploy Fase 2 categorización que aprende** (Fase 1 ya en prod): preflight `to_regclass('public.merchant_aliases')` + `…merchant_display_names` → NULL → aplicar migración 015 en staging → `audit_rls_policies.py` → prod + re-audit → deploy Railway api+worker → smoke (renombrar comercio de una tx → fila en `merchant_aliases` con `crowdsource_eligible=true` + nombre en TODAS las tx del comercio; renombrar "Transferencia a:…" o `mercadopago*…` → `crowdsource_eligible=false` y nada en `merchant_display_names`).
 1. **Cierre operativo restante**: correr `cleanup_bchile_accounts.sql` (D2) si no se corrió; crear bucket `scraper-debug` + `SCRAPER_DEBUG_BUCKET` en el worker (recomendado para el onboarding — captura el DOM del 2FA real). Verificar migración 013 aplicada antes del deploy del worker si hubiera duda.
 2. **Onboarding de testers reales** — sync BChile verificado en prod + 2FA endurecido (sprint testers). Cada tester conecta con su clave vigente; si tiene BChile Pass, la espera de aprobación ahora es visible (waiting_2fa).
 3. **Prep del pitch BCI** (objetivo de negocio inmediato — ver `Documentacion_Externa_Reuniones_Bancos/`).

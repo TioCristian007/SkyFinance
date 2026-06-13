@@ -34,13 +34,17 @@ El asistente conversacional de Sky, sobre **Claude (Anthropic)**. Principios:
 
 Configuración (`sky.core.config`): modelo `claude-sonnet-4-6` (alias), `mr_money_max_tokens=4096`, `temperature=0.7`, prompt caching 5m.
 
-## Categorización en 3 capas
+## Categorización en 5 niveles (aprende del usuario)
 
-Orden estricto; cada capa solo invoca la siguiente si falla:
+Orden estricto; cada nivel solo invoca el siguiente si no resolvió (sprint "categorización que aprende", 2026-06-12/13):
 
-1. **Reglas deterministas** — ~25 regex. Sin tokens. (`categorizer.py`)
-2. **Caché de comercios** — tabla `merchant_categories`, lookup por prefijo progresivo (`"jumbo las condes" → "jumbo las" → "jumbo"`). Compartida entre todos los usuarios.
-3. **Claude API** — solo si las dos capas anteriores fallan. Modelo `claude-haiku-4-5`. El resultado se guarda en caché.
+0. **Votos propios** — tabla `merchant_category_votes`, prefix matching per-user. El usuario recategorizó ese comercio: override privado inmediato. Nunca lo pisa nada.
+1. **Caché global `source='user'`** — consenso crowdsourced (≥ N usuarios distintos, `merchant_vote_promotion_threshold`, default 3). Corrige una regla equivocada PARA TODOS; la IA no puede pisar estas filas.
+2. **Reglas deterministas** — ~25 regex. Sin tokens. (`categorizer.py`)
+3. **Caché de comercios** `source 'rule'/'ai'` — tabla `merchant_categories`, lookup por prefijo progresivo (`"jumbo las condes" → "jumbo las" → "jumbo"`). Compartida entre todos los usuarios. Va BAJO las reglas (solo el tier `'user'` las supera).
+4. **Claude API** — solo si todo lo anterior falla. Modelo `claude-haiku-4-5`. El resultado se guarda en caché.
+
+**Aprende del usuario**: recategorizar (PATCH) registra un voto; renombrar un comercio (`PATCH …/{id}/merchant`, Fase 2) registra un alias de display. Ambos aplican YA al usuario y, con quórum de N usuarios distintos, se promueven al global. **Frontera de identidad/privacidad**: transferencias, contrapartes personales y etiquetas de pasarela (`mercadopago*`, …) jamás se comparten — solo se crowdsourcea una key que identifica confiablemente UN comercio. Detalle en `backend-python/docs/SPRINT_CATEGORIZACION_APRENDE.md`.
 
 **Categoría especial `income`**: se asigna por reglas (monto positivo + glosa que matchea `abono|remuner|sueldo|salario|honorario|liquidaci|traspaso de:|...`). Ver nota crítica en [08](08_ESTADO_Y_DEUDA.md) — el display de ingreso/gasto en el frontend ahora usa el **signo del monto**, no la categoría, para robustez.
 

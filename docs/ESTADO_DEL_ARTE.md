@@ -40,9 +40,10 @@ Documentación **modular**. Este índice da el panorama; cada sección profundiz
 **Estado técnico (junio 2026)**:
 - Backend migrado de Node.js a **Python 3.12 (FastAPI + ARQ + Playwright)**. Las 13 fases de migración cerradas; cutover completo. Node archivado.
 - Producción viva: `app.skyfinanzas.com` (frontend React) + `api.skyfinanzas.com` (API Python), sobre Railway + Supabase + Anthropic.
-- ~1.283 transacciones reales procesadas. Categorización en 3 capas funcionando. 555 tests automatizados.
+- ~1.283 transacciones reales procesadas. Categorización con feedback loop de 5 niveles (recategorizar/renombrar enseña) verificada en prod. 650 tests automatizados.
 - **Sync BChile verificado end-to-end EN PRODUCCIÓN (2026-06-12)** — sprint ingesta cerrado: fill()+verificación post-fill, Chrome real en el worker, ciclo `needs_reconnection` anti-bloqueo, taxonomía de fallos + panel de operador. MVP para testers desbloqueado.
 - **Onboarding de testers endurecido (2026-06-12, segunda tanda)**: detección positiva del 2FA "aprueba en tu app" sobre el form Auth0 (la ambigüedad ya no se castiga como clave mala), status `waiting_2fa` visible en la app (wiring de progreso que faltaba), cobertura completa del ciclo `needs_reconnection`, capturas debug PII-safe, panel operador con resumen por status. Node legacy apagado (B-6 cerrado).
+- **Categorización que aprende (2026-06-12/13)**: Fase 1 (recategorizar enseña: voto per-user + consenso crowdsourced con quórum, frontera de privacidad) verificada en prod. Bloque 0 + Fase 2 construidos (pendiente migración 015 + deploy): el renombre de comercios enseña un alias per-user + nombre canónico global por consenso, con la misma frontera de identidad — las etiquetas de pasarela (`mercadopago*`, …) jamás se comparten porque no identifican UN comercio. Detalle en [08](estado-del-arte/08_ESTADO_Y_DEUDA.md).
 
 **Lo que funciona**: ingesta canónica (BChile en prod), categorización, Mr. Money, ARIA, metas/desafíos, cifrado AES-256-GCM, RLS, audit log, data export Ley 19.628.
 

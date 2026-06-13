@@ -1,6 +1,6 @@
 # SPRINT — Categorización que aprende (feedback loop + comercios canónicos)
 
-> **Estado**: Fase 1 CONSTRUIDA (2026-06-12) — pendiente aplicar migración 014 + deploy + verificación en prod (ver §5). Fase 2 gated a esa verificación; Fase 3 solo diseño.
+> **Estado**: Fase 1 VERIFICADA EN PROD (migración 014 aplicada). Bloque 0 (endurecimiento de elegibilidad) + Fase 2 (renombre + nombre canónico) CONSTRUIDOS (2026-06-13) — pendiente aplicar migración 015 + deploy + verificación en prod (ver §5). Fase 3 solo diseño.
 > **Objetivo**: que cada categorización/renombre de un usuario mejore el sistema — para esa persona y, con respaldo de varios, para todos. Es el "§4 votos crowdsourced" que `categorizer.py:14` dejó diferido desde Fase 6.
 > **Doble valor**: producto (el diferencial "aprende de la comunidad") + dato más limpio para ARIA (tesis B2B). Avanza y solidifica a la vez.
 
@@ -128,12 +128,86 @@ categorías) · `1085d76` (picker travel→insurance). Tests: 555 → 598.
    `crowdsource_eligible=true`; recategorizar una "Transferencia a: …" → fila
    con `crowdsource_eligible=false` y NADA nuevo en `merchant_categories`.
 
-### Fase 2 — NO arrancada
+### Bloque 0 — ✅ CONSTRUIDO (2026-06-13). Endurecer la elegibilidad para el global
 
-Gated a la verificación en prod de la Fase 1 (decisión del kickoff). El esquema
-de `merchant_aliases` es análogo al de votos (misma elegibilidad, mismo umbral).
+Commit `7a77821`. Hallazgo de diseño que motivó el bloque: `merchant_key` NO
+es una identidad de comercio, es una **etiqueta de pago**. Las etiquetas de
+pasarela/terminal (`mercadopago <token>`, …) pueden ser comercios distintos
+para gente distinta — promoverlas al global mezcla negocios ajenos y, en
+wallets P2P, filtra contrapartes. Detalle en el invariante §1.7.
+
+- `is_crowdsource_eligible` (función ÚNICA, reusada por votos de categoría y
+  por aliases de Fase 2) ahora devuelve `False` también para etiquetas de
+  pasarela. Match por **primera palabra** de la key normalizada
+  (`GATEWAY_LABEL_FIRST_WORDS`) — sin substring, para no excluir comercios
+  reales que contengan el token al medio (`feria mercadopago` sigue elegible).
+- Lista deliberadamente corta (`mercadopago`, `paypal`, `sumup`, `khipu`,
+  `webpay`, `transbank`). Principio: **mejor sub-excluir** — el umbral de N
+  usuarios es el backstop para lo no listado; marcar por error a `jumbo`/
+  `starbucks` sería peor. `mercadopago*` es el piso confirmado del kickoff.
+- `_key_is_promotable` también se endureció: re-chequea la etiqueta al
+  promover, así un voto viejo persistido como `eligible=true` (de antes de
+  este cambio) jamás llega al global — sin backfill de datos.
+- El override per-user sigue funcionando para las etiquetas excluidas (el
+  usuario las categoriza/renombra para sí; solo no se comparten).
+- Tests: `"mercadopago decop" → eligible=false`, `"jumbo las condes" →
+  eligible=true`, first-word matching, defensa en profundidad en
+  `_maybe_promote`/`_maybe_promote_alias`.
+
+### Fase 2 — ✅ CONSTRUIDA (2026-06-13). Renombre + nombre canónico (display)
+
+Commits: `8fe7a2c` (migración 015 + pin) · `484974b` (dominio: aliases +
+nombre global) · `a63e3d7` (endpoint + UI). Tests: 598 → 650.
+
+**Decisiones sobre el esquema sugerido (§2 Fase 2):**
+- Dos tablas, no una: `merchant_aliases` (per-user, RLS por usuario, espejo
+  estructural de `merchant_category_votes`) + `merchant_display_names`
+  (global, resuelto por consenso, RLS `service_role` only como
+  `merchant_categories`). El nombre global vive separado de los aliases
+  per-user igual que el caché global vive separado de los votos.
+- `merchant_display_names` **no** lleva guarda de prioridad ni función
+  plpgsql: a diferencia de `merchant_categories`, no tiene escritor IA — solo
+  la promoción con quórum escribe ahí. El upsert es inline. (Test del pin
+  obliga a repensarlo si algún día aparece otro escritor.)
+- Resolución de display por página (`merchant_display_batch`): alias propio
+  (prefix matching, como los votos) → alias global → Title Case. El override
+  propio gana SIEMPRE al global. **Guarda de lectura**: keys con prefijo de
+  transferencia jamás consultan el global (la contraparte es una persona, esa
+  tabla no debe contenerlas); el alias propio sí aplica (renombre privado de
+  la contraparte). Fail-open: el display es un realce, no puede botar la lista.
+- El renombre es endpoint propio (`PATCH …/{id}/merchant`), no parte del
+  PATCH de recategorización: el cliente nunca manda la `merchant_key`, se
+  deriva de la tx del usuario. A diferencia del voto de categoría
+  (best-effort tras el UPDATE), acá el alias ES la acción: si falla, falla.
+- Promoción de nombre por **mayoría exacta** del `display_name` tras trim
+  (`COUNT(DISTINCT user_id)`), conservador: el quórum es más difícil que
+  colapsar variantes — eso es Fase 3.
+
+**Checklist de deploy (en este orden, como la 013/014):**
+1. Preflight: `SELECT to_regclass('public.merchant_aliases'),
+   to_regclass('public.merchant_display_names');` → ambas NULL. Si alguna
+   existe (artefacto era-Node), PARAR e inspeccionar.
+2. Aplicar `migrations/015_merchant_aliases.sql` en **staging**.
+3. `python scripts/audit_rls_policies.py` (exit 0).
+4. Aplicar la 015 en **prod** + repetir audit.
+5. Deploy Railway api + worker (el código viejo no lee las tablas nuevas;
+   el nuevo las necesita).
+6. Smoke en prod: renombrar el comercio de una tx (lápiz en Movimientos) →
+   fila en `merchant_aliases` con `crowdsource_eligible=true` y el nombre
+   aparece en TODAS las tx del comercio; renombrar una "Transferencia a: …"
+   → fila con `crowdsource_eligible=false`, nombre visible solo para el
+   usuario y NADA en `merchant_display_names`; renombrar `mercadopago*…` →
+   también `crowdsource_eligible=false`.
 
 ### Fase 3 — Propuesta de diseño (NO construir en este sprint)
+
+**Motivación reforzada (Bloque 0, 2026-06-13)**: el endurecimiento de
+elegibilidad es un parche al síntoma — excluimos las etiquetas de pasarela
+del global porque no podemos distinguir, hoy, si `mercadopago <token>` es UN
+comercio o varios. El fix profundo es exactamente la pregunta de Fase 3:
+**¿una `merchant_key` = un comercio o varios?** Cuando exista identidad
+canónica, una etiqueta de pasarela podrá resolverse al comercio real
+subyacente (vía el token) en vez de quedar per-user only.
 
 Identidad canónica de comercio por variantes (`oxxo`/`OXXO`/`60092 providencia`
 → "Copec"), que conduce categoría Y display:
