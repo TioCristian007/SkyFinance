@@ -81,6 +81,21 @@ Otros con Bearer (no esenciales): `ms-gestiondatoscliente-neg/v2.1/obtenerDatosC
 
 ⚠️ Trampas: las dos APIs de cuenta usan **nombres de clave distintos** para el número (`cuentaNumero` vs `numeroCuenta`); ninguna lleva `tipo` (el código viejo mandaba `{numero,tipo}` → incorrecto). El `numero` sale de la respuesta de `por-rut` (`{cuentas:[{numero,tipo}]}`).
 
+### ✅ Fix dirigido APLICADO (2026-06-13, post-test #1) — login intacto
+
+Cambios quirúrgicos en `bci_scraper.py` (NO se tocó el login que ya andaba). Gates verdes (ruff + mypy + tests; `test_bci_source.py` 32→35). `bci` sigue **`pending`** hasta el sync real en prod (test #2).
+
+1. **Captura del JWT por HOST** (no por path del BFF): `_is_jwt_request(url, headers)` devuelve el Bearer de **cualquier** request a `apilocal.bci.cl`. El dashboard lo dispara solo desde `usuarios/<rut>`, `cashback/<rut>`, `obtenerDatosCliente` → el token aparece sin depender del menú. (El listener `capture_request` ya filtraba por host desde `69a03e3`; ahora está extraído y pineado por test.)
+2. **Sin dependencia del menú**: `fetch()` espera el JWT con `_await_jwt` (~15s de poll a que el dashboard lo emita). `_navigate_to_accounts_menu` queda como **nudge best-effort** (traga cualquier excepción; `bci_accounts_menu_not_found` ya no es un warning ni rompe el flujo). El error de "no se capturó el JWT" ya no culpa a la navegación.
+3. **Bodies CONFIRMADOS** (reemplazan los del build inicial):
+   - `por-rut` → `{"rut": "<rut>-<dv>"}` vía `_rut_with_dv` (limpia puntos/guiones, reinserta guion-dv como BChile; ej. `"22141522-1"`). Ya **no** `{rut,dig}`.
+   - `por-numero-cuenta` (saldo) → `{"cuentaNumero": "<numero>"}`. Sin `tipo`.
+   - `cuentas-movimientos` (movs) → `{"numeroCuenta": "<numero>"}` (key ≠ la del saldo). Sin `tipo`.
+4. **Flujo**: login → `_await_jwt` → `por-rut` → por cada cuenta: saldo (`cuentaNumero`) + movs (`numeroCuenta`) → normalizar. Se ignora `tipo` de la cuenta (los bodies confirmados no lo usan).
+5. **Capture-and-replay = fallback/refuerzo**: el listener sigue capturando y logueando PII-safe el `post_data` real (`por-rut`, movs). El body que se **envía** es el CONFIRMADO; la forma capturada de `por-rut` solo se reintenta si el confirmado no devuelve cuentas.
+
+**Pendiente**: test #2 (mismo comando, headful) → debería listar cuentas + movimientos. Si entra, sync real end-to-end en prod → activar `bci`.
+
 ---
 
 ## FASE 1+ — Rework (build, tras la captura)

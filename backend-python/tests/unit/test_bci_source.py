@@ -11,8 +11,12 @@ Pinea las lecciones de BChile aplicadas a BCI tras la migración del portal
        clave mala SOLO con el mensaje del banco; la ambigüedad jamás es auth.
     4. Normalización: idMovimiento→native_id, monto str→int, tipo→signo,
        fechaMovimiento→date, glosa→raw_description; since filtra.
-    5. Body capture-and-replay: replica la forma exacta del frontend.
-    6. Rename R-2: BCIScraperSource / scraper.bci registrado en build_all_sources.
+    5. Bodies CONFIRMADOS (test #1): por-rut {"rut":"<rut>-<dv>"}, saldo
+       {"cuentaNumero":"<n>"}, movs {"numeroCuenta":"<n>"} (keys distintas, sin
+       tipo). Capture-and-replay queda como fallback de por-rut.
+    6. JWT: se captura de CUALQUIER request a apilocal.bci.cl con Bearer (el
+       dashboard lo dispara solo, sin navegar al menú).
+    7. Rename R-2: BCIScraperSource / scraper.bci registrado en build_all_sources.
 """
 
 from __future__ import annotations
@@ -39,6 +43,8 @@ from sky.ingestion.contracts import (
 )
 from sky.ingestion.sources.bci_scraper import (
     ACCOUNTS_PATH,
+    BALANCE_PATH,
+    JWT_HOST,
     LOGIN_ERROR_KEYWORDS,
     LOGIN_URL_MARKER,
     MOVEMENTS_PATH,
@@ -515,9 +521,13 @@ def test_parse_int_formato_chileno() -> None:
 # ── Body capture-and-replay ──────────────────────────────────────────────────
 
 
-def test_accounts_fallback_body_parte_rut_dig() -> None:
-    body = BCIScraperSource()._accounts_fallback_body("22.141.522-1")
-    assert body == {"rut": "22141522", "dig": "1"}
+def test_accounts_body_rut_con_dv() -> None:
+    """Body CONFIRMADO de por-rut (test #1): {"rut": "<rut>-<dv>"}, sin puntos
+    y con guion-dv — NO {rut, dig}."""
+    scraper = BCIScraperSource()
+    assert scraper._accounts_body("22.141.522-1") == {"rut": "22141522-1"}
+    assert scraper._accounts_body("221415221") == {"rut": "22141522-1"}  # idempotente
+    assert scraper._accounts_body("12.345.678-K") == {"rut": "12345678-K"}
 
 
 def test_body_for_replica_captura_o_cae_al_fallback() -> None:
@@ -530,62 +540,113 @@ def test_body_for_replica_captura_o_cae_al_fallback() -> None:
     assert scraper._body_for({ACCOUNTS_PATH: "no-json{{"}, ACCOUNTS_PATH, {"fb": 1}) == {"fb": 1}
 
 
-async def test_list_accounts_replica_body_capturado(monkeypatch) -> None:
+async def test_list_accounts_usa_body_confirmado(monkeypatch) -> None:
+    """Por defecto envía el body CONFIRMADO {"rut":"<rut>-<dv>"}; si trae
+    cuentas, no toca el capture-replay."""
+    scraper = BCIScraperSource()
+    sent: list[dict[str, Any]] = []
+
+    async def fake_post(page, jwt, path, body):
+        sent.append({"path": path, "body": body})
+        return {"cuentas": [{"numero": "123", "tipo": "CCT"}]}
+
+    monkeypatch.setattr(scraper, "_api_post", fake_post)
+    captured = {ACCOUNTS_PATH: '{"rut":"R","dig":"D"}'}  # disponible pero NO usado
+    accounts = await scraper._list_accounts(None, "jwt", "22.141.522-1", captured)
+
+    assert len(sent) == 1  # un solo POST: el confirmado bastó
+    assert sent[0]["path"] == ACCOUNTS_PATH
+    assert sent[0]["body"] == {"rut": "22141522-1"}  # CONFIRMADO, no {rut,dig}
+    assert accounts == [{"numero": "123", "tipo": "CCT"}]
+
+
+async def test_list_accounts_fallback_replay_si_confirmado_vacio(monkeypatch) -> None:
+    """Si el body confirmado no devuelve cuentas y hay un body capturado del
+    frontend, se reintenta con esa forma (capture-and-replay = fallback)."""
+    scraper = BCIScraperSource()
+    sent: list[dict[str, Any]] = []
+
+    async def fake_post(page, jwt, path, body):
+        sent.append(body)
+        if len(sent) == 1:
+            return {"cuentas": []}  # el confirmado no trajo cuentas
+        return {"cuentas": [{"numero": "9"}]}  # replay del body capturado
+
+    monkeypatch.setattr(scraper, "_api_post", fake_post)
+    captured = {ACCOUNTS_PATH: '{"rut":"22141522","dig":"1"}'}
+    accounts = await scraper._list_accounts(None, "jwt", "22.141.522-1", captured)
+
+    assert sent[0] == {"rut": "22141522-1"}  # confirmado primero
+    assert sent[1] == {"rut": "22141522", "dig": "1"}  # replay como fallback
+    assert accounts == [{"numero": "9"}]
+
+
+async def test_fetch_movements_usa_numero_cuenta_confirmado(monkeypatch) -> None:
+    """Body CONFIRMADO: {"numeroCuenta": "<n>"} — key exacta, sin tipo."""
     scraper = BCIScraperSource()
     sent: dict[str, Any] = {}
 
     async def fake_post(page, jwt, path, body):
         sent["path"], sent["body"] = path, body
-        return {"cuentas": [{"numero": "123", "tipo": "CCT"}]}
-
-    monkeypatch.setattr(scraper, "_api_post", fake_post)
-    captured = {ACCOUNTS_PATH: '{"rut":"R","dig":"D"}'}
-    accounts = await scraper._list_accounts(None, "jwt", "22141522-1", captured)
-
-    assert sent["path"] == ACCOUNTS_PATH
-    assert sent["body"] == {"rut": "R", "dig": "D"}  # replay verbatim
-    assert accounts == [{"numero": "123", "tipo": "CCT"}]
-
-
-async def test_fetch_movements_overlaya_numero_tipo_sobre_plantilla(monkeypatch) -> None:
-    scraper = BCIScraperSource()
-    captured = {MOVEMENTS_PATH: '{"numero":"OLD","tipo":"OLD","pagina":1,"rango":"30d"}'}
-    sent: dict[str, Any] = {}
-
-    async def fake_post(page, jwt, path, body):
-        sent["body"] = body
         return {"movimientos": [{"idMovimiento": "1"}]}
 
     monkeypatch.setattr(scraper, "_api_post", fake_post)
-    movs = await scraper._fetch_movements(None, "jwt", "12345678", "CCT", captured)
+    movs = await scraper._fetch_movements(None, "jwt", "12345678")
 
-    assert sent["body"]["numero"] == "12345678"  # overlay
-    assert sent["body"]["tipo"] == "CCT"
-    assert sent["body"]["pagina"] == 1 and sent["body"]["rango"] == "30d"  # extras preservados
+    assert sent["path"] == MOVEMENTS_PATH
+    assert sent["body"] == {"numeroCuenta": "12345678"}
     assert movs == [{"idMovimiento": "1"}]
 
 
-async def test_fetch_balance_saldo_contable_con_fallback(monkeypatch) -> None:
+async def test_fetch_balance_usa_cuenta_numero_con_fallback(monkeypatch) -> None:
+    """Body CONFIRMADO: {"cuentaNumero": "<n>"} (key ≠ la de movs, sin tipo);
+    saldoContable con fallback a saldoDisponible."""
     scraper = BCIScraperSource()
 
     async def fake_post(page, jwt, path, body):
-        assert body == {"numero": "123", "tipo": "CCT"}
+        assert path == BALANCE_PATH
+        assert body == {"cuentaNumero": "123"}  # key exacta, sin tipo
         return {"saldoContable": 50000, "saldoDisponible": 48000}
 
     monkeypatch.setattr(scraper, "_api_post", fake_post)
-    assert await scraper._fetch_balance(None, "jwt", "123", "CCT") == 50000
+    assert await scraper._fetch_balance(None, "jwt", "123") == 50000
 
     async def fake_post_disp(page, jwt, path, body):
         return {"saldoDisponible": 48000}
 
     monkeypatch.setattr(scraper, "_api_post", fake_post_disp)
-    assert await scraper._fetch_balance(None, "jwt", "123", "CCT") == 48000
+    assert await scraper._fetch_balance(None, "jwt", "123") == 48000
 
 
 def test_scrub_body_redacta_pii_preserva_keys() -> None:
     out = BCIScraperSource._scrub_body('{"rut":"22141522","numero":"00012345678","tipo":"CCT"}')
     assert "22141522" not in out and "00012345678" not in out
     assert '"rut"' in out and '"tipo"' in out and "CCT" in out
+
+
+# ── Captura del JWT: cualquier path de apilocal.bci.cl (fix test #1) ──────────
+
+
+def test_jwt_capture_acepta_cualquier_path_de_apilocal() -> None:
+    """El dashboard dispara el JWT desde usuarios/<rut>, cashback/<rut> y
+    obtenerDatosCliente — no solo el BFF de saldos. Se captura por HOST."""
+    f = BCIScraperSource._is_jwt_request
+    bearer = {"authorization": "Bearer tok-123"}
+
+    # request NO-BFF del dashboard (auto-disparada) → igual captura
+    usuarios_url = f"https://{JWT_HOST}/bci-produccion/api-bci/ms-bciplus-orq/v1.9/usuarios/x"
+    assert f(usuarios_url, bearer) == "tok-123"
+    # el BFF de saldos también
+    assert f(f"https://{JWT_HOST}/.../v3.2/cuentas-busquedas/por-rut", bearer) == "tok-123"
+
+
+def test_jwt_capture_ignora_otro_host_o_sin_bearer() -> None:
+    f = BCIScraperSource._is_jwt_request
+    # otro host (aunque tenga Bearer) → no captura
+    assert f("https://www.bci.cl/personas", {"authorization": "Bearer x"}) is None
+    # apilocal pero sin Bearer → no captura
+    assert f(f"https://{JWT_HOST}/x", {"authorization": "Basic abc"}) is None
+    assert f(f"https://{JWT_HOST}/x", {}) is None
 
 
 # ── R-2: rename + registro ───────────────────────────────────────────────────

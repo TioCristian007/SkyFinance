@@ -3,19 +3,21 @@ sky.ingestion.sources.bci_scraper — Scraper BCI (Playwright + JWT Bearer).
 
 ESTRATEGIA:
     BCI expone APIs REST internas en apilocal.bci.cl (BFF v3.2) autenticadas
-    con JWT Bearer. El scraper hace login en el portal web, navega al menú de
-    cuentas para que el frontend dispare las requests con el JWT, lo intercepta
-    del tráfico de red, y luego llama directamente a la API sin más navegación.
+    con JWT Bearer. El scraper hace login en el portal web; el dashboard
+    autenticado dispara SOLO requests a apilocal.bci.cl con el JWT (no hace
+    falta navegar al menú). El scraper intercepta ese Bearer del tráfico de red
+    y luego llama directamente a la API con los bodies CONFIRMADOS (test #1).
 
 FLUJO:
     1. goto portal BCI (www.bci.cl/corporativo/banco-en-linea/personas)
     2. type RUT en #rut_aux (el form parte en los hidden #rut/#dig) + fill #clave
     3. verificación post-fill (incl. que los hidden #rut/#dig se poblaron)
     4. submit DENTRO del form de #clave → resolver post-submit (error/2FA/éxito)
-    5. navegar a "Saldos y movimientos" → interceptar JWT Bearer + bodies POST
-    6. API: POST cuentas-busquedas/por-rut → lista de cuentas
-    7. API: POST cuentas-busquedas/por-numero-cuenta → saldoContable por cuenta
-    8. API: POST cuentas-movimientos/por-numero-cuenta → movimientos por cuenta
+    5. esperar el JWT Bearer que el dashboard dispara solo a apilocal.bci.cl
+       (nudge best-effort al menú; el flujo NO depende del click — test #1)
+    6. API: POST cuentas-busquedas/por-rut          body {"rut":"<rut>-<dv>"}
+    7. API: POST cuentas-busquedas/por-numero-cuenta body {"cuentaNumero":"<n>"}
+    8. API: POST cuentas-movimientos/por-numero-cuenta body {"numeroCuenta":"<n>"}
     9. Normalizar a CanonicalMovement con build_external_id (idMovimiento nativo)
 
 DISCOVERY (2026-06-13, captura PII-safe de la cuenta del fundador):
@@ -87,12 +89,17 @@ BCI_API_BASE = (
 )
 
 # Endpoints v3.2 (discovery 2026-06-13). Todos POST, Bearer, application/json.
+# Bodies CONFIRMADOS en el test #1 (captura PII-safe del post_data real):
+#   por-rut           → {"rut": "<rut>-<dv>"}    (sin puntos, guion-dv)
+#   por-numero-cuenta → {"cuentaNumero": "<n>"}  (saldo; SIN tipo)
+#   movimientos       → {"numeroCuenta": "<n>"}  (movs; key ≠ la del saldo)
 ACCOUNTS_PATH = "cuentas-busquedas/por-rut"
 BALANCE_PATH = "cuentas-busquedas/por-numero-cuenta"
 MOVEMENTS_PATH = "cuentas-movimientos/por-numero-cuenta"
-# Paths cuyo body conoce el frontend y nosotros no del todo: se captura el
-# post_data real al navegar a "Saldos y movimientos" y se replica esa forma
-# exacta (capture-and-replay). por-numero-cuenta ya es {numero,tipo} (conocido).
+# Refuerzo (capture-and-replay): el listener captura el post_data real del
+# frontend para estos paths y lo loguea PII-safe. Los bodies que se ENVÍAN son
+# los CONFIRMADOS de arriba; la forma capturada de por-rut queda como fallback
+# si el confirmado no devuelve cuentas.
 BODY_CAPTURE_PATHS = (ACCOUNTS_PATH, MOVEMENTS_PATH)
 
 RUT_SELECTORS = [
@@ -219,13 +226,16 @@ class BCIScraperSource(DataSource):
             captured_bodies: dict[str, str] = {}
 
             def capture_request(request: Request) -> None:
-                if JWT_HOST not in request.url:
-                    return
-                auth = request.headers.get("authorization", "")
-                if auth.startswith("Bearer ") and not jwt_token:
-                    jwt_token.append(auth[len("Bearer "):])
-                    logger.info("bci_jwt_captured", url_prefix=request.url[:80])
-                if request.method == "POST":
+                # JWT: cualquier request a apilocal.bci.cl con Bearer — el
+                # dashboard lo dispara desde usuarios/<rut>, cashback/<rut>,
+                # obtenerDatosCliente, no solo el BFF de saldos (fix test #1).
+                if not jwt_token:
+                    token = self._is_jwt_request(request.url, request.headers)
+                    if token:
+                        jwt_token.append(token)
+                        logger.info("bci_jwt_captured", url_prefix=request.url[:80])
+                # Refuerzo: capturar el post_data real del frontend (PII-safe).
+                if request.method == "POST" and JWT_HOST in request.url:
                     for suffix in BODY_CAPTURE_PATHS:
                         if suffix in request.url and suffix not in captured_bodies:
                             post_data = request.post_data
@@ -245,21 +255,13 @@ class BCIScraperSource(DataSource):
                     page, credentials.rut, credentials.password, jwt_token, progress
                 )
 
+                # El dashboard autenticado dispara SOLO requests con el JWT a
+                # apilocal.bci.cl; el listener las intercepta. La navegación al
+                # menú es un nudge best-effort — el flujo NO depende del click
+                # (su heurístico puede no matchear el DOM del dashboard).
                 progress("Capturando token de sesión...")
                 await self._navigate_to_accounts_menu(page)
-
-                for _ in range(20):
-                    if jwt_token:
-                        break
-                    await asyncio.sleep(0.5)
-
-                if not jwt_token:
-                    raise RecoverableIngestionError(
-                        "No se capturó el JWT de BCI — la navegación al menú "
-                        "de cuentas no disparó la request esperada."
-                    )
-
-                jwt = jwt_token[0]
+                jwt = await self._await_jwt(jwt_token)
 
                 progress("Listando cuentas...")
                 accounts = await self._list_accounts(
@@ -274,15 +276,14 @@ class BCIScraperSource(DataSource):
 
                 for acct in accounts:
                     numero = str(acct.get("numero") or "")
-                    tipo = str(acct.get("tipo") or "CCT")
+                    if not numero:
+                        continue
 
-                    balance = await self._fetch_balance(page, jwt, numero, tipo)
+                    balance = await self._fetch_balance(page, jwt, numero)
                     if first_balance is None and balance is not None:
                         first_balance = balance
 
-                    movs_raw = await self._fetch_movements(
-                        page, jwt, numero, tipo, captured_bodies
-                    )
+                    movs_raw = await self._fetch_movements(page, jwt, numero)
                     for mov in movs_raw:
                         cm = self._to_canonical(mov, "bci", since)
                         if cm is not None:
@@ -662,29 +663,69 @@ class BCIScraperSource(DataSource):
             LOGIN_ERROR_KEYWORDS,
         )
 
-    # ── Navegación al menú de cuentas ────────────────────────────────────────
+    # ── Captura del JWT (independiente del menú) ──────────────────────────────
+
+    @staticmethod
+    def _is_jwt_request(url: str, headers: dict[str, str]) -> str | None:
+        """Token Bearer si la request es a apilocal.bci.cl con `Authorization:
+        Bearer …`, SIN importar el path.
+
+        El dashboard dispara el JWT desde usuarios/<rut>, cashback/<rut> y
+        obtenerDatosCliente — no solo el BFF de saldos. Capturar por host (no
+        por el path del BFF) hace que el token aparezca sin depender del menú
+        (fix del test #1). None si no aplica."""
+        if JWT_HOST not in url:
+            return None
+        auth = headers.get("authorization", "")
+        if auth.startswith("Bearer "):
+            return auth[len("Bearer "):]
+        return None
+
+    async def _await_jwt(self, jwt_token: list[str]) -> str:
+        """Espera ~15s a que el dashboard emita el primer Bearer a
+        apilocal.bci.cl (el listener lo captura). El flujo depende de ESTO, no
+        de la navegación al menú."""
+        for _ in range(30):
+            if jwt_token:
+                return jwt_token[0]
+            await asyncio.sleep(0.5)
+        raise RecoverableIngestionError(
+            "No se capturó el JWT de BCI — el dashboard autenticado no emitió "
+            "ninguna request con Bearer a apilocal.bci.cl en la ventana de espera."
+        )
+
+    # ── Navegación al menú de cuentas (nudge best-effort) ─────────────────────
 
     async def _navigate_to_accounts_menu(self, page: Page) -> None:
-        """Clickea "Saldos y movimientos" → el frontend dispara las requests con
-        el JWT Bearer Y los bodies POST que el listener captura."""
-        clicked = await page.evaluate(
-            """(keywords) => {
-                for (const el of Array.from(document.querySelectorAll("a, button, li, span"))) {
-                    const text = el.innerText?.trim().toLowerCase() || "";
-                    if (keywords.some((kw) => text === kw || text.startsWith(kw))) {
-                        el.click();
-                        return true;
+        """Nudge best-effort: intenta clickear "Saldos y movimientos" para
+        empujar al frontend a disparar requests.
+
+        NO es crítico: el dashboard autenticado dispara solo las requests con
+        el JWT a apilocal.bci.cl, así que el flujo espera el token vía
+        _await_jwt encuentre o no este menú. Cualquier excepción (DOM distinto,
+        contexto destruido por una navegación en curso) se traga."""
+        try:
+            clicked = await page.evaluate(
+                """(keywords) => {
+                    for (const el of Array.from(document.querySelectorAll("a, button, li, span"))) {
+                        const text = el.innerText?.trim().toLowerCase() || "";
+                        if (keywords.some((kw) => text === kw || text.startsWith(kw))) {
+                            el.click();
+                            return true;
+                        }
                     }
-                }
-                return false;
-            }""",
-            ACCOUNTS_MENU_TEXT,
-        )
+                    return false;
+                }""",
+                ACCOUNTS_MENU_TEXT,
+            )
+        except Exception as exc:
+            logger.info("bci_dashboard_nudge_skipped", error=str(exc))
+            return
         if clicked:
-            logger.info("bci_navigate_via_menu_click")
+            logger.info("bci_dashboard_nudge_clicked")
             await asyncio.sleep(4)
         else:
-            logger.warning("bci_accounts_menu_not_found")
+            logger.info("bci_dashboard_nudge_no_menu")
             await asyncio.sleep(2)
 
     # ── API REST con JWT Bearer ───────────────────────────────────────────────
@@ -717,26 +758,40 @@ class BCIScraperSource(DataSource):
     ) -> list[dict]:
         """POST cuentas-busquedas/por-rut → lista de cuentas.
 
-        El body lo conoce el frontend (capture-and-replay); si no se capturó,
-        fallback a {rut, dig} (BCI parte el RUT así en el propio form de login).
+        Body CONFIRMADO (test #1): {"rut": "<rut>-<dv>"} (sin puntos, guion-dv).
+        Si el confirmado no devuelve cuentas y se capturó el body real del
+        frontend, se reintenta con esa forma (capture-and-replay, refuerzo).
         """
-        body = self._body_for(captured, ACCOUNTS_PATH, self._accounts_fallback_body(rut))
-        raw = await self._api_post(page, jwt, ACCOUNTS_PATH, body)
+        body = self._accounts_body(rut)
+        accounts = self._extract_accounts(
+            await self._api_post(page, jwt, ACCOUNTS_PATH, body)
+        )
+        if accounts:
+            return accounts
+        replay = self._body_for(captured, ACCOUNTS_PATH, body)
+        if replay != body:
+            logger.info("bci_accounts_replay_fallback")
+            accounts = self._extract_accounts(
+                await self._api_post(page, jwt, ACCOUNTS_PATH, replay)
+            )
+        return accounts
+
+    @staticmethod
+    def _extract_accounts(raw: Any) -> list[dict]:
+        """Lista de cuentas desde la respuesta de por-rut ({cuentas:[...]})."""
         if isinstance(raw, dict):
             cuentas = raw.get("cuentas", [])
             return cuentas if isinstance(cuentas, list) else []
         return raw if isinstance(raw, list) else []
 
-    async def _fetch_balance(
-        self, page: Page, jwt: str, numero: str, tipo: str
-    ) -> int | None:
+    async def _fetch_balance(self, page: Page, jwt: str, numero: str) -> int | None:
         """POST cuentas-busquedas/por-numero-cuenta → saldoContable (fallback
-        saldoDisponible). Body conocido: {numero, tipo}."""
+        saldoDisponible). Body CONFIRMADO: {"cuentaNumero": "<n>"} (SIN tipo)."""
         if not numero:
             return None
         try:
             data = await self._api_post(
-                page, jwt, BALANCE_PATH, {"numero": numero, "tipo": tipo}
+                page, jwt, BALANCE_PATH, {"cuentaNumero": numero}
             )
         except Exception as exc:
             logger.warning("bci_balance_fetch_failed", error=str(exc))
@@ -748,20 +803,17 @@ class BCIScraperSource(DataSource):
             saldo = data.get("saldoDisponible")
         return self._parse_int(saldo) if saldo is not None else None
 
-    async def _fetch_movements(
-        self, page: Page, jwt: str, numero: str, tipo: str, captured: dict[str, str]
-    ) -> list[dict]:
+    async def _fetch_movements(self, page: Page, jwt: str, numero: str) -> list[dict]:
         """POST cuentas-movimientos/por-numero-cuenta → movimientos.
 
-        El body se replica de la plantilla capturada y se le overlaya
-        {numero, tipo} por cuenta (preserva campos extra como paginación/rango);
-        fallback {numero, tipo} si no hubo captura.
+        Body CONFIRMADO: {"numeroCuenta": "<n>"} (key ≠ la del saldo, SIN tipo).
         """
-        template = self._body_for(captured, MOVEMENTS_PATH, {})
-        body = dict(template) if isinstance(template, dict) else {}
-        body.update({"numero": numero, "tipo": tipo})
+        if not numero:
+            return []
         try:
-            raw = await self._api_post(page, jwt, MOVEMENTS_PATH, body)
+            raw = await self._api_post(
+                page, jwt, MOVEMENTS_PATH, {"numeroCuenta": numero}
+            )
         except Exception as exc:
             logger.warning("bci_movements_fetch_failed", numero_len=len(numero), error=str(exc))
             return []
@@ -782,12 +834,21 @@ class BCIScraperSource(DataSource):
                 logger.warning("bci_captured_body_unparseable", path=path)
         return fallback
 
-    def _accounts_fallback_body(self, rut: str) -> dict:
-        """Fallback {rut, dig} para por-rut cuando no se capturó el body real."""
-        clean = re.sub(r"[.\-]", "", rut).upper()
+    def _accounts_body(self, rut: str) -> dict:
+        """Body CONFIRMADO de por-rut (test #1): {"rut": "<rut>-<dv>"}."""
+        return {"rut": self._rut_with_dv(rut)}
+
+    @staticmethod
+    def _rut_with_dv(rut: str) -> str:
+        """RUT sin puntos/guiones, con guion-dv: '22.141.522-1' → '22141522-1'.
+
+        Forma exacta del body de por-rut confirmada en el test #1 (igual que
+        BChile: se limpia el RUT y se reinserta el guion antes del dígito
+        verificador). NO es {rut, dig}."""
+        clean = re.sub(r"[.\-\s]", "", rut).upper()
         if len(clean) < 2:
-            return {"rut": clean}
-        return {"rut": clean[:-1], "dig": clean[-1]}
+            return clean
+        return f"{clean[:-1]}-{clean[-1]}"
 
     @staticmethod
     def _scrub_body(post_data: str) -> str:
