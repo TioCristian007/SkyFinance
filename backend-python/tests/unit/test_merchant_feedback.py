@@ -3,6 +3,8 @@
 Regresiones obligatorias del sprint cubiertas acá:
 - Frontera de privacidad: una transferencia/contraparte personal JAMÁS
   dispara la promoción al caché global (vota solo como override privado).
+- Invariante de identidad (Bloque 0, Fase 2): etiquetas de pasarela/terminal
+  (mercadopago*, …) no identifican UN comercio → jamás se promueven.
 - Umbral anti-envenenamiento: sin quórum de usuarios distintos no se
   escribe nada en el caché global.
 - La promoción escribe source='user' (la guarda de la 014 hace el resto).
@@ -16,6 +18,7 @@ import pytest
 
 from sky.core.config import settings
 from sky.domain.merchant_feedback import (
+    _is_gateway_label,
     _key_is_promotable,
     _maybe_promote,
     is_crowdsource_eligible,
@@ -61,9 +64,39 @@ class TestElegibilidad:
     def test_solo_comercios_reales(self, desc: str, category: str, expected: bool) -> None:
         assert is_crowdsource_eligible(desc, category) is expected
 
+    @pytest.mark.parametrize("desc,category,expected", [
+        # Invariante de identidad: la etiqueta de pasarela no es UN comercio.
+        ("MERCADOPAGO*DECOP", "food", False),       # forma cruda con asterisco
+        ("mercadopago decop", "food", False),       # forma ya normalizada
+        ("Pago: MERCADOPAGO*FERIA", "shopping", False),
+        ("PAYPAL *SPOTIFY", "subscriptions", False),
+        ("SUMUP *CAFE LOCAL", "food", False),
+        ("khipu universidad de chile", "education", False),
+        ("webpay compra", "shopping", False),
+        ("transbank santiago", "shopping", False),
+        # Comercios reales con el token al MEDIO no se excluyen (first-word only).
+        ("feria mercadopago", "shopping", True),
+        ("JUMBO LAS CONDES", "food", True),
+        ("starbucks moneda", "food", True),
+    ])
+    def test_etiquetas_de_pasarela_no_identifican_un_comercio(
+        self, desc: str, category: str, expected: bool
+    ) -> None:
+        assert is_crowdsource_eligible(desc, category) is expected
+
+    def test_gateway_label_match_por_primera_palabra(self) -> None:
+        assert _is_gateway_label("mercadopago decop") is True
+        assert _is_gateway_label("mercadopago") is True
+        assert _is_gateway_label("paypal spotify") is True
+        # sin substring: el token al medio o pegado no excluye
+        assert _is_gateway_label("feria mercadopago") is False
+        assert _is_gateway_label("mercadopagos del sur") is False
+        assert _is_gateway_label("") is False
+
     def test_key_promotable(self) -> None:
         assert _key_is_promotable("jumbo las condes") is True
         assert _key_is_promotable("transferencia a: juan perez") is False
+        assert _key_is_promotable("mercadopago decop") is False
         assert _key_is_promotable("") is False
 
 
@@ -150,6 +183,28 @@ async def test_defensa_en_profundidad_key_transferencia() -> None:
     conn = AsyncMock()
     await _maybe_promote(conn, "transferencia a: juan perez")
     conn.execute.assert_not_awaited()
+
+
+async def test_defensa_en_profundidad_key_pasarela() -> None:
+    """Regresión Bloque 0: votos viejos con eligible=true para una etiqueta
+    de pasarela podrían dar quórum, pero la promoción se niega a escribir
+    (el chequeo es al promover, no solo al votar)."""
+    conn = AsyncMock()
+    await _maybe_promote(conn, "mercadopago decop")
+    conn.execute.assert_not_awaited()
+
+
+async def test_voto_de_pasarela_es_override_privado() -> None:
+    """'mercadopago decop' vota (el override per-user sigue funcionando),
+    pero queda eligible=False y no ejecuta la consulta de promoción."""
+    engine, conn = _engine_with([MagicMock()])
+    with patch("sky.domain.merchant_feedback.get_engine", return_value=engine):
+        await record_user_categorization("u1", "MERCADOPAGO*DECOP", "food")
+
+    assert conn.execute.await_count == 1  # solo el upsert del voto
+    params = conn.execute.await_args_list[0].args[1]
+    assert params["elig"] is False
+    assert params["mkey"] == "mercadopago decop"
 
 
 async def test_promote_sin_votos_no_escribe() -> None:
