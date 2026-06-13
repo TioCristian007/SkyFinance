@@ -12,6 +12,7 @@ from sky.domain.categorizer import (
     _lookup_user_votes,
     _save_to_cache,
     categorize_movements,
+    merchant_display_batch,
     normalize_merchant,
 )
 
@@ -399,3 +400,111 @@ async def test_categorize_with_ai_exception_returns_empty(
 
     result = await _categorize_with_ai(["cualquier cosa"])
     assert result == {}
+
+
+# ── Tests de merchant_display_batch (Fase 2: aliases) ───────────────────────
+
+def _display_engine(results: list) -> tuple[MagicMock, AsyncMock]:
+    mock_conn = AsyncMock()
+    mock_conn.execute = AsyncMock(side_effect=results)
+    mock_ctx = MagicMock()
+    mock_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_ctx.__aexit__ = AsyncMock(return_value=False)
+    engine = MagicMock()
+    engine.connect.return_value = mock_ctx
+    return engine, mock_conn
+
+
+def _alias_rs(rows: list[tuple[str, str]]) -> MagicMock:
+    mocked = []
+    for key, name in rows:
+        r = MagicMock()
+        r.merchant_key = key
+        r.display_name = name
+        mocked.append(r)
+    rs = MagicMock()
+    rs.fetchall.return_value = mocked
+    return rs
+
+
+@pytest.mark.asyncio
+async def test_display_batch_vacio() -> None:
+    with patch("sky.domain.categorizer.get_engine") as mock_ge:
+        assert await merchant_display_batch(None, []) == []
+    mock_ge.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("sky.domain.categorizer.get_engine")
+async def test_display_batch_fallback_title_case(mock_get_engine: MagicMock) -> None:
+    """Sin alias propio ni global, el display es el Title Case de siempre."""
+    engine, _ = _display_engine([_alias_rs([])])
+    mock_get_engine.return_value = engine
+
+    result = await merchant_display_batch(None, ["JUMBO LAS CONDES"])
+    assert result == ["Jumbo Las Condes"]
+
+
+@pytest.mark.asyncio
+@patch("sky.domain.categorizer.get_engine")
+async def test_display_batch_global_gana_al_title_case(
+    mock_get_engine: MagicMock,
+) -> None:
+    """Alias global por prefijo ('jumbo') renombra 'jumbo las condes'."""
+    engine, _ = _display_engine([_alias_rs([("jumbo", "Jumbo")])])
+    mock_get_engine.return_value = engine
+
+    result = await merchant_display_batch(None, ["JUMBO LAS CONDES"])
+    assert result == ["Jumbo"]
+
+
+@pytest.mark.asyncio
+@patch("sky.domain.categorizer.get_engine")
+async def test_display_batch_own_gana_al_global(mock_get_engine: MagicMock) -> None:
+    """Invariante: el override propio gana SIEMPRE al consenso global."""
+    engine, conn = _display_engine([
+        _alias_rs([("60092 providencia", "Mi Copec")]),   # aliases propios
+        _alias_rs([("60092 providencia", "Copec")]),      # global
+    ])
+    mock_get_engine.return_value = engine
+
+    result = await merchant_display_batch("u1", ["60092--PROVIDENCIA"])
+    assert result == ["Mi Copec"]
+    assert conn.execute.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_display_batch_transfer_jamas_consulta_global() -> None:
+    """Guarda de lectura: sin user_id, una transferencia ni siquiera abre
+    conexión — la contraparte jamás se busca en el global."""
+    with patch("sky.domain.categorizer.get_engine") as mock_ge:
+        result = await merchant_display_batch(None, ["Transferencia a: Juan Perez"])
+    assert result == ["Juan Perez"]  # Title Case de la contraparte, sin DB
+    mock_ge.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("sky.domain.categorizer.get_engine")
+async def test_display_batch_transfer_solo_alias_propio(
+    mock_get_engine: MagicMock,
+) -> None:
+    """El renombre PRIVADO de una contraparte sí aplica; el lookup global
+    se saltea por completo para keys de transferencia."""
+    engine, conn = _display_engine([
+        _alias_rs([("transferencia a: juan perez", "Arriendo")]),
+    ])
+    mock_get_engine.return_value = engine
+
+    result = await merchant_display_batch("u1", ["Transferencia a: Juan Perez"])
+    assert result == ["Arriendo"]
+    assert conn.execute.await_count == 1  # solo la query de aliases propios
+
+
+@pytest.mark.asyncio
+@patch("sky.domain.categorizer.get_engine")
+async def test_display_batch_fail_open(mock_get_engine: MagicMock) -> None:
+    """El display es un realce: si el lookup falla, la lista no se cae."""
+    mock_get_engine.side_effect = Exception("DB down")
+
+    result = await merchant_display_batch("u1", ["JUMBO LAS CONDES"])
+    assert result == ["Jumbo Las Condes"]

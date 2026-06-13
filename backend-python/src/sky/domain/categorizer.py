@@ -150,6 +150,88 @@ def _key_variants(merchant_key: str) -> list[str]:
     return [" ".join(words[:i]) for i in range(len(words), 0, -1)]
 
 
+async def merchant_display_batch(
+    user_id: str | None,
+    raw_descriptions: list[str | None],
+) -> list[str | None]:
+    """Display de comercio para una página de transacciones, con aliases.
+
+    Resolución por fila (sprint Fase 2): alias propio del usuario → alias
+    global por consenso (`merchant_display_names`) → `merchant_display`
+    (Title Case). Prefix matching progresivo en ambos niveles, igual que
+    los votos. El override propio gana SIEMPRE al global, aunque el global
+    sea más específico.
+
+    Guarda de lectura (defensa en profundidad sobre la frontera de
+    privacidad): keys con prefijo de transferencia jamás consultan el global
+    — la contraparte es una persona y esa tabla no debe contenerlas. El
+    alias PROPIO sí aplica (renombre privado de la contraparte).
+
+    Fail-open: el display es un realce, no puede botar la lista de
+    transacciones. Si el lookup de aliases falla se degrada al Title Case
+    con warning en logs.
+    """
+    out = [merchant_display(r) for r in raw_descriptions]
+    keys = [normalize_merchant(r) if r and r.strip() else "" for r in raw_descriptions]
+
+    own_variants = (
+        sorted({v for k in keys if k for v in _key_variants(k)}) if user_id else []
+    )
+    global_variants = sorted({
+        v
+        for k in keys
+        if k and TRANSFER_PREFIX_RE.match(k) is None
+        for v in _key_variants(k)
+    })
+    if not own_variants and not global_variants:
+        return out
+
+    own_map: dict[str, str] = {}
+    glob_map: dict[str, str] = {}
+    try:
+        engine: AsyncEngine = get_engine()
+        async with engine.connect() as conn:
+            if own_variants:
+                rs = await conn.execute(
+                    text(
+                        "SELECT merchant_key, display_name"
+                        "  FROM public.merchant_aliases"
+                        " WHERE user_id = CAST(:uid AS uuid)"
+                        "   AND merchant_key = ANY(:keys)"
+                    ),
+                    {"uid": user_id, "keys": own_variants},
+                )
+                own_map = {
+                    str(r.merchant_key): str(r.display_name) for r in rs.fetchall()
+                }
+            if global_variants:
+                rs = await conn.execute(
+                    text(
+                        "SELECT merchant_key, display_name"
+                        "  FROM public.merchant_display_names"
+                        " WHERE merchant_key = ANY(:keys)"
+                    ),
+                    {"keys": global_variants},
+                )
+                glob_map = {
+                    str(r.merchant_key): str(r.display_name) for r in rs.fetchall()
+                }
+    except Exception as exc:
+        logger.warning("alias_lookup_failed", error=str(exc))
+        return out
+
+    for i, k in enumerate(keys):
+        if not k:
+            continue
+        variants = _key_variants(k)
+        hit = next((own_map[v] for v in variants if v in own_map), None)
+        if hit is None and TRANSFER_PREFIX_RE.match(k) is None:
+            hit = next((glob_map[v] for v in variants if v in glob_map), None)
+        if hit is not None:
+            out[i] = hit
+    return out
+
+
 # ── Caché global con prefix matching (niveles 1 y 3) ─────────────────────────
 
 async def _lookup_cache(merchant_keys: list[str]) -> dict[str, tuple[str, str]]:

@@ -21,8 +21,10 @@ from sky.domain.merchant_feedback import (
     _is_gateway_label,
     _key_is_promotable,
     _maybe_promote,
+    _maybe_promote_alias,
     is_crowdsource_eligible,
     record_user_categorization,
+    record_user_rename,
 )
 
 
@@ -213,4 +215,153 @@ async def test_promote_sin_votos_no_escribe() -> None:
     conn = AsyncMock()
     conn.execute = AsyncMock(return_value=rs)
     await _maybe_promote(conn, "comercio nuevo")
+    assert conn.execute.await_count == 1  # solo el conteo
+
+
+# ── Fase 2: record_user_rename ───────────────────────────────────────────────
+
+def _alias_count_row(display_name: str, voters: int) -> MagicMock:
+    rs = MagicMock()
+    row = MagicMock()
+    row.display_name = display_name
+    row.voters = voters
+    rs.first.return_value = row
+    return rs
+
+
+async def test_rename_upsert_por_usuario_y_comercio() -> None:
+    """El alias se guarda per (user_id, merchant_key): renombrar de nuevo
+    actualiza la misma fila, y la fila de otro usuario no se toca."""
+    engine, conn = _engine_with([MagicMock(), _alias_count_row("Copec", 1)])
+    with patch("sky.domain.merchant_feedback.get_engine", return_value=engine):
+        eligible = await record_user_rename(
+            "u1", "60092 providencia", "transport", "Copec"
+        )
+
+    assert eligible is True
+    sql = str(conn.execute.await_args_list[0].args[0])
+    assert "INSERT INTO public.merchant_aliases" in sql
+    assert "ON CONFLICT (user_id, merchant_key) DO UPDATE" in sql
+    params = conn.execute.await_args_list[0].args[1]
+    assert params["uid"] == "u1"
+    assert params["mkey"] == "60092 providencia"
+    assert params["name"] == "Copec"
+    assert params["elig"] is True
+
+
+async def test_rename_transferencia_es_privado_jamas_global() -> None:
+    """Regresión frontera de privacidad: renombrar una transferencia vale
+    como alias privado (elig=False) y NO ejecuta la consulta de promoción."""
+    engine, conn = _engine_with([MagicMock()])
+    with patch("sky.domain.merchant_feedback.get_engine", return_value=engine):
+        eligible = await record_user_rename(
+            "u1", "Transferencia a: Juan Perez", "food", "Mamá"
+        )
+
+    assert eligible is False
+    assert conn.execute.await_count == 1  # solo el upsert del alias
+    assert conn.execute.await_args_list[0].args[1]["elig"] is False
+
+
+async def test_rename_categoria_transfer_es_privado() -> None:
+    """La tx con categoría transfer tampoco comparte el nombre, aunque la
+    glosa no tenga prefijo de transferencia."""
+    engine, conn = _engine_with([MagicMock()])
+    with patch("sky.domain.merchant_feedback.get_engine", return_value=engine):
+        eligible = await record_user_rename(
+            "u1", "Sushi Local Providencia", "transfer", "Almuerzo"
+        )
+
+    assert eligible is False
+    assert conn.execute.await_count == 1
+
+
+async def test_rename_pasarela_es_privado() -> None:
+    """Invariante de identidad (Bloque 0) aplicado a aliases: la etiqueta
+    de pasarela se renombra solo para el usuario."""
+    engine, conn = _engine_with([MagicMock()])
+    with patch("sky.domain.merchant_feedback.get_engine", return_value=engine):
+        eligible = await record_user_rename(
+            "u1", "MERCADOPAGO*DECOP", "food", "Verdulería"
+        )
+
+    assert eligible is False
+    assert conn.execute.await_count == 1
+
+
+async def test_rename_bajo_umbral_no_promueve() -> None:
+    """Anti-envenenamiento: 2 usuarios < umbral 3 → nombre global intacto."""
+    engine, conn = _engine_with([MagicMock(), _alias_count_row("Copec", 2)])
+    with patch("sky.domain.merchant_feedback.get_engine", return_value=engine):
+        await record_user_rename("u1", "60092 providencia", "transport", "Copec")
+
+    assert conn.execute.await_count == 2  # alias + conteo, sin upsert global
+
+
+async def test_rename_con_quorum_promueve_nombre_global() -> None:
+    engine, conn = _engine_with(
+        [MagicMock(), _alias_count_row("Copec", 3), MagicMock()]
+    )
+    with patch("sky.domain.merchant_feedback.get_engine", return_value=engine):
+        await record_user_rename("u1", "60092 providencia", "transport", "Copec")
+
+    assert conn.execute.await_count == 3
+    sql = str(conn.execute.await_args_list[2].args[0])
+    assert "INSERT INTO public.merchant_display_names" in sql
+    assert "ON CONFLICT (merchant_key) DO UPDATE" in sql
+    params = conn.execute.await_args_list[2].args[1]
+    assert params["mkey"] == "60092 providencia"
+    assert params["name"] == "Copec"
+
+
+async def test_rename_promueve_la_mayoria_no_el_emitido() -> None:
+    """El nombre global converge al display_name con más usuarios distintos,
+    no al renombre recién emitido."""
+    engine, conn = _engine_with(
+        [MagicMock(), _alias_count_row("Copec", 4), MagicMock()]
+    )
+    with patch("sky.domain.merchant_feedback.get_engine", return_value=engine):
+        await record_user_rename("u9", "60092 providencia", "transport", "Bencinera")
+
+    params = conn.execute.await_args_list[2].args[1]
+    assert params["name"] == "Copec"
+
+
+async def test_rename_trimea_el_nombre() -> None:
+    engine, conn = _engine_with([MagicMock(), _alias_count_row("Copec", 1)])
+    with patch("sky.domain.merchant_feedback.get_engine", return_value=engine):
+        await record_user_rename("u1", "60092 providencia", "transport", "  Copec  ")
+
+    assert conn.execute.await_args_list[0].args[1]["name"] == "Copec"
+
+
+async def test_rename_vacios_no_tocan_db() -> None:
+    with patch("sky.domain.merchant_feedback.get_engine") as mock_ge:
+        assert await record_user_rename("u1", "", "food", "Copec") is False
+        assert await record_user_rename("u1", "jumbo", "food", "   ") is False
+    mock_ge.assert_not_called()
+
+
+# ── Defensa en profundidad en la promoción de aliases ────────────────────────
+
+async def test_promote_alias_se_niega_con_key_transferencia() -> None:
+    conn = AsyncMock()
+    await _maybe_promote_alias(conn, "transferencia a: juan perez")
+    conn.execute.assert_not_awaited()
+
+
+async def test_promote_alias_se_niega_con_key_pasarela() -> None:
+    """Aliases viejos elegibles para una etiqueta de pasarela podrían dar
+    quórum, pero la promoción se niega a escribir."""
+    conn = AsyncMock()
+    await _maybe_promote_alias(conn, "mercadopago decop")
+    conn.execute.assert_not_awaited()
+
+
+async def test_promote_alias_sin_filas_no_escribe() -> None:
+    rs = MagicMock()
+    rs.first.return_value = None
+    conn = AsyncMock()
+    conn.execute = AsyncMock(return_value=rs)
+    await _maybe_promote_alias(conn, "comercio nuevo")
     assert conn.execute.await_count == 1  # solo el conteo

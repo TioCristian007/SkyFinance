@@ -182,3 +182,99 @@ async def record_user_categorization(
         category=category,
         eligible=eligible,
     )
+
+
+# ── Fase 2: renombre de comercio (aliases) ───────────────────────────────────
+
+async def _maybe_promote_alias(conn: AsyncConnection, merchant_key: str) -> None:
+    """Promueve el nombre mayoritario a `merchant_display_names` si hay quórum.
+
+    Mismo modelo que la promoción de categorías: mayoría = display_name con
+    más usuarios DISTINTOS entre aliases elegibles (match exacto del nombre
+    tras trim — conservador: quórum más difícil = más seguro). Sin quórum no
+    se escribe nada. No hay escritor IA en esa tabla, así que el upsert es
+    inline (sin guarda de prioridad).
+    """
+    if not _key_is_promotable(merchant_key):
+        return
+
+    rs = await conn.execute(
+        text("""
+            SELECT display_name, COUNT(DISTINCT user_id) AS voters
+              FROM public.merchant_aliases
+             WHERE merchant_key = :mkey AND crowdsource_eligible
+             GROUP BY display_name
+             ORDER BY voters DESC, MAX(updated_at) DESC
+             LIMIT 1
+        """),
+        {"mkey": merchant_key},
+    )
+    row = rs.first()
+    if row is None:
+        return
+
+    voters = int(row.voters)
+    if voters < settings.merchant_vote_promotion_threshold:
+        return
+
+    await conn.execute(
+        text("""
+            INSERT INTO public.merchant_display_names (merchant_key, display_name)
+            VALUES (:mkey, :name)
+            ON CONFLICT (merchant_key) DO UPDATE SET
+                display_name = EXCLUDED.display_name,
+                updated_at   = NOW()
+        """),
+        {"mkey": merchant_key, "name": str(row.display_name)},
+    )
+    # El nombre elegido es contenido de usuario → no va a logs, solo la key.
+    logger.info("merchant_alias_promoted", merchant=merchant_key, voters=voters)
+
+
+async def record_user_rename(
+    user_id: str,
+    raw_description: str,
+    current_category: str,
+    display_name: str,
+) -> bool:
+    """Registra el renombre del usuario y promueve el nombre global con quórum.
+
+    MISMA elegibilidad que los votos de categoría (`is_crowdsource_eligible`,
+    con la categoría actual de la tx): transferencias, contrapartes personales
+    y etiquetas de pasarela quedan como renombre privado, jamás compartido.
+
+    Devuelve la elegibilidad para que la UI ajuste el copy ("se comparte si
+    varios coinciden" vs "solo visible para ti"). Alias y promoción van en
+    UNA transacción.
+    """
+    merchant_key = normalize_merchant(raw_description or "")
+    name = (display_name or "").strip()
+    if not merchant_key or not name:
+        return False
+
+    eligible = is_crowdsource_eligible(raw_description, current_category)
+
+    engine = get_engine()
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("""
+                INSERT INTO public.merchant_aliases
+                       (user_id, merchant_key, display_name, crowdsource_eligible)
+                VALUES (:uid, :mkey, :name, :elig)
+                ON CONFLICT (user_id, merchant_key) DO UPDATE SET
+                    display_name         = EXCLUDED.display_name,
+                    crowdsource_eligible = EXCLUDED.crowdsource_eligible,
+                    updated_at           = NOW()
+            """),
+            {"uid": user_id, "mkey": merchant_key, "name": name, "elig": eligible},
+        )
+        if eligible:
+            await _maybe_promote_alias(conn, merchant_key)
+
+    # Ni la key inelegible ni el display_name (contenido de usuario) a logs.
+    logger.info(
+        "merchant_alias_recorded",
+        merchant=merchant_key if eligible else "<contraparte personal>",
+        eligible=eligible,
+    )
+    return eligible
