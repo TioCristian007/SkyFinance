@@ -45,6 +45,28 @@ Mismo playbook que destrabó BChile Auth0:
 
 **Criterio Fase 0**: tenemos el dominio de login real, los selectores, el patrón del JWT y los endpoints de API actuales — con evidencia, no suposición.
 
+### ✅ Discovery RESULTADOS (2026-06-13, captura PII-safe de la cuenta del fundador)
+
+**Login** — entry `https://www.bci.cl/corporativo/banco-en-linea/personas` (widget de login embebido; el candidato `bciimg.bci.cl/sitioseguro/login/...` redirige ahí). Form:
+- RUT visible: **`#rut_aux`** (`name=rut_aux`, placeholder "Ingresa tu RUT"). Los `#rut` + `#dig` son **hidden** que el JS del form rellena al escribir en `rut_aux` → el código viejo apuntaba a `input[name="rut"]`/`#rut` (los hidden) y por eso no llenaba nada.
+- Clave: **`#clave`** (`name=clave`, type password).
+- Hidden del form: `transaccion, grupo, serv(#input1), canal(#input2), touch`. Submit: `button[type=submit]` dentro del form de login (hay varios submits en la página — search/comentarios; targetear el del form que contiene `#clave`).
+- App autenticada post-login: `www.bci.cl/personas`. Anti-fraude **Easy Solutions DetectCA** (`detectca.easysol.net`) presente → posible riesgo desde datacenter (como B-1 de BChile); verificar en prod.
+
+**API interna** — base SIN cambios: `https://apilocal.bci.cl/bci-produccion/api-bci/bff-saldosyultimosmovimientoswebpersonas/v3.2`. JWT Bearer se intercepta del tráfico (la estrategia actual sirve). **Endpoints nuevos** (todos POST, `application/json`, con Bearer):
+
+| Endpoint | Respuesta (shape verificado) |
+|---|---|
+| `cuentas-busquedas/por-rut` | `{cuentas: [{numero: str, tipo: str}]}` — **lista de cuentas** (reemplaza el `GET /cuentas` que usa el código viejo) |
+| `cuentas-busquedas/por-numero-cuenta` | `{numero, tipo, estado, saldoContable: int, saldoDisponible: int, retenciones, lineaSobregiro{montoUtilizado,saldoDisponible}, lineaEmergencia{...}, ultimosChequesCobrados[]}` — **saldo** |
+| `cuentas-movimientos/por-numero-cuenta` | `{movimientos: [{fechaMovimiento: str, idMovimiento: str, glosa: str, monto: str, serie: str, tipo: str, detalleMovimiento{...}}], ordenadoPor: str}` — **movimientos** |
+
+Otros con Bearer (no esenciales): `ms-gestiondatoscliente-neg/v2.1/obtenerDatosCliente` (datos cliente), `ms-bciplus-orq/v1.9/usuarios|cashback`.
+
+**Normalización** (mapear en `_to_canonical`): `idMovimiento` → `native_id` (idempotencia, como BChile); `monto` (str) → int; `tipo` (cargo/abono/débito/crédito) → signo; `fechaMovimiento` → date; `glosa` → `raw_description`.
+
+**Único gap restante (lo resuelve Fable en el primer test)**: los **bodies** de los POST. `por-numero-cuenta` ya usa `{numero, tipo}` (el código viejo lo hacía y funcionaba). Para `por-rut` (probable `{rut, dig}` o `{rut}`) y `cuentas-movimientos` (probable `{numero, tipo}` + quizá rango/paginación): interceptar el `request.post_data` que dispara el frontend durante la navegación a "Saldos y movimientos" en el primer test (el scraper ya escucha requests para el JWT — extender para loguear esos bodies PII-safe y replicarlos).
+
 ---
 
 ## FASE 1+ — Rework (build, tras la captura)
