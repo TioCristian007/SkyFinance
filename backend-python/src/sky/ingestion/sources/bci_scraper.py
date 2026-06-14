@@ -105,10 +105,12 @@ MOVEMENTS_PATH = "cuentas-movimientos/por-numero-cuenta"
 # si el confirmado no devuelve cuentas.
 BODY_CAPTURE_PATHS = (ACCOUNTS_PATH, MOVEMENTS_PATH)
 
-# Headers que NO se replican en _api_post (test #5): forbidden header names que
-# el browser gestiona/descarta igual, o los que seteamos nosotros. Lo que queda
-# (x-apikey, canal, id-transaccion, x-bci-*…) es lo que el gateway BFF exige —
-# faltaban y respondía 400 "Cabeceras incompletas".
+# Headers que NO se replican en _api_post: los pseudo-headers HTTP/2
+# (":"-prefixed, que rompen fetch con "Invalid name" — test #6); los forbidden
+# header names que el browser gestiona/descarta igual; y los que seteamos
+# nosotros. Lo que queda son los headers de app que el gateway (IBM API Connect)
+# exige —faltaban y daba 400 "Cabeceras incompletas" (test #5)—: x-ibm-client-id,
+# application-id, channel, reference-service, reference-operation, origin-addr.
 HEADER_REPLAY_DENY = frozenset(
     {
         "host",
@@ -119,15 +121,27 @@ HEADER_REPLAY_DENY = frozenset(
         "referer",
         "user-agent",
         "accept-encoding",
+        "priority",
         "content-type",
         "accept",
         "authorization",
     }
 )
-HEADER_REPLAY_DENY_PREFIXES = ("sec-",)
-# Nombres de header cuyo VALOR se redacta al loguear (un x-apikey del BFF no debe
-# quedar en logs). La KEY siempre queda visible — es el diagnóstico.
-SENSITIVE_HEADER_HINTS = ("apikey", "api-key", "token", "secret", "auth", "session", "csrf")
+# ":" → pseudo-headers HTTP/2 (:authority/:method/:path/:scheme): inválidos en
+# fetch(). "sec-" → sec-fetch-*/sec-ch-ua* (browser-managed).
+HEADER_REPLAY_DENY_PREFIXES = (":", "sec-")
+# Nombres de header cuyo VALOR se redacta al loguear (un x-ibm-client-id del
+# gateway no debe quedar en logs). La KEY siempre queda visible — es el diagnóstico.
+SENSITIVE_HEADER_HINTS = (
+    "apikey",
+    "api-key",
+    "token",
+    "secret",
+    "auth",
+    "session",
+    "csrf",
+    "client-id",
+)
 
 RUT_SELECTORS = [
     "#rut_aux",
@@ -1162,8 +1176,9 @@ class BCIScraperSource(DataSource):
         Redacta: el token (`authorization` → solo el esquema + '[redacted]', lo
         que confirma que el frontend manda 'bearer' en minúscula); las cookies
         por completo; y el VALOR de headers cuyo nombre sugiere credencial
-        (apikey, token, secret, x-auth*…) — un x-apikey del BFF no debe quedar en
-        logs. En el resto redacta RUTs y corridas de dígitos. Las keys SIEMPRE
+        (apikey, token, secret, client-id, x-auth*…) — un x-ibm-client-id del
+        gateway no debe quedar en logs. En el resto redacta RUTs y corridas de
+        dígitos. Las keys SIEMPRE
         quedan visibles (es el diagnóstico: QUÉ headers manda el frontend) y los
         no sensibles (content-type, accept, origin, canal…) muestran su valor.
         """
@@ -1191,13 +1206,15 @@ class BCIScraperSource(DataSource):
     def _replayable_headers(headers: dict[str, str]) -> dict[str, str]:
         """Subconjunto de headers del frontend que SÍ se replican en _api_post.
 
-        El gateway BFF respondía 400 "Cabeceras incompletas" (test #5): faltaban
-        los headers custom que el frontend manda. Se replican TODOS salvo (a) los
-        forbidden header names que el browser gestiona/descarta igual (host,
-        cookie, origin, user-agent, sec-*…) y (b) los que seteamos nosotros
-        (authorization, content-type, accept). Lo que queda — x-apikey, canal,
-        id-transaccion, x-bci-*… — es lo que faltaba. Keys a minúscula (como las
-        devuelve all_headers)."""
+        El gateway (IBM API Connect) respondía 400 "Cabeceras incompletas" (test
+        #5): faltaban los headers de app que el frontend manda. Se replican TODOS
+        salvo (a) los pseudo-headers HTTP/2 (":"-prefixed, que rompen fetch con
+        "Invalid name" — test #6); (b) los forbidden header names que el browser
+        gestiona/descarta igual (host, cookie, origin, user-agent, sec-*,
+        priority…); (c) los que seteamos nosotros (authorization, content-type,
+        accept). Lo que queda — x-ibm-client-id, application-id, channel,
+        reference-service, reference-operation, origin-addr — es lo que faltaba.
+        Keys a minúscula (como las devuelve all_headers)."""
         out: dict[str, str] = {}
         for key, value in headers.items():
             lk = key.lower()

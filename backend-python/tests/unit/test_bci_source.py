@@ -743,39 +743,72 @@ def test_scrub_headers_authorization_mayuscula_y_sin_esquema() -> None:
 
 
 def test_scrub_headers_redacta_credencial_por_nombre() -> None:
-    """El VALOR de un header con nombre de credencial (x-apikey/token/…) se
-    redacta en el log; canal queda visible y la key siempre visible (§20)."""
+    """El VALOR de un header con nombre de credencial (x-apikey/token/
+    x-ibm-client-id/…) se redacta en el log; application-id/canal quedan
+    visibles y la key siempre visible (§20)."""
     out = BCIScraperSource._scrub_headers(
-        {"x-apikey": "SECRET_APIKEY_VALUE", "x-session-token": "abc", "canal": "WEB"}
+        {
+            "x-apikey": "SECRET_APIKEY_VALUE",
+            "x-session-token": "abc",
+            "x-ibm-client-id": "IBM_CLIENT_SECRET",  # hardening test #6
+            "application-id": "fe-bciplus",
+            "canal": "WEB",
+        }
     )
     assert out["x-apikey"] == "[redacted]"
     assert out["x-session-token"] == "[redacted]"
-    assert out["canal"] == "WEB"  # no sensible → valor visible
-    assert "SECRET_APIKEY_VALUE" not in str(out) and "abc" not in str(out)
+    assert out["x-ibm-client-id"] == "[redacted]"
+    assert out["application-id"] == "fe-bciplus"  # no sensible → valor visible
+    assert out["canal"] == "WEB"
+    flat = str(out)
+    assert "SECRET_APIKEY_VALUE" not in flat and "abc" not in flat
+    assert "IBM_CLIENT_SECRET" not in flat
 
 
-# ── _replayable_headers + _capture_headers: replay de headers (fix test #5) ──
+# ── _replayable_headers + _capture_headers: replay de headers (fix test #5/#6) ─
 
 
-def test_replayable_headers_excluye_browser_managed_y_propios() -> None:
-    """Quedan solo los custom (x-apikey/canal/id-*…); se excluyen los forbidden
-    header names (cookie/origin/user-agent/sec-*) y los que seteamos nosotros
-    (authorization/content-type/accept). Keys a minúscula."""
+def test_replayable_headers_excluye_pseudo_y_browser_conserva_app() -> None:
+    """Excluye los pseudo-headers HTTP/2 (":"-prefixed, que rompían fetch con
+    'Invalid name' — test #6), los browser-managed (priority/sec-*/origin/
+    user-agent/cookie…) y los que seteamos nosotros (authorization/content-type/
+    accept). Conserva los headers de app que el gateway IBM exige. Keys a
+    minúscula (X-IBM-Client-Id → x-ibm-client-id)."""
     raw = {
-        "Host": "apilocal.bci.cl",
-        "Cookie": "cf_clearance=x",
-        "Origin": "https://www.bci.cl",
-        "User-Agent": "UA",
-        "Sec-Fetch-Mode": "cors",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "Authorization": "bearer TOK",
-        "X-ApiKey": "K",
-        "canal": "WEB",
-        "id-transaccion": "ABC123",
+        ":authority": "apilocal.bci.cl",
+        ":method": "POST",
+        ":path": "/cuentas-busquedas/por-rut",
+        ":scheme": "https",
+        "host": "apilocal.bci.cl",
+        "cookie": "cf_clearance=x",
+        "origin": "https://www.bci.cl",
+        "referer": "https://www.bci.cl/",
+        "user-agent": "UA",
+        "accept-encoding": "gzip",
+        "priority": "u=1, i",
+        "sec-fetch-mode": "cors",
+        "sec-ch-ua": '"Chromium"',
+        "content-type": "application/json",
+        "accept": "application/json",
+        "authorization": "bearer TOK",
+        "X-IBM-Client-Id": "CLIENT_ID_SECRET",  # mayúscula → se normaliza
+        "application-id": "fe-bciplus",
+        "channel": "110",
+        "reference-service": "saldos",
+        "reference-operation": "DatosSucursales",
+        "origin-addr": "10.0.0.1",
     }
     out = BCIScraperSource._replayable_headers(raw)
-    assert out == {"x-apikey": "K", "canal": "WEB", "id-transaccion": "ABC123"}
+    assert out == {
+        "x-ibm-client-id": "CLIENT_ID_SECRET",
+        "application-id": "fe-bciplus",
+        "channel": "110",
+        "reference-service": "saldos",
+        "reference-operation": "DatosSucursales",
+        "origin-addr": "10.0.0.1",
+    }
+    # ningún pseudo-header HTTP/2 sobrevive (causaban "Invalid name" en fetch)
+    assert not any(k.startswith(":") for k in out)
 
 
 class FakeRequest:
