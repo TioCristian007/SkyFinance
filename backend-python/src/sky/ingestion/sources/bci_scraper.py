@@ -143,6 +143,23 @@ SENSITIVE_HEADER_HINTS = (
     "client-id",
 )
 
+# Keys cuyo VALOR crudo se incluye en el shape de diagnóstico de movimientos
+# (monto/tipo y afines) para ver el formato real (bug ×1000 + signo). Lo demás
+# (glosa/descripcion/contraparte/cuenta) NO entra al log (§20).
+RAW_SHAPE_VALUE_HINTS = (
+    "monto",
+    "valor",
+    "importe",
+    "saldo",
+    "signo",
+    "cargo",
+    "abono",
+    "moneda",
+    "factor",
+    "cantidad",
+    "tipo",
+)
+
 RUT_SELECTORS = [
     "#rut_aux",
     'input[name="rut_aux"]',
@@ -1103,6 +1120,15 @@ class BCIScraperSource(DataSource):
             return None
         if not isinstance(data, dict):
             return None
+        # Captura raw-shape del saldo (gated, §20): contrastar el formato int del
+        # saldo (correcto) vs el string del monto del movimiento (bug ×1000).
+        if settings.scraper_debug_capture:
+            logger.info(
+                "bci_balance_raw_shape",
+                keys=sorted(data.keys()),
+                saldoContable=repr(data.get("saldoContable")),
+                saldoDisponible=repr(data.get("saldoDisponible")),
+            )
         saldo = data.get("saldoContable")
         if saldo is None:
             saldo = data.get("saldoDisponible")
@@ -1126,8 +1152,20 @@ class BCIScraperSource(DataSource):
             return []
         if isinstance(raw, dict):
             movs = raw.get("movimientos", [])
-            return movs if isinstance(movs, list) else []
-        return raw if isinstance(raw, list) else []
+            movs = movs if isinstance(movs, list) else []
+        else:
+            movs = raw if isinstance(raw, list) else []
+        # Captura raw-shape (gated, §20): diagnostica el formato de monto/tipo
+        # (bugs de signo + ×1000) sin tocar el parseo todavía.
+        if settings.scraper_debug_capture and movs:
+            for i, mov in enumerate(movs[:2]):
+                if isinstance(mov, dict):
+                    logger.info(
+                        "bci_movement_raw_shape",
+                        index=i,
+                        **self._raw_movement_shape(mov),
+                    )
+        return movs
 
     def _body_for(self, captured: dict[str, str], path: str, fallback: dict) -> dict:
         """Body capturado del frontend (parseado) o el fallback construido."""
@@ -1299,6 +1337,36 @@ class BCIScraperSource(DataSource):
         if tipo in ("abono", "credito", "crédito"):
             return abs(magnitude)
         return magnitude
+
+    @staticmethod
+    def _raw_movement_shape(mov: dict) -> dict[str, Any]:
+        """Shape PII-safe de un movimiento crudo para DIAGNOSTICAR el formato de
+        monto/tipo (bugs de signo + ×1000) — captura, no fix.
+
+        Expone las KEYS y el repr de los campos de monto/tipo TAL CUAL: sin
+        _scrub_, porque el digit-redaction borraría justo el formato que queremos
+        ver (datos del fundador, en su local, gated tras scraper_debug_capture).
+        NUNCA loguea glosa/descripcion/contraparte: solo desc_len. De
+        detalleMovimiento: las keys + el repr de los valores numéricos o de
+        monto/tipo (RAW_SHAPE_VALUE_HINTS), no los de texto."""
+        shape: dict[str, Any] = {
+            "keys": sorted(mov.keys()),
+            "monto": repr(mov.get("monto")),
+            "montoMovimiento": repr(mov.get("montoMovimiento")),
+            "tipo": repr(mov.get("tipo")),
+            "tipoMovimiento": repr(mov.get("tipoMovimiento")),
+            "desc_len": len(str(mov.get("glosa") or mov.get("descripcion") or "")),
+        }
+        detalle = mov.get("detalleMovimiento")
+        if isinstance(detalle, dict):
+            shape["detalle_keys"] = sorted(detalle.keys())
+            shape["detalle_fields"] = {
+                k: repr(v)
+                for k, v in detalle.items()
+                if (isinstance(v, (int, float)) and not isinstance(v, bool))
+                or any(h in str(k).lower() for h in RAW_SHAPE_VALUE_HINTS)
+            }
+        return shape
 
     @staticmethod
     def _parse_int(raw: Any) -> int:

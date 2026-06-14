@@ -531,6 +531,40 @@ def test_parse_int_formato_chileno() -> None:
     assert p(None) == 0
 
 
+def test_raw_movement_shape_no_filtra_glosa_ni_descripcion() -> None:
+    """El shape de diagnóstico (captura para arreglar monto/tipo después) expone
+    monto/tipo/keys CRUDOS —los necesitamos para ver el formato (bug ×1000 +
+    signo)— pero NUNCA la glosa/descripcion/contraparte: solo desc_len (§20)."""
+    mov = {
+        "monto": "24.900,000",
+        "tipo": "C",
+        "idMovimiento": "m1",
+        "glosa": "TRANSFERENCIA A JUAN PEREZ SECRETO",
+        "descripcion": "compra NOMBRE_PRIVADO",
+        "detalleMovimiento": {
+            "valorMonto": "24900.000",
+            "indicadorTipo": "CARGO",
+            "nombreContraparte": "JUAN PEREZ SECRETO",
+        },
+    }
+    shape = BCIScraperSource._raw_movement_shape(mov)
+    flat = str(shape)
+
+    # los campos de formato van crudos (sin redactar dígitos): es el objetivo
+    assert shape["monto"] == "'24.900,000'"
+    assert shape["tipo"] == "'C'"
+    assert "monto" in shape["keys"] and "tipo" in shape["keys"]
+    # detalle: keys + repr de los campos de monto/tipo, NO el de la contraparte
+    assert shape["detalle_fields"] == {
+        "valorMonto": "'24900.000'",
+        "indicadorTipo": "'CARGO'",
+    }
+    # PII: glosa/descripcion/contraparte NUNCA aparecen, solo la longitud
+    assert "SECRETO" not in flat and "NOMBRE_PRIVADO" not in flat
+    assert "JUAN PEREZ" not in flat
+    assert shape["desc_len"] == len("TRANSFERENCIA A JUAN PEREZ SECRETO")
+
+
 # ── Body capture-and-replay ──────────────────────────────────────────────────
 
 
