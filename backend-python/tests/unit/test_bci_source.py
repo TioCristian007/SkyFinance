@@ -470,7 +470,7 @@ def test_to_canonical_mapea_shape_bci() -> None:
         "fechaMovimiento": "2026-06-10",
         "idMovimiento": "MOV-123",
         "glosa": "COMPRA JUMBO LAS CONDES",
-        "monto": "12.345",
+        "monto": "12345.0000",  # formato BCI: '.' decimal, 4 decimales
         "tipo": "cargo",
     }
     cm = BCIScraperSource()._to_canonical(mov, "bci", None)
@@ -520,15 +520,51 @@ def test_deduplicate_por_external_id() -> None:
     assert scraper._deduplicate([a, b]) == [a]
 
 
-def test_parse_int_formato_chileno() -> None:
+def test_parse_int_monto_bci_punto_decimal() -> None:
+    """En la API de BCI el monto string usa '.' (o ',') DECIMAL, 4 decimales, SIN
+    miles: se toma la PARTE ENTERA (CLP sin centavos). Distinto del scraper
+    BChile, donde '.' es separador de miles. El saldo llega int y pasa intacto."""
     p = BCIScraperSource._parse_int
-    assert p("12.345") == 12345
-    assert p("$1.234.567") == 1_234_567
-    assert p("-12.345") == -12345
-    assert p("12.345,67") == 12345  # corta en la coma decimal
-    assert p(98765) == 98765
+    assert p("12680.0000") == 12680  # caso real del raw-shape (antes ×10000)
+    assert p("125000.0000") == 125000
+    assert p("12680.5678") == 12680  # se descarta el decimal
+    assert p("-12680.0000") == -12680  # signo respetado
+    assert p("12680,50") == 12680  # ',' también es decimal
+    assert p(192981) == 192981  # saldoContable int → intacto
+    assert p(12680.0) == 12680  # float → trunca
     assert p("") == 0
     assert p(None) == 0
+
+
+def test_parse_amount_signo_por_tipo_char_bci() -> None:
+    """El `tipo` de BCI es un char: 'C'=Cargo→negativo (confirmado, envío de
+    plata), 'A'=Abono→positivo. Case-insensitive; magnitud desde el monto
+    decimal. El mapeo por palabra sigue como fallback."""
+    s = BCIScraperSource()
+    assert s._parse_amount({"monto": "12680.0000", "tipo": "C"}) == -12680
+    assert s._parse_amount({"monto": "12680.0000", "tipo": "c"}) == -12680
+    assert s._parse_amount({"monto": "125000.0000", "tipo": "A"}) == 125000
+    assert s._parse_amount({"monto": "1000.0000", "tipo": "cargo"}) == -1000
+    assert s._parse_amount({"monto": "1000.0000", "tipo": "abono"}) == 1000
+
+
+def test_parse_amount_tipo_desconocido_warn_y_positivo(monkeypatch) -> None:
+    """Tipo no reconocido → warning bci_tipo_desconocido + magnitud POSITIVA
+    (los abonos quedan bien; un cargo con código raro saldría +, pero el warning
+    lo delata)."""
+    from sky.ingestion.sources import bci_scraper as mod
+
+    calls: list[tuple[str, dict]] = []
+
+    class _Rec:
+        def warning(self, event: str, **kw: object) -> None:
+            calls.append((event, kw))
+
+    monkeypatch.setattr(mod, "logger", _Rec())
+    amount = BCIScraperSource()._parse_amount({"monto": "5000.0000", "tipo": "Z"})
+
+    assert amount == 5000  # magnitud positiva
+    assert calls == [("bci_tipo_desconocido", {"tipo": "'z'"})]
 
 
 def test_raw_movement_shape_no_filtra_glosa_ni_descripcion() -> None:
@@ -563,6 +599,25 @@ def test_raw_movement_shape_no_filtra_glosa_ni_descripcion() -> None:
     assert "SECRETO" not in flat and "NOMBRE_PRIVADO" not in flat
     assert "JUAN PEREZ" not in flat
     assert shape["desc_len"] == len("TRANSFERENCIA A JUAN PEREZ SECRETO")
+
+
+def test_movement_tipos_lista_index_y_tipo_sin_glosa() -> None:
+    """Verificación de signo: tipo (char, no PII) + index de TODOS los movs (con
+    su posición original), para cruzar contra la lista de glosas que imprime el
+    script. Glosa/contraparte fuera — solo desc_len (§20)."""
+    movs = [
+        {"tipo": "C", "glosa": "TRANSFERENCIA A JUAN SECRETO"},
+        {"tipo": "A", "glosa": "ABONO SUELDO PRIVADO"},
+        "no-dict-se-ignora",
+    ]
+    out = BCIScraperSource._movement_tipos(movs)  # type: ignore[arg-type]
+
+    assert out == [
+        {"i": 0, "tipo": "'C'", "desc_len": len("TRANSFERENCIA A JUAN SECRETO")},
+        {"i": 1, "tipo": "'A'", "desc_len": len("ABONO SUELDO PRIVADO")},
+    ]
+    flat = str(out)
+    assert "SECRETO" not in flat and "PRIVADO" not in flat
 
 
 # ── Body capture-and-replay ──────────────────────────────────────────────────

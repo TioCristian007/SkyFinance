@@ -1155,8 +1155,9 @@ class BCIScraperSource(DataSource):
             movs = movs if isinstance(movs, list) else []
         else:
             movs = raw if isinstance(raw, list) else []
-        # Captura raw-shape (gated, §20): diagnostica el formato de monto/tipo
-        # (bugs de signo + ×1000) sin tocar el parseo todavía.
+        # Captura raw-shape (gated, §20): el formato de monto/tipo (primeros 2,
+        # detallado) + el tipo de TODOS los movs (char, no PII) para verificar el
+        # signo de cada uno contra la lista de glosas que imprime el script.
         if settings.scraper_debug_capture and movs:
             for i, mov in enumerate(movs[:2]):
                 if isinstance(mov, dict):
@@ -1165,6 +1166,7 @@ class BCIScraperSource(DataSource):
                         index=i,
                         **self._raw_movement_shape(mov),
                     )
+            logger.info("bci_movement_tipos", tipos=self._movement_tipos(movs))
         return movs
 
     def _body_for(self, captured: dict[str, str], path: str, fallback: dict) -> dict:
@@ -1321,21 +1323,25 @@ class BCIScraperSource(DataSource):
         )
 
     def _parse_amount(self, mov: dict) -> int:
-        """Magnitud desde `monto` (str/num) + signo desde `tipo`.
+        """Magnitud desde `monto` (string decimal BCI) + signo desde `tipo`.
 
-        BCI entrega `monto` como magnitud y `tipo` (cargo/abono/débito/crédito)
-        da el signo: positivo = ingreso (abono), negativo = gasto (cargo). Si el
-        tipo no se reconoce, se respeta el signo que venga en el monto.
+        En la API de BCI el `tipo` es un CHAR: 'C' = Cargo (plata que SALE) →
+        NEGATIVO (confirmado con "Transferencia enviada"); 'A' = Abono (entra) →
+        POSITIVO. Se mantiene el mapeo por palabra (cargo/abono/debito/credito)
+        como fallback. Case-insensitive. Si el tipo NO se reconoce → warning +
+        magnitud POSITIVA: los abonos quedan bien y un cargo con código raro
+        saldría positivo, pero el `bci_tipo_desconocido` lo delata para refinar.
         """
         raw = mov.get("monto")
         if raw is None:
             raw = mov.get("montoMovimiento", 0)
-        magnitude = self._parse_int(raw)
+        magnitude = abs(self._parse_int(raw))
         tipo = str(mov.get("tipo") or mov.get("tipoMovimiento") or "").strip().lower()
-        if tipo in ("cargo", "debito", "débito"):
-            return -abs(magnitude)
-        if tipo in ("abono", "credito", "crédito"):
-            return abs(magnitude)
+        if tipo in ("c", "cargo", "debito", "débito"):
+            return -magnitude
+        if tipo in ("a", "abono", "credito", "crédito"):
+            return magnitude
+        logger.warning("bci_tipo_desconocido", tipo=repr(tipo))
         return magnitude
 
     @staticmethod
@@ -1369,9 +1375,31 @@ class BCIScraperSource(DataSource):
         return shape
 
     @staticmethod
+    def _movement_tipos(movs: list[dict]) -> list[dict[str, Any]]:
+        """tipo (char, NO PII) + index + desc_len de CADA movimiento, para
+        verificar el signo de todos contra la lista de glosas que imprime el
+        script (§20: ni glosa ni contraparte, solo su longitud)."""
+        return [
+            {
+                "i": i,
+                "tipo": repr(m.get("tipo")),
+                "desc_len": len(str(m.get("glosa") or m.get("descripcion") or "")),
+            }
+            for i, m in enumerate(movs)
+            if isinstance(m, dict)
+        ]
+
+    @staticmethod
     def _parse_int(raw: Any) -> int:
-        """Parsea un monto CLP a int. Tolera str con separador de miles chileno
-        ('12.345'), signo y símbolos; corta en la coma decimal si la hubiera."""
+        """Parsea un monto CLP de la API de BCI a int.
+
+        Numérico (int/float) → int() directo: el saldo (saldoContable) llega así
+        (192981) y queda intacto. String → la PARTE ENTERA: en la API de BCI el
+        `monto` es un string con separador DECIMAL '.' y 4 decimales, SIN
+        agrupación de miles ("12680.0000" = 12680 CLP). OJO: al revés que el
+        scraper BChile, donde el '.' es separador de MILES — por eso este parser
+        es propio de BCI. CLP no tiene centavos: se descarta lo posterior al
+        primer '.'/','."""
         if isinstance(raw, bool):
             return 0
         if isinstance(raw, (int, float)):
@@ -1379,11 +1407,11 @@ class BCIScraperSource(DataSource):
         s = str(raw).strip()
         if not s:
             return 0
-        # Formato chileno: '.' miles, ',' decimales — la parte entera es lo que importa.
-        if "," in s:
-            s = s.split(",", 1)[0]
-        neg = s.lstrip().startswith("-")
-        digits = re.sub(r"[^\d]", "", s)
+        neg = s.startswith("-")
+        # '.' y ',' son separador DECIMAL en BCI (no miles): la parte entera es
+        # todo lo anterior al primero de ellos.
+        int_part = s.split(".", 1)[0].split(",", 1)[0]
+        digits = re.sub(r"[^\d]", "", int_part)
         if not digits:
             return 0
         value = int(digits)
