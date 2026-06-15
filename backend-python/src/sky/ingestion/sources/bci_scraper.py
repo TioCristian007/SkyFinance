@@ -143,23 +143,6 @@ SENSITIVE_HEADER_HINTS = (
     "client-id",
 )
 
-# Keys cuyo VALOR crudo se incluye en el shape de diagnóstico de movimientos
-# (monto/tipo y afines) para ver el formato real (bug ×1000 + signo). Lo demás
-# (glosa/descripcion/contraparte/cuenta) NO entra al log (§20).
-RAW_SHAPE_VALUE_HINTS = (
-    "monto",
-    "valor",
-    "importe",
-    "saldo",
-    "signo",
-    "cargo",
-    "abono",
-    "moneda",
-    "factor",
-    "cantidad",
-    "tipo",
-)
-
 RUT_SELECTORS = [
     "#rut_aux",
     'input[name="rut_aux"]',
@@ -1120,15 +1103,6 @@ class BCIScraperSource(DataSource):
             return None
         if not isinstance(data, dict):
             return None
-        # Captura raw-shape del saldo (gated, §20): contrastar el formato int del
-        # saldo (correcto) vs el string del monto del movimiento (bug ×1000).
-        if settings.scraper_debug_capture:
-            logger.info(
-                "bci_balance_raw_shape",
-                keys=sorted(data.keys()),
-                saldoContable=repr(data.get("saldoContable")),
-                saldoDisponible=repr(data.get("saldoDisponible")),
-            )
         saldo = data.get("saldoContable")
         if saldo is None:
             saldo = data.get("saldoDisponible")
@@ -1152,22 +1126,8 @@ class BCIScraperSource(DataSource):
             return []
         if isinstance(raw, dict):
             movs = raw.get("movimientos", [])
-            movs = movs if isinstance(movs, list) else []
-        else:
-            movs = raw if isinstance(raw, list) else []
-        # Captura raw-shape (gated, §20): el formato de monto/tipo (primeros 2,
-        # detallado) + el tipo de TODOS los movs (char, no PII) para verificar el
-        # signo de cada uno contra la lista de glosas que imprime el script.
-        if settings.scraper_debug_capture and movs:
-            for i, mov in enumerate(movs[:2]):
-                if isinstance(mov, dict):
-                    logger.info(
-                        "bci_movement_raw_shape",
-                        index=i,
-                        **self._raw_movement_shape(mov),
-                    )
-            logger.info("bci_movement_tipos", tipos=self._movement_tipos(movs))
-        return movs
+            return movs if isinstance(movs, list) else []
+        return raw if isinstance(raw, list) else []
 
     def _body_for(self, captured: dict[str, str], path: str, fallback: dict) -> dict:
         """Body capturado del frontend (parseado) o el fallback construido."""
@@ -1343,51 +1303,6 @@ class BCIScraperSource(DataSource):
             return magnitude
         logger.warning("bci_tipo_desconocido", tipo=repr(tipo))
         return magnitude
-
-    @staticmethod
-    def _raw_movement_shape(mov: dict) -> dict[str, Any]:
-        """Shape PII-safe de un movimiento crudo para DIAGNOSTICAR el formato de
-        monto/tipo (bugs de signo + ×1000) — captura, no fix.
-
-        Expone las KEYS y el repr de los campos de monto/tipo TAL CUAL: sin
-        _scrub_, porque el digit-redaction borraría justo el formato que queremos
-        ver (datos del fundador, en su local, gated tras scraper_debug_capture).
-        NUNCA loguea glosa/descripcion/contraparte: solo desc_len. De
-        detalleMovimiento: las keys + el repr de los valores numéricos o de
-        monto/tipo (RAW_SHAPE_VALUE_HINTS), no los de texto."""
-        shape: dict[str, Any] = {
-            "keys": sorted(mov.keys()),
-            "monto": repr(mov.get("monto")),
-            "montoMovimiento": repr(mov.get("montoMovimiento")),
-            "tipo": repr(mov.get("tipo")),
-            "tipoMovimiento": repr(mov.get("tipoMovimiento")),
-            "desc_len": len(str(mov.get("glosa") or mov.get("descripcion") or "")),
-        }
-        detalle = mov.get("detalleMovimiento")
-        if isinstance(detalle, dict):
-            shape["detalle_keys"] = sorted(detalle.keys())
-            shape["detalle_fields"] = {
-                k: repr(v)
-                for k, v in detalle.items()
-                if (isinstance(v, (int, float)) and not isinstance(v, bool))
-                or any(h in str(k).lower() for h in RAW_SHAPE_VALUE_HINTS)
-            }
-        return shape
-
-    @staticmethod
-    def _movement_tipos(movs: list[dict]) -> list[dict[str, Any]]:
-        """tipo (char, NO PII) + index + desc_len de CADA movimiento, para
-        verificar el signo de todos contra la lista de glosas que imprime el
-        script (§20: ni glosa ni contraparte, solo su longitud)."""
-        return [
-            {
-                "i": i,
-                "tipo": repr(m.get("tipo")),
-                "desc_len": len(str(m.get("glosa") or m.get("descripcion") or "")),
-            }
-            for i, m in enumerate(movs)
-            if isinstance(m, dict)
-        ]
 
     @staticmethod
     def _parse_int(raw: Any) -> int:

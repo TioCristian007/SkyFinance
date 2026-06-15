@@ -26,7 +26,7 @@ SUPPORTED_BANKS: list[dict[str, object]] = [
     },
     {
         "id": "bci", "name": "BCI", "icon": "🏦",
-        "status": "pending", "has_2fa": True, "account_type": "Cta. Vista",
+        "status": "active", "has_2fa": True, "account_type": "Cta. Vista",
     },
 ]
 

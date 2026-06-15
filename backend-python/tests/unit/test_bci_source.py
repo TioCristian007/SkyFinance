@@ -567,59 +567,6 @@ def test_parse_amount_tipo_desconocido_warn_y_positivo(monkeypatch) -> None:
     assert calls == [("bci_tipo_desconocido", {"tipo": "'z'"})]
 
 
-def test_raw_movement_shape_no_filtra_glosa_ni_descripcion() -> None:
-    """El shape de diagnóstico (captura para arreglar monto/tipo después) expone
-    monto/tipo/keys CRUDOS —los necesitamos para ver el formato (bug ×1000 +
-    signo)— pero NUNCA la glosa/descripcion/contraparte: solo desc_len (§20)."""
-    mov = {
-        "monto": "24.900,000",
-        "tipo": "C",
-        "idMovimiento": "m1",
-        "glosa": "TRANSFERENCIA A JUAN PEREZ SECRETO",
-        "descripcion": "compra NOMBRE_PRIVADO",
-        "detalleMovimiento": {
-            "valorMonto": "24900.000",
-            "indicadorTipo": "CARGO",
-            "nombreContraparte": "JUAN PEREZ SECRETO",
-        },
-    }
-    shape = BCIScraperSource._raw_movement_shape(mov)
-    flat = str(shape)
-
-    # los campos de formato van crudos (sin redactar dígitos): es el objetivo
-    assert shape["monto"] == "'24.900,000'"
-    assert shape["tipo"] == "'C'"
-    assert "monto" in shape["keys"] and "tipo" in shape["keys"]
-    # detalle: keys + repr de los campos de monto/tipo, NO el de la contraparte
-    assert shape["detalle_fields"] == {
-        "valorMonto": "'24900.000'",
-        "indicadorTipo": "'CARGO'",
-    }
-    # PII: glosa/descripcion/contraparte NUNCA aparecen, solo la longitud
-    assert "SECRETO" not in flat and "NOMBRE_PRIVADO" not in flat
-    assert "JUAN PEREZ" not in flat
-    assert shape["desc_len"] == len("TRANSFERENCIA A JUAN PEREZ SECRETO")
-
-
-def test_movement_tipos_lista_index_y_tipo_sin_glosa() -> None:
-    """Verificación de signo: tipo (char, no PII) + index de TODOS los movs (con
-    su posición original), para cruzar contra la lista de glosas que imprime el
-    script. Glosa/contraparte fuera — solo desc_len (§20)."""
-    movs = [
-        {"tipo": "C", "glosa": "TRANSFERENCIA A JUAN SECRETO"},
-        {"tipo": "A", "glosa": "ABONO SUELDO PRIVADO"},
-        "no-dict-se-ignora",
-    ]
-    out = BCIScraperSource._movement_tipos(movs)  # type: ignore[arg-type]
-
-    assert out == [
-        {"i": 0, "tipo": "'C'", "desc_len": len("TRANSFERENCIA A JUAN SECRETO")},
-        {"i": 1, "tipo": "'A'", "desc_len": len("ABONO SUELDO PRIVADO")},
-    ]
-    flat = str(out)
-    assert "SECRETO" not in flat and "PRIVADO" not in flat
-
-
 # ── Body capture-and-replay ──────────────────────────────────────────────────
 
 
