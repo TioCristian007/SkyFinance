@@ -14,7 +14,8 @@ FLUJO:
     1. goto portal BCI (www.bci.cl/corporativo/banco-en-linea/personas)
     2. type RUT en #rut_aux (el form parte en los hidden #rut/#dig) + fill #clave
     3. verificación post-fill (incl. que los hidden #rut/#dig se poblaron)
-    4. submit DENTRO del form de #clave → resolver post-submit (error/2FA/éxito)
+    4. submit DENTRO del form de #clave → resolver post-submit
+       (error/2FA/challenge Cloudflare/éxito)
     5. nudge a Saldos/Movimientos (la home no pega apilocal — test #2/#3) y
        esperar el JWT `bearer` que esa navegación dispara a apilocal.bci.cl
     6. API: POST cuentas-busquedas/por-rut          body {"rut":"<rut>-<dv>"}
@@ -193,6 +194,31 @@ LOGIN_ERROR_KEYWORDS = [
     "intentos fallidos",
 ]
 REJECTION_KEYWORDS = ["rechazad", "denegad", "cancelad"]
+
+# Marcadores PII-safe de la página de managed challenge de Cloudflare (Turnstile).
+# Desde la IP de datacenter de Railway, BCI sirve este desafío en el POST de
+# login → ningún usuario puede sincronizar (repliegue B-2, 2026-06-24). La
+# página NO contiene LOGIN_URL_MARKER, así que _still_on_login la confundiría
+# con éxito y el flujo moriría en un jwt_timeout engañoso de 30s: hay que
+# detectarla explícitamente y reportarla como bloqueo anti-bot. Todos en
+# minúscula (la detección compara contra url+content en minúscula).
+CLOUDFLARE_CHALLENGE_MARKERS = (
+    "challenges.cloudflare.com",
+    "cdn-cgi/challenge-platform",
+    "_cf_chl_opt",
+    "__cf_chl",
+    "comprobación adicional",
+    "comprobacion adicional",
+    "resuelva el siguiente desafío",
+    "resuelva el siguiente desafio",
+)
+# Mensaje del raise: contiene "anti-bot" y "desafío Cloudflare" → lo clasifica
+# como SyncFailureKind.ANTIBOT (contracts._ANTIBOT_RE). Legible para el usuario
+# y, cuando probemos con proxy residencial, diagnosticable al instante.
+CLOUDFLARE_BLOCK_MESSAGE = (
+    "Bloqueo anti-bot: BCI sirvió un desafío Cloudflare desde esta IP "
+    "(probable IP de datacenter). Reintentar más tarde o desde un proxy residencial."
+)
 
 ACCOUNTS_MENU_TEXT = [
     "saldos y movimientos",
@@ -650,6 +676,28 @@ class BCIScraperSource(DataSource):
             return False
         return LOGIN_URL_MARKER in page.url
 
+    @staticmethod
+    def _is_cloudflare_challenge(url: str, html: str) -> bool:
+        """True si la url o el HTML traen un marcador del managed challenge de
+        Cloudflare (Turnstile). PII-safe: solo busca substrings estructurales del
+        propio Cloudflare, jamás lee datos del usuario."""
+        haystack = f"{url}\n{html}".lower()
+        return any(marker in haystack for marker in CLOUDFLARE_CHALLENGE_MARKERS)
+
+    async def _is_cloudflare_challenge_page(self, page: Page) -> bool:
+        """Wrapper tolerante: lee url + content() de la página y delega en el
+        detector puro. Cualquier fallo (contexto destruido, método ausente) se
+        traga y devuelve False — la detección nunca rompe el flujo."""
+        try:
+            url = page.url
+        except Exception:
+            url = ""
+        try:
+            html = await page.content()
+        except Exception:
+            html = ""
+        return self._is_cloudflare_challenge(url, html)
+
     async def _post_submit_flow(
         self, page: Page, jwt_token: list[str], progress: ProgressCallback
     ) -> None:
@@ -677,6 +725,16 @@ class BCIScraperSource(DataSource):
         last_progress_emit = 0.0
 
         while True:
+            # Managed challenge de Cloudflare: se chequea ANTES de
+            # _still_on_login. La página de desafío NO contiene LOGIN_URL_MARKER,
+            # así que _still_on_login la tomaría por éxito y el flujo moriría en
+            # un jwt_timeout engañoso. Un challenge NUNCA es login OK. Solo si no
+            # hay JWT ya capturado (autenticado ⇒ no es un challenge).
+            if not jwt_token and await self._is_cloudflare_challenge_page(page):
+                logger.warning("bci_cloudflare_challenge", where="post_submit")
+                await self._capture_debug(page, "cloudflare_challenge", pii_safe=True)
+                raise RecoverableIngestionError(CLOUDFLARE_BLOCK_MESSAGE)
+
             if not self._still_on_login(page, jwt_token):
                 return  # éxito: dejó el login o el JWT ya apareció
 
@@ -830,6 +888,14 @@ class BCIScraperSource(DataSource):
                 renudged = True
                 await self._navigate_to_accounts_menu(page)
             await asyncio.sleep(self._poll_interval_sec)
+        # Backstop: antes de declarar un jwt_timeout genérico, ¿la página es un
+        # managed challenge de Cloudflare? (el caso real desde datacenter). Si lo
+        # es, el error correcto es ANTIBOT con mensaje legible — no un timeout
+        # engañoso de 30s. Diagnosticable al instante cuando probemos con proxy.
+        if await self._is_cloudflare_challenge_page(page):
+            logger.warning("bci_cloudflare_challenge", where="await_jwt")
+            await self._capture_debug(page, "cloudflare_challenge", pii_safe=True)
+            raise RecoverableIngestionError(CLOUDFLARE_BLOCK_MESSAGE)
         await self._emit_jwt_timeout_diagnostics(page, network_census)
         raise RecoverableIngestionError(
             "No se capturó el JWT de BCI — el dashboard autenticado no emitió "

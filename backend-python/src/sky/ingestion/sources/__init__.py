@@ -25,8 +25,13 @@ SUPPORTED_BANKS: list[dict[str, object]] = [
         "status": "active", "has_2fa": True, "account_type": "Cta. Corriente",
     },
     {
+        # REPLIEGUE 2026-06-24 (B-2): el código del scraper anda desde IP
+        # residencial, pero desde la IP de datacenter de Railway Cloudflare
+        # sirve un managed challenge (Turnstile) en el POST de login → ningún
+        # usuario puede sincronizar. Vuelve a "pending" (fuera de conectables)
+        # hasta tener proxy residencial. Es reputación de IP, no un bug.
         "id": "bci", "name": "BCI", "icon": "🏦",
-        "status": "active", "has_2fa": True, "account_type": "Cta. Vista",
+        "status": "pending", "has_2fa": True, "account_type": "Cta. Vista",
     },
 ]
 

@@ -44,6 +44,7 @@ from sky.ingestion.contracts import (
 from sky.ingestion.sources.bci_scraper import (
     ACCOUNTS_PATH,
     BALANCE_PATH,
+    CLOUDFLARE_BLOCK_MESSAGE,
     JWT_HOST,
     LOGIN_ERROR_KEYWORDS,
     LOGIN_URL_MARKER,
@@ -294,6 +295,7 @@ class FakeAuthPage:
         error_text: str = "",
         flip_url_after: int | None = None,
         body_timeline: list[tuple[int, str]] | None = None,
+        page_content: str = "",
     ):
         self.url = url
         self.body_text = body_text
@@ -303,8 +305,12 @@ class FakeAuthPage:
         self.error_text = error_text
         self.flip_url_after = flip_url_after
         self.body_timeline = body_timeline or []
+        self.page_content = page_content
         self.error_calls = 0
         self.body_calls = 0
+
+    async def content(self) -> str:  # _is_cloudflare_challenge_page
+        return self.page_content
 
     async def evaluate(self, script: str, arg: Any = None) -> Any:
         if isinstance(arg, list):  # scan de _check_login_error(keywords)
@@ -460,6 +466,136 @@ def test_match_2fa_no_matchea_el_form_de_login() -> None:
 def test_keywords_2fa_cubren_digital_pass() -> None:
     for kw in ("digital pass", "bci pass"):
         assert kw in TWO_FA_KEYWORDS, f"falta keyword 2FA: {kw}"
+
+
+# ── Cloudflare managed challenge: bloqueo anti-bot desde datacenter (B-2) ──────
+
+
+class FakeChallengePage:
+    """Page mínima para _await_jwt: url + content() (sin frames: el nudge se
+    monkeypatchea)."""
+
+    def __init__(self, url: str, content: str):
+        self.url = url
+        self._content = content
+
+    async def content(self) -> str:
+        return self._content
+
+
+def test_is_cloudflare_challenge_detecta_marcadores() -> None:
+    """Reconoce el HTML/URL del managed challenge por marcadores estructurales
+    PII-safe; la página benigna del login no matchea."""
+    f = BCIScraperSource._is_cloudflare_challenge
+    # HTML del worker real: _cf_chl_opt (cType:'managed'), challenge-platform,
+    # y el copy en español.
+    challenge_html = (
+        "<html><head><script>window._cf_chl_opt={cType:'managed',"
+        "cZone:'www.bci.cl'};</script>"
+        "<script src='/cdn-cgi/challenge-platform/h/g/orchestrate/chl/v1'></script>"
+        "</head><body>Realice una comprobación adicional para continuar</body></html>"
+    )
+    assert f("https://www.bci.cl/LoginJSFGenerico", challenge_html) is True
+    # marcador por URL (iframe del widget Turnstile)
+    assert f("https://challenges.cloudflare.com/turnstile/v0/api.js", "<html></html>") is True
+    # login benigno → False
+    assert f(LOGIN_URL, "<html><body>ingresa tu rut y clave</body></html>") is False
+    assert f("", "") is False
+
+
+def test_cloudflare_message_clasifica_antibot() -> None:
+    """El mensaje del raise cae en SyncFailureKind.ANTIBOT (no UNKNOWN): así el
+    panel de operador y el usuario ven 'bloqueo anti-bot', no un error genérico."""
+    assert (
+        classify_sync_failure(RecoverableIngestionError(CLOUDFLARE_BLOCK_MESSAGE))
+        is SyncFailureKind.ANTIBOT
+    )
+
+
+async def test_post_submit_flow_challenge_cloudflare_es_antibot(captured) -> None:
+    """El bug del repliegue: la página de challenge NO trae LOGIN_URL_MARKER, así
+    que _still_on_login la tomaría por éxito. La detección de Cloudflare corre
+    ANTES y la reporta como bloqueo anti-bot — no jwt_timeout ni clave mala."""
+    page = FakeAuthPage(
+        url="https://www.bci.cl/LoginJSFGenerico",  # SIN 'corporativo/banco-en-linea'
+        page_content="<html><script>window._cf_chl_opt={cType:'managed'}</script></html>",
+    )
+
+    with pytest.raises(RecoverableIngestionError) as exc_info:
+        await _scraper(grace=10.0)._post_submit_flow(page, [], lambda s: None)
+
+    assert not isinstance(exc_info.value, AuthenticationError)
+    assert str(exc_info.value) == CLOUDFLARE_BLOCK_MESSAGE
+    assert classify_sync_failure(exc_info.value) is SyncFailureKind.ANTIBOT
+    assert ("cloudflare_challenge", True) in captured
+    assert page.body_calls == 0  # cortó antes de _still_on_login / innerText / 2FA
+
+
+async def test_await_jwt_challenge_cloudflare_es_antibot(
+    no_sleep, captured, monkeypatch
+) -> None:
+    """Backstop en _await_jwt: si el JWT no llega porque la página es un challenge
+    de Cloudflare, levanta ANTIBOT legible — no el jwt_timeout genérico ni el
+    diagnóstico de 30s (que correría sin proveer la causa real)."""
+    page = FakeChallengePage(
+        url="https://www.bci.cl/LoginJSFGenerico",
+        content="<html><div>/cdn-cgi/challenge-platform/ chl</div></html>",
+    )
+    diag: list[Any] = []
+
+    async def fake_nudge(self: Any, p: Any) -> None:
+        return None
+
+    async def fake_diag(self: Any, p: Any, census: Any) -> None:
+        diag.append(census)
+
+    monkeypatch.setattr(BCIScraperSource, "_navigate_to_accounts_menu", fake_nudge)
+    monkeypatch.setattr(BCIScraperSource, "_emit_jwt_timeout_diagnostics", fake_diag)
+
+    with pytest.raises(RecoverableIngestionError) as exc_info:
+        await _scraper(jwt_wait=0.04)._await_jwt(page, [], {})
+
+    assert str(exc_info.value) == CLOUDFLARE_BLOCK_MESSAGE
+    assert classify_sync_failure(exc_info.value) is SyncFailureKind.ANTIBOT
+    assert ("cloudflare_challenge", True) in captured
+    assert diag == []  # NO se emitió el diagnóstico genérico de jwt_timeout
+
+
+async def test_await_jwt_sin_challenge_sigue_siendo_jwt_timeout(
+    no_sleep, captured, monkeypatch
+) -> None:
+    """Sin marcadores de Cloudflare, el timeout del JWT mantiene su camino: emite
+    el diagnóstico genérico y levanta el error de jwt_timeout (no anti-bot)."""
+    page = FakeChallengePage(
+        url=PERSONAS_URL, content="<html><body>dashboard</body></html>"
+    )
+    diag: list[Any] = []
+
+    async def fake_nudge(self: Any, p: Any) -> None:
+        return None
+
+    async def fake_diag(self: Any, p: Any, census: Any) -> None:
+        diag.append(census)
+
+    monkeypatch.setattr(BCIScraperSource, "_navigate_to_accounts_menu", fake_nudge)
+    monkeypatch.setattr(BCIScraperSource, "_emit_jwt_timeout_diagnostics", fake_diag)
+
+    with pytest.raises(RecoverableIngestionError) as exc_info:
+        await _scraper(jwt_wait=0.04)._await_jwt(page, [], {"sig": {"host": "x"}})
+
+    assert str(exc_info.value) != CLOUDFLARE_BLOCK_MESSAGE
+    assert "No se capturó el JWT" in str(exc_info.value)
+    assert diag == [{"sig": {"host": "x"}}]  # sí corrió el diagnóstico genérico
+
+
+def test_bci_status_pending_replegado() -> None:
+    """Repliegue B-2 (2026-06-24): BCI vuelve a 'pending' (Cloudflare bloquea la
+    IP de datacenter de Railway). bchile sigue siendo el único 'active'."""
+    from sky.ingestion.sources import SUPPORTED_BANKS
+
+    by_id = {b["id"]: b for b in SUPPORTED_BANKS}
+    assert by_id["bci"]["status"] == "pending"
+    assert by_id["bchile"]["status"] == "active"
 
 
 # ── Normalización a CanonicalMovement ────────────────────────────────────────

@@ -328,7 +328,9 @@ FAILURE_ACTIONS: dict[SyncFailureKind, str] = {
 }
 
 _ANTIBOT_RE = re.compile(
-    r"no se encontr[oó] el campo|campo de rut|campo de clave|incapsula|challenge", re.I
+    r"no se encontr[oó] el campo|campo de rut|campo de clave|incapsula|challenge"
+    r"|cloudflare|desaf[ií]o|anti-?bot",
+    re.I,
 )
 _CREDS_RE = re.compile(
     r"rut\s+inv[aá]lid|rut\s+invalido|clave\s+incorrecta|credential|password|clave\s+rechazad",
