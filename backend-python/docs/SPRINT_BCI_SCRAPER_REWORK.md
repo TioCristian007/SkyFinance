@@ -195,3 +195,106 @@ Estructura esperada (a confirmar con el discovery):
 2. **Fase 0 discovery** (captura real) → yo analizo.
 3. **Prompt de build dirigido para Fable** (escrito con la evidencia de la captura, no antes).
 4. Verificación en prod (sync real BCI) → activar `bci` → **dos bancos a la vez**.
+
+---
+
+## FASE 0 (bis) — Diagnóstico del bloqueo en prod: 2×2 (IP × headless) — 2026-06-24
+
+**Problema de método.** El único experimento que tenemos (local OK / prod falla)
+**confunde dos variables** a la vez: la corrida local fue **headful + IP
+residencial**; la de prod es **headless + IP de datacenter**. No se puede concluir
+"es la IP" ni "es headless" desde ahí. Antes de invertir en una solución (Xvfb
+cuesta cero; un proxy residencial cuesta plata + latencia) hay que **aislar** qué
+señal dispara el *managed challenge* de Cloudflare. **No asumir datacenter/IP.**
+
+**Dato que NO aísla la variable:** BChile corre estable desde el mismo worker / la
+misma IP de datacenter — pero BChile usa **Auth0**, no Cloudflare. Que BChile pase
+no prueba que la IP de datacenter pase el Turnstile de BCI. El 2×2 sigue siendo
+necesario.
+
+**Matriz (✓ pasa · ✗ challenge · ? por medir):**
+
+| | IP residencial (local) | IP datacenter (Railway) |
+|---|---|---|
+| **Headful** | ✓ A — validado (tests #1–#6) | ? C — requiere Xvfb (pendiente deploy) |
+| **Headless** | ✗ **B — challenge (2026-06-24)** | ✗ D — el fallo real en prod |
+
+> **RESULTADO (2026-06-24): el gatillo es HEADLESS, no la IP.** B (local · headless ·
+> IP residencial) recibió el challenge en el `post_submit` (`bci_cloudflare_challenge`
+> + `CLOUDFLARE_BLOCK_MESSAGE`); A (misma IP residencial, headful) pasa. Cambiar solo
+> el render flipa pasar→challenge ⇒ **headless es suficiente** para dispararlo. Falta
+> C para saber si la IP de datacenter es un **2º** factor además de headless.
+
+**Por qué B (local + headless) es la pieza clave.** B vs D difieren **solo en la
+IP** (ambos headless); B vs A difieren **solo en el render**. Una sola corrida de B
+resuelve los dos ejes:
+- **B da challenge** → cambiar datacenter→residencial NO lo arregló (headless solo
+  ya lo dispara) ⇒ **el gatillo es headless** ⇒ Fase 1 = **Xvfb + headful en display
+  virtual** (sin costo de proxy).
+- **B pasa limpio** (llega a 2FA / lista cuentas) → headless en residencial está
+  bien; lo único distinto contra D es la IP ⇒ **el gatillo es la IP/ASN** ⇒ Fase 1 =
+  **proxy residencial (Chile)** por `BrowserContext`, solo para BCI.
+
+Costo de B: **cero** (sin deploy, sin infra). El scraper ya está instrumentado: el
+detector `_is_cloudflare_challenge_page` levanta `CLOUDFLARE_BLOCK_MESSAGE`
+(→ `SyncFailureKind.ANTIBOT`) y, con `SCRAPER_DEBUG_CAPTURE=true`, escupe el censo de
+red + HTML PII-safe.
+
+**Comando (PowerShell, cuenta BCI real — dependencia humana):**
+```powershell
+cd backend-python; .venv\Scripts\activate
+$env:SCRAPER_DEBUG_CAPTURE = "true"
+python scripts/test_bci_scraper.py <RUT> '<CLAVE>' --headless
+```
+(Clave entre comillas **simples**: en PowerShell las dobles expanden el `$`.)
+**Veredicto en consola:** si aparece `bci_cloudflare_challenge` / "Bloqueo anti-bot…
+desafío Cloudflare" → gatillo headless. Si avanza a 2FA / lista cuentas → gatillo IP.
+
+**Seguridad (lockout):** el challenge ocurre en el **edge de Cloudflare**, antes de
+que el JSF de BCI procese credenciales → un bloqueo CF **probablemente no consume**
+intento de login. Aun así: pocas corridas controladas, coordinadas con el usuario.
+
+**C (Railway + headful vía Xvfb)** queda como **confirmación**, construida
+**después** de B (no antes): si B apunta a IP, C confirma que headful-datacenter pasa
+antes de invertir en proxy; si B apunta a headless, Xvfb ES el fix y C lo valida.
+
+**Resultados:**
+
+| Celda | Fecha | Resultado | Señal observada |
+|---|---|---|---|
+| B (local · headless) | 2026-06-24 | ✗ **challenge** | `bci_cloudflare_challenge where=post_submit` → `CLOUDFLARE_BLOCK_MESSAGE` (captura `bci_cloudflare_challenge_*.html`). Misma IP residencial que A (✓) ⇒ **el gatillo es headless**. |
+| C (Railway · headful/Xvfb) | — | **pendiente deploy** | confirma si headful-en-Xvfb pasa el challenge DESDE la IP de datacenter (¿la IP es un 2º factor?). |
+
+### ✅ Fase 1 — fix dirigido CONSTRUIDO (2026-06-24): Xvfb + worker headful
+
+Rama elegida por el diagnóstico (headless, **sin** costo de proxy). Cambio acotado a
+**`docker/worker.Dockerfile`** (no toca el pipeline del scraper — login/JWT/CORS/
+headers/normalización quedan intactos):
+- `apt-get install xvfb` — display virtual en el worker.
+- `ENV BROWSER_HEADLESS=false` — el pool (`get_browser_pool` → `settings.browser_headless`,
+  `worker/main.py:39`) lanza **Chrome real con ventana**, idéntico a la config de A
+  (validada en local). Palanca §14: Railway puede override por env.
+- `ENV DISPLAY=:99` + `CMD: Xvfb :99 -screen 0 1920x1080x24 & exec arq …` — Xvfb de
+  fondo, `exec arq` para que arq reciba el SIGTERM de Railway directo (shutdown limpio).
+- `COPY scripts/ ./scripts/` — habilita Cell C dentro del contenedor.
+
+⚠️ **Afecta también a BChile** (browser pool compartido): pasa de headless→headful.
+Headful es más robusto contra anti-bot, pero es un cambio a un camino que hoy corre
+estable en prod → **verificar que BChile siga sincronizando** tras el deploy.
+
+**Cell C (validación en prod, dependencia humana — `bci` sigue `pending`):**
+```
+# tras git push + rebuild del servicio sky-worker-python en Railway:
+railway ssh --service sky-worker-python
+#   dentro del contenedor (DISPLAY=:99 ya seteado, Xvfb ya corriendo):
+python scripts/test_bci_scraper.py <RUT> '<CLAVE>'   # headful (sin --headless)
+```
+- **Lista cuentas/movimientos** → headful-en-Xvfb derrota el challenge desde
+  datacenter ⇒ headless era el ÚNICO gatillo ⇒ **Fase 3** (activar `bci`).
+- **Sigue dando challenge** → la IP de datacenter es un **2º factor** ⇒ Fase 1b =
+  **proxy residencial (Chile)** por `new_context(proxy=...)` solo para BCI (creds
+  backend-only §15; la pieza de infra la provee el usuario).
+
+**Fase 2:** sync real end-to-end en prod (vigilar 2FA Digital Pass; pocas corridas
+controladas). **Fase 3:** `bci` pending→active en `SUPPORTED_BANKS` + verificación +
+docs (`08_ESTADO_Y_DEUDA` B-2 + `CLAUDE.md`).
