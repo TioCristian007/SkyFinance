@@ -44,7 +44,13 @@ COPY scripts/ ./scripts/
 ENV BROWSER_HEADLESS=false
 ENV DISPLAY=:99
 
-# Arranca Xvfb en :99 y exec arq (arq reemplaza al shell → recibe el SIGTERM de
-# Railway directo, shutdown limpio; Xvfb queda de fondo y muere con el
-# contenedor). Pantalla holgada (1920x1080x24) para no clipear la ventana.
-CMD ["sh", "-c", "Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp & exec arq sky.worker.main.WorkerSettings"]
+# Arranca Xvfb en :99, ESPERA a que el display esté listo y recién entonces
+# exec arq. La espera es crítica: el browser pool arranca EAGER en on_startup
+# (worker/main.py → pool.start()); si Chrome lanza antes de que Xvfb cree el
+# socket de :99, falla — y en browser_pool.start() el fallback a Chromium
+# bundled NO está protegido → propaga → el worker crashea en cold boot (posible
+# restart-loop). El loop espera hasta ~5s el socket /tmp/.X11-unix/X99 antes de
+# seguir. `exec arq` reemplaza al shell → arq recibe el SIGTERM de Railway
+# directo (shutdown limpio); Xvfb queda de fondo y muere con el contenedor.
+# Pantalla holgada (1920x1080x24) para no clipear la ventana.
+CMD ["sh", "-c", "Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp & for i in $(seq 1 50); do [ -e /tmp/.X11-unix/X99 ] && break; sleep 0.1; done; exec arq sky.worker.main.WorkerSettings"]
