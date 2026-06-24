@@ -47,12 +47,12 @@ source_metadata  :: dict (debug libre — el dominio NO lo lee)
 
 ## Bancos soportados (`SUPPORTED_BANKS`)
 
-Definido en `backend-python/src/sky/ingestion/sources/__init__.py`. Estado a mayo 2026 (tras limpieza del listado):
+Definido en `backend-python/src/sky/ingestion/sources/__init__.py`. Estado a junio 2026 (tras limpieza del listado):
 
 | Identifier | Banco | Capa · Auth | Estado | Notas |
 |---|---|---|---|---|
-| `bchile` | Banco de Chile | SCRAPER · PASSWORD | **active** | Validado funcionando desde IP residencial. Bloqueado por anti-bot (Incapsula) desde datacenter Railway. 2FA app. |
-| `bci` | BCI | SCRAPER · PASSWORD | **pending** | Rework construido (2026-06-13, `bci_scraper.py`): portal nuevo `www.bci.cl` + endpoints BFF v3.2 + body capture-and-replay. Gated verde; pendiente verificación en prod antes de activar. 2FA (Digital Pass). |
+| `bchile` | Banco de Chile | SCRAPER · PASSWORD | **active** | ✅ Validado end-to-end **en producción** (2026-06-12): sync real desde Railway, 42 movs, `channel=chrome`. El blocker histórico **no** era anti-bot desde datacenter (B-1 cerrado/obsoleto): era el `$` de la clave mal tecleado por `type()` en Chromium bundled headless (fix: `fill()` + Chrome real en el worker). 2FA app. |
+| `bci` | BCI | SCRAPER · PASSWORD | **pending** | `bci_scraper.py` reconstruido para el portal nuevo `www.bci.cl` + endpoints BFF v3.2 + body capture-and-replay, validado en local (tests verdes). Se activó (2026-06-14) y el primer sync real en prod falló (managed challenge de Cloudflare en el login) → repliegue a `pending` (2026-06-24). Causa raíz **en diagnóstico** (sprint propio). 2FA (Digital Pass). |
 | `falabella` | Banco Falabella | SCRAPER · PASSWORD | (removido del listado) | Skeleton, no operativo. |
 | `mercadopago`, `fintoc`, `santander.direct`, `bci.direct`, `sfa.<bank>`, `manual` | varios | AGGREGATOR/DIRECT/SFA/MANUAL | 🔴 Futuro | No implementados. |
 
@@ -61,7 +61,7 @@ Definido en `backend-python/src/sky/ingestion/sources/__init__.py`. Estado a may
 ## Scrapers — cómo funcionan
 
 - **BChile** (`bchile_scraper.py`): login en el portal → detecta 2FA (app BancoChile) → usa las **APIs REST internas** de BChile vía `page.evaluate()` con el token XSRF de las cookies. Más estable que scrapear HTML. Extrae balance + cartola (cuenta) + movimientos de tarjeta. Soporta sync incremental (`since`).
-- **BCI** (`bci_scraper.py`): login en el widget de `www.bci.cl` (`#rut_aux` con `type()` + `#clave` con `fill()`, verificación post-fill incl. los hidden `#rut`/`#dig`) → intercepta el JWT Bearer del tráfico a `apilocal.bci.cl` → API interna BFF v3.2 (`cuentas-busquedas/por-rut`, `por-numero-cuenta`, `cuentas-movimientos/por-numero-cuenta`) con body capture-and-replay. **Rework construido 2026-06-13** (B-2); pendiente verificación en prod antes de activar.
+- **BCI** (`bci_scraper.py`): login en el widget de `www.bci.cl` (`#rut_aux` con `type()` + `#clave` con `fill()`, verificación post-fill incl. los hidden `#rut`/`#dig`) → intercepta el JWT Bearer del tráfico a `apilocal.bci.cl` → API interna BFF v3.2 (`cuentas-busquedas/por-rut`, `por-numero-cuenta`, `cuentas-movimientos/por-numero-cuenta`) con body capture-and-replay. **Construido y validado en local** (B-2); se activó el 2026-06-14 y se replegó a `pending` el 2026-06-24 tras fallar el primer sync real en prod (managed challenge de Cloudflare en el login). Causa raíz en diagnóstico (sprint propio).
 
 ## Open Banking — SFA (la dirección estratégica)
 

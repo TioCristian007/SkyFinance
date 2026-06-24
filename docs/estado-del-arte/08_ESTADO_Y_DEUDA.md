@@ -5,7 +5,7 @@
 > La sección más importante para operar honestamente. Doctrina §22: "la deuda se documenta, no se oculta".
 > Referencia de deuda formal: `backend-python/docs/REMEDIATION_P0_P3.md`.
 
-**Última actualización**: 2026-06-12
+**Última actualización**: 2026-06-24
 
 ---
 
@@ -191,10 +191,21 @@ PATCH solo actualizaba la tx y `upsert_merchant_category` sobrescribía ciego
 
 **Verificación en prod (2026-06-12)**: sync real desde Railway — login OK, 42 movimientos, balance correcto, `channel="chrome"`, categorización OK.
 
-### B-2 · Scraper BCI — rework construido (2026-06-13), pendiente verificación en prod
-El portal migró del muerto `portalpersonas.bci.cl` (NXDOMAIN) al widget embebido en `www.bci.cl/corporativo/banco-en-linea/personas`; la API interna (`apilocal.bci.cl`, BFF v3.2) NO cambió de base, sí los endpoints. **Rework construido y gated** (commit `69a03e3`, `bci_scraper.py`) con el discovery (Fase 0) y las lecciones BChile: login `#rut_aux` (`type()`) + `#clave` (`fill()`) + verificación post-fill (incl. hidden `#rut`/`#dig` que el JS del form puebla), `_post_submit_flow` (ambigüedad jamás = clave mala), endpoints `cuentas-busquedas/por-rut` · `por-numero-cuenta` · `cuentas-movimientos/por-numero-cuenta` con JWT Bearer interceptado, y **body capture-and-replay** para las formas que el discovery no fijó. 32 tests nuevos.
+### B-2 · Scraper BCI — construido y validado en local; el sync real en prod falla → `pending`
 
-**Sigue abierto** hasta el discovery de runtime: un test manual con la cuenta BCI real (founder/cofundador) que confirme el redirect post-submit exacto, las keywords 2FA del portal nuevo y los bodies reales de `por-rut`/movimientos (capturados PII-safe al navegar a "Saldos y movimientos"), y luego un sync real end-to-end en prod. `bci` queda en `pending` hasta entonces. Riesgo a vigilar: anti-fraude **DetectCA easysol** desde datacenter (tipo B-1). Plan: `backend-python/docs/SPRINT_BCI_SCRAPER_REWORK.md`.
+El portal migró del muerto `portalpersonas.bci.cl` (NXDOMAIN) al widget embebido en `www.bci.cl/corporativo/banco-en-linea/personas`; la API interna (`apilocal.bci.cl`, BFF v3.2) NO cambió de base, sí los endpoints. `bci_scraper.py` (ex `bci_direct.py`, **R-2 cerrado**) se reconstruyó con el discovery (Fase 0) y las lecciones BChile, y el arco quedó **cerrado y validado en local**:
+
+- **Login**: `#rut_aux` (`type()`) + `#clave` (`fill()`) + verificación post-fill (incl. hidden `#rut`/`#dig` que el JS del form puebla); `_post_submit_flow` (la ambigüedad jamás = clave mala).
+- **JWT**: se intercepta el Bearer (esquema en minúscula, case-insensitive) de cualquier request a `apilocal.bci.cl` que dispara la navegación a Saldos/Movimientos.
+- **API**: `cuentas-busquedas/por-rut` · `por-numero-cuenta` · `cuentas-movimientos/por-numero-cuenta`, fetch in-page con `credentials:"omit"` + replay de los headers del gateway IBM API Connect; bodies confirmados + capture-and-replay de fallback.
+- **Normalización**: `monto` decimal (parte entera) + signo por `tipo` (C/A) + `idMovimiento`→`native_id` (idempotencia).
+
+**Cronología en prod**:
+- **2026-06-14** (`48be9b1`): se activó `bci` (`pending`→`active`).
+- El **primer sync real en prod falló**: el worker recibió un **managed challenge de Cloudflare** (Turnstile) en el login (`/LoginJSFGenerico`); como la página de desafío no trae el marcador de URL del login, la detección de éxito se confundía y terminaba en un `jwt_timeout` opaco.
+- **2026-06-24** (`4a65859`): **repliegue** `active`→`pending` (fuera de conectables) + detector del challenge Cloudflare que reporta el fallo como **anti-bot** (`SyncFailureKind.ANTIBOT`) con mensaje legible y captura debug PII-safe, en vez del timeout de 30s.
+
+**Estado**: `bci` en `pending`; el frontend lo muestra como "Próximamente". El scraper anda en local pero el sync real en prod no completa. **El foco es hacer funcionar el scraper en prod; el diagnóstico de causa raíz queda como sprint propio** (aún no determinada — no asumir una sola causa). Detalle del rework: `backend-python/docs/SPRINT_BCI_SCRAPER_REWORK.md`.
 
 ### ✅ B-3 · Auditoría — bug de runtime corregido (2026-05-25)
 
@@ -302,10 +313,11 @@ Hallazgos del barrido de calidad. No bloquean, pero se documentan para no acumul
 
 ## Prioridades sugeridas (orden)
 
-0. **Deploy Fase 2 categorización que aprende** (Fase 1 ya en prod): preflight `to_regclass('public.merchant_aliases')` + `…merchant_display_names` → NULL → aplicar migración 015 en staging → `audit_rls_policies.py` → prod + re-audit → deploy Railway api+worker → smoke (renombrar comercio de una tx → fila en `merchant_aliases` con `crowdsource_eligible=true` + nombre en TODAS las tx del comercio; renombrar "Transferencia a:…" o `mercadopago*…` → `crowdsource_eligible=false` y nada en `merchant_display_names`).
-1. **Cierre operativo restante**: correr `cleanup_bchile_accounts.sql` (D2) si no se corrió; crear bucket `scraper-debug` + `SCRAPER_DEBUG_BUCKET` en el worker (recomendado para el onboarding — captura el DOM del 2FA real). Verificar migración 013 aplicada antes del deploy del worker si hubiera duda.
+> La categorización que aprende (Fase 1 + Bloque 0 + Fase 2, migraciones 014+015) ya está **verificada en prod** — sale de la lista de pendientes.
+
+1. **B-2 — hacer funcionar el scraper BCI en prod (foco actual).** Anda en local pero el sync real en prod no completa (managed challenge de Cloudflare en el login). El diagnóstico de causa raíz es un sprint propio — la causa **aún no está determinada** (no asumir una sola). Detalle: `backend-python/docs/SPRINT_BCI_SCRAPER_REWORK.md`.
 2. **Onboarding de testers reales** — sync BChile verificado en prod + 2FA endurecido (sprint testers). Cada tester conecta con su clave vigente; si tiene BChile Pass, la espera de aprobación ahora es visible (waiting_2fa).
-3. **Prep del pitch BCI** (objetivo de negocio inmediato — ver `Documentacion_Externa_Reuniones_Bancos/`).
-4. **B-2** — verificación en prod del rework BCI (construido y gated 2026-06-13): test manual con cuenta real → refinar señal post-submit / keywords 2FA / bodies con la captura PII-safe → sync end-to-end → activar `bci`. **Dos bancos a la vez.**
-5. **B-5** performance (profiling primero).
-6. Limpiar `api-v2` + warm standby Fly.io.
+3. **Cierre operativo restante**: correr `cleanup_bchile_accounts.sql` (D2) si no se corrió; crear bucket `scraper-debug` + `SCRAPER_DEBUG_BUCKET` en el worker (captura el DOM del 2FA/challenge real). Verificar migración 013 aplicada antes del deploy del worker si hubiera duda.
+4. **B-5** performance (profiling primero).
+5. Limpiar `api-v2` + warm standby Fly.io.
+6. **Regenerar `docs/DOSSIER_INTEGRAL.md`** — es un snapshot consolidado al 2026-05-25, stale en bloque (precede a todo el trabajo de junio). Regenerar desde las fuentes vivas (este doc + `ESTADO_DEL_ARTE.md` + `03_ECOSISTEMA.md`).

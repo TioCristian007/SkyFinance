@@ -5,7 +5,7 @@
 >
 > **Fuente de verdad doctrinal**: `Estados del Arte/SkyFinanzas_EstadoDelArte_v5_Documentado.pdf` (registrado ante INAPI, Chile). Si algo aquí contradice al v5, gana el v5 — y este documento debe corregirse. Nota: el v5 describía la migración Python como *futuro (Parte II)*; **a mayo 2026 esa migración está completa y en producción**, por lo que este documento es el reflejo actualizado de esa realidad.
 
-**Última actualización**: 2026-06-12 · **Mantenedores**: Cristian Vásquez · Juan José Latorre
+**Última actualización**: 2026-06-24 · **Mantenedores**: Cristian Vásquez · Juan José Latorre
 
 ---
 
@@ -40,16 +40,16 @@ Documentación **modular**. Este índice da el panorama; cada sección profundiz
 **Estado técnico (junio 2026)**:
 - Backend migrado de Node.js a **Python 3.12 (FastAPI + ARQ + Playwright)**. Las 13 fases de migración cerradas; cutover completo. Node archivado.
 - Producción viva: `app.skyfinanzas.com` (frontend React) + `api.skyfinanzas.com` (API Python), sobre Railway + Supabase + Anthropic.
-- ~1.283 transacciones reales procesadas. Categorización con feedback loop de 5 niveles (recategorizar/renombrar enseña) verificada en prod. 650 tests automatizados.
+- ~1.283 transacciones reales procesadas. Categorización con feedback loop de 5 niveles (recategorizar/renombrar enseña) verificada en prod. 713 tests automatizados.
 - **Sync BChile verificado end-to-end EN PRODUCCIÓN (2026-06-12)** — sprint ingesta cerrado: fill()+verificación post-fill, Chrome real en el worker, ciclo `needs_reconnection` anti-bloqueo, taxonomía de fallos + panel de operador. MVP para testers desbloqueado.
 - **Onboarding de testers endurecido (2026-06-12, segunda tanda)**: detección positiva del 2FA "aprueba en tu app" sobre el form Auth0 (la ambigüedad ya no se castiga como clave mala), status `waiting_2fa` visible en la app (wiring de progreso que faltaba), cobertura completa del ciclo `needs_reconnection`, capturas debug PII-safe, panel operador con resumen por status. Node legacy apagado (B-6 cerrado).
-- **Categorización que aprende (2026-06-12/13)**: Fase 1 (recategorizar enseña: voto per-user + consenso crowdsourced con quórum, frontera de privacidad) verificada en prod. Bloque 0 + Fase 2 construidos (pendiente migración 015 + deploy): el renombre de comercios enseña un alias per-user + nombre canónico global por consenso, con la misma frontera de identidad — las etiquetas de pasarela (`mercadopago*`, …) jamás se comparten porque no identifican UN comercio. Detalle en [08](estado-del-arte/08_ESTADO_Y_DEUDA.md).
-- **Scraper BCI reworkeado (2026-06-13)**: el portal BCI migró a `www.bci.cl` (widget embebido) + endpoints BFF v3.2; `bci_scraper.py` (ex `bci_direct.py`, **R-2 cerrado**) reconstruido con las lecciones BChile (fill/type por campo, verificación post-fill, ambigüedad nunca = clave mala) + body capture-and-replay. Gated verde (682 tests); `bci` sigue `pending` hasta sync real en prod. Detalle en [08](estado-del-arte/08_ESTADO_Y_DEUDA.md) B-2.
+- **Categorización que aprende (2026-06-12/13)**: Fase 1 + Bloque 0 + Fase 2 **verificadas en prod** (migraciones 014 + 015 aplicadas 2026-06-13). Recategorizar y renombrar comercios enseña: voto/alias per-user + consenso crowdsourced global con quórum, con frontera de privacidad/identidad — las etiquetas de pasarela (`mercadopago*`, …) jamás se comparten porque no identifican UN comercio. Detalle en [08](estado-del-arte/08_ESTADO_Y_DEUDA.md).
+- **Scraper BCI (`bci`, `pending`)**: `bci_scraper.py` (ex `bci_direct.py`, **R-2 cerrado**) reconstruido para el portal nuevo `www.bci.cl` + endpoints BFF v3.2, con las lecciones BChile (fill/type por campo, verificación post-fill, ambigüedad nunca = clave mala) + body capture-and-replay. Validado en local (login, captura del JWT Bearer, normalización; tests verdes). **Se activó el 2026-06-14 y el primer sync real en prod falló** — el worker recibió un *managed challenge* de Cloudflare en el login — por lo que se replegó a `pending` el 2026-06-24. Diagnóstico de causa raíz **en curso** (sprint propio). Detalle en [08](estado-del-arte/08_ESTADO_Y_DEUDA.md) B-2.
 
 **Lo que funciona**: ingesta canónica (BChile en prod), categorización, Mr. Money, ARIA, metas/desafíos, cifrado AES-256-GCM, RLS, audit log, data export Ley 19.628.
 
 **Lo que NO funciona hoy** (ver [08](estado-del-arte/08_ESTADO_Y_DEUDA.md)):
-- **Scraper BCI**: rework construido y gated (2026-06-13, `bci_scraper.py` — portal nuevo `www.bci.cl` + endpoints BFF v3.2); pendiente verificación en prod (test manual con cuenta real → refinar señal post-submit / 2FA / bodies → sync → activar `bci`). Ver [08](estado-del-arte/08_ESTADO_Y_DEUDA.md) B-2.
+- **Scraper BCI**: construido y validado en local, pero el sync real en prod falla (el worker recibió un *managed challenge* de Cloudflare en el login) — `bci` está en `pending`, fuera de conectables. Causa raíz en diagnóstico (sprint propio). Ver [08](estado-del-arte/08_ESTADO_Y_DEUDA.md) B-2.
 - Lentitud general sin profiling (B-5) · `Sky.jsx` god-component (P1-1).
 
 **Dirección estratégica**: migrar de scraping a **SFA (Open Banking chileno, CMF)** en cuanto los bancos liberen sus APIs. El scraping queda como fallback. La fragilidad del scraping (anti-bot, cambios de portal) es precisamente el argumento para el SFA.

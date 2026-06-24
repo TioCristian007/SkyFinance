@@ -1,10 +1,17 @@
 # SPRINT — Rework scraper BCI (B-2): segundo banco operativo
 
-> **Estado**: PREP / discovery-first (2026-06-13). El portal BCI cambió de dominio
-> (`portalpersonas.bci.cl` ya no resuelve, NXDOMAIN). Objetivo: BChile + **BCI**
-> sincronizando a la vez — SkyFinanzas con dos bancos reales.
-> **Disciplina aprendida de BChile**: NO escribir el fix a ciegas. El portal migró
-> (como BChile→Auth0); primero **capturar el portal real**, después fix dirigido.
+> **ESTADO (2026-06-24)**: el rework cerró **en local** (login → captura JWT → API
+> in-page → normalización; tests verdes). Se **activó `bci` el 2026-06-14** y el
+> **primer sync real en prod falló** — el worker recibió un *managed challenge* de
+> Cloudflare en el login → **repliegue a `pending` el 2026-06-24**. **Foco: hacer
+> funcionar el scraper en prod; causa raíz en diagnóstico (sprint propio — causa
+> aún NO determinada, no asumir datacenter/IP).** Estado canónico al día:
+> `docs/estado-del-arte/08_ESTADO_Y_DEUDA.md` B-2. Lo de abajo es el **log histórico**
+> del rework (discovery + tests #1–#6); se conserva por doctrina §22.
+>
+> ⚠️ El **§0 "Estado actual"** de más abajo quedó congelado en el arranque
+> (2026-06-13, citando `bci_direct.py` pre-R-2) — es histórico, no el estado vigente
+> (hoy: `bci_scraper.py` / `BCIScraperSource`).
 
 ---
 

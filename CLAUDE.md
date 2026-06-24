@@ -97,12 +97,12 @@ sky_OFFICIAL/
 │   │   ├── core/                ← config, db, encryption, locks, logging, errors, metrics, audit
 │   │   ├── ingestion/           ← router + scrapers + rate limit + circuit breaker + rules DB
 │   │   │   ├── routing/         ← router.py, rules.py
-│   │   │   ├── sources/         ← bchile_scraper (validado), bci_scraper (rework construido, pending prod), __init__ (SUPPORTED_BANKS)
+│   │   │   ├── sources/         ← bchile_scraper (validado prod), bci_scraper (validado local · falla en prod · pending), __init__ (SUPPORTED_BANKS)
 │   │   │   └── parsers/         ← bchile_parser
 │   │   ├── api/                 ← FastAPI: main + jwt_auth + routers/* + schemas/* (implementados)
 │   │   ├── worker/              ← ARQ: main + jobs/* + banking_sync (implementados)
 │   │   └── domain/              ← Mr. Money, ARIA, finance, categorizer (implementados)
-│   ├── tests/                   ← 598 tests (unit verde + integration + parity)
+│   ├── tests/                   ← 713 tests (unit verde + integration + parity)
 │   ├── scripts/                 ← smoke_router, test_*_scraper, verify_encryption_compat, rekey_*, audit_rls_policies
 │   ├── migrations/              ← SQL versionadas
 │   ├── docs/                    ← referencia operativa durable + archive/ (histórico de las 13 fases)
@@ -136,11 +136,11 @@ Vive en `backend-python/src/sky/ingestion/contracts.py`. Modificarlo requiere RF
 | Identifier | Capa · Auth | Estado |
 |---|---|---|
 | `bchile` | SCRAPER · PASSWORD | **active** — ✅ validado **en producción** (2026-06-12: sync real desde Railway, 42 movs, channel=chrome). 2FA app. RUT se llena con `type()` (directiva Angular), clave con `fill()` — NO cambiar (tests lo pinean). |
-| `bci` | SCRAPER · PASSWORD | **pending** — rework + tests #1-#4 (2026-06-13, `bci_scraper.py`): portal `www.bci.cl` (widget) + app JSF + BFF v3.2. **Login OK** end-to-end + **JWT capturado** (test #3: el esquema es `bearer` minúscula, match case-insensitive; lo dispara la navegación a Saldos/Movimientos, no la home; el token va en el header, no en storage). Bodies reales: `por-rut {"rut":"<rut>-<dv>"}`, saldo `{"cuentaNumero":"<n>"}`, movs `{"numeroCuenta":"<n>"}` (keys distintas, sin `tipo`). RUT `type()` en `#rut_aux`, clave `fill()` en `#clave`. 2FA Digital Pass. **Test #4 — la API falla por CORS** (`Failed to fetch`): `_api_post` usaba `credentials:"include"` (modo CORS-con-credenciales) pero apilocal autentica por Bearer, no cookies → fix: `credentials:"omit"` + `bearer` minúscula (espeja el frontend) + instrumentación `bci_request_headers` (gated, PII-safe). Pendiente: **test #5** (debería listar cuentas+movs+saldo end-to-end) → sync real prod (vigilar DetectCA easysol, tipo B-1) → activar `bci`. |
+| `bci` | SCRAPER · PASSWORD | **pending** — `bci_scraper.py` reconstruido (portal `www.bci.cl` widget + app JSF + BFF v3.2): login (`#rut_aux` `type()` / `#clave` `fill()` + verificación post-fill), captura del JWT Bearer (`bearer` minúscula, case-insensitive; lo dispara la navegación a Saldos/Movimientos), API in-page (`credentials:"omit"` + headers del gateway IBM) con bodies `por-rut {"rut":"<rut>-<dv>"}` · saldo `{"cuentaNumero":"<n>"}` · movs `{"numeroCuenta":"<n>"}`, normalización monto decimal + signo C/A. **Validado en local; activado 2026-06-14 (`48be9b1`) y replegado a `pending` 2026-06-24 (`4a65859`)** tras fallar el primer sync real en prod (managed challenge de Cloudflare en el login). 2FA Digital Pass. Causa raíz **en diagnóstico** (sprint propio — no asumir una sola causa). |
 | `falabella` | SCRAPER · PASSWORD | removido del listado (skeleton, no operativo) |
 | `mercadopago`, `fintoc`, `*.direct`, `sfa.*`, `manual` | varios | 🔴 Futuro |
 
-> El frontend solo expone como conectables BChile y BCI; los `pending` aparecen como "Próximamente".
+> El frontend lista BChile y BCI, pero solo los `active` son conectables: hoy **BChile** (active) se conecta; **BCI** (`pending`) aparece como "Próximamente".
 
 ### `CanonicalMovement`
 `external_id` (SHA-256 determinístico) · `amount_clp` (int CLP; **positivo = ingreso, negativo = gasto**) · `raw_description` · `occurred_at` (date) · `movement_source` (CUENTA / TARJETA / LÍNEA) · `source_kind` · `source_metadata` (libre, debug — el dominio NO lo lee).
@@ -204,7 +204,7 @@ Fuente: **`docs/estado-del-arte/08_ESTADO_Y_DEUDA.md`** + `backend-python/docs/R
 | ID | Item | Nota |
 |---|---|---|
 | ✅ **B-1** | ~~Scraping bloqueado desde datacenter (anti-bot Incapsula)~~ — **obsoleto, cerrado 2026-06-12** | Con la migración a Auth0 el bloqueo de datacenter dejó de aplicar: el scraper llena y envía el form desde Railway sin challenge. Confirmado con sync real en prod. La fragilidad del scraping sigue reforzando la tesis SFA. |
-| **B-2** | Scraper BCI — login OK, JWT arreglado (test #3), falta sync real | Portal `www.bci.cl` (widget) + app JSF + BFF v3.2; `bci_scraper.py` reconstruido y gated. **R-2 cerrado** (`BCIScraperSource`, `scraper.bci` intacto). **Login OK end-to-end** + bodies confirmados (test #1). **Test #3 (2026-06-13): ROOT CAUSE del JWT encontrado y arreglado** — la instrumentación (censo de red) mostró que `apilocal.bci.cl` se llama con `auth_scheme='bearer'` (minúscula) pero `_is_jwt_request` matcheaba `"Bearer "` case-sensitive → el token estaba en cada request y se descartaba. Fix quirúrgico: match case-insensitive (`auth[:7].lower()=="bearer "`). Confirmado además: el JWT lo dispara la **navegación** a Saldos/Movimientos (no la home), y NO vive en storage (sondas `looks_like_jwt:False`) — va en el header. Falta: **test #4** (debería listar cuentas+movs+saldo end-to-end) → **sync real en prod** → activar `bci`. Riesgo: DetectCA easysol (tipo B-1, no apareció en local). |
+| **B-2** | Scraper BCI — anda en local, el sync real en prod falla | `bci_scraper.py` reconstruido y **cerrado en local** (login → JWT `bearer` minúscula → API in-page `credentials:"omit"` + headers del gateway IBM API Connect → normalización monto decimal / tipo C-A). **R-2 cerrado** (`BCIScraperSource`, `scraper.bci` intacto). Activado 2026-06-14 (`48be9b1`); el **primer sync real en prod recibió un managed challenge de Cloudflare** en el login → repliegue a `pending` 2026-06-24 (`4a65859`) + detector del challenge que clasifica el fallo como **ANTIBOT** legible (en vez del `jwt_timeout` opaco). **Foco: hacer funcionar el scraper en prod**; causa raíz **aún no determinada** — diagnóstico como sprint propio (no asumir una sola causa). Plan: `backend-python/docs/SPRINT_BCI_SCRAPER_REWORK.md`. |
 | ✅ **B-3** | ~~Audit log roto en runtime~~ — **cerrado 2026-05-25** | `:detail::jsonb` rompía asyncpg con named params → 0 filas escritas. Corregido: `CAST(:detail AS jsonb)`. Test de regresión en `test_audit.py`. Pendiente: verificar runtime con Postgres staging (10 min). + vocabulario de event_type/outcome en `audit.py` reconciliado con la DB (cerrado 2026-05-27). |
 | ✅ **B-4** | ~~Balance post-disconnect~~ — **cerrado 2026-05-27** | cerrado 2026-05-27: summary filtra deleted_at + balance nunca cae a net_flow; KPI muestra '—' sin banco. |
 | **B-5** | Lentitud general | Sin profiling. **Medir antes de optimizar.** |
@@ -232,7 +232,7 @@ Clave rechazada de verdad por el banco → status **`needs_reconnection`** (migr
 - Capturas debug `pii_safe` (post-submit): solo HTML scrubeado, sin screenshot (doctrina §20).
 
 ### Prioridades sugeridas
-1. **B-2 — verificar el rework BCI en prod** (construido y gated 2026-06-13): test manual con cuenta real → refinar señal post-submit / keywords 2FA / bodies con la captura PII-safe → sync end-to-end → activar `bci` para tener **dos bancos operativos a la vez** (BChile + BCI). · 2. **Onboarding testers** (sync BChile verificado en prod + 2FA endurecido; bucket `scraper-debug` + `SCRAPER_DEBUG_CAPTURE=true` ya activos en el worker — **apagar post-onboarding**). · 3. **Prep pitch BCI**. · 4. **B-5** performance (medir antes de optimizar). · 5. Fase 3 categorización (identidad canónica, sprint propio). · (Cierre operativo de hoy: categorización 014/015 en prod ✅, `appealing-benevolence` apagado ✅, D2 no-op ✅.)
+1. **B-2 — hacer funcionar el scraper BCI en prod** (foco actual): anda en local pero el sync real en prod no completa (managed challenge de Cloudflare en el login). Diagnóstico de causa raíz como sprint propio — causa **aún no determinada**. · 2. **Onboarding testers** (sync BChile verificado en prod + 2FA endurecido; bucket `scraper-debug` + `SCRAPER_DEBUG_CAPTURE=true` ya activos en el worker — **apagar post-onboarding**). · 3. **B-5** performance (medir antes de optimizar). · 4. Fase 3 categorización (identidad canónica, sprint propio). · 5. Regenerar `docs/DOSSIER_INTEGRAL.md` (snapshot 2026-05-25, stale en bloque). · (Categorización 014/015 verificada en prod ✅, `appealing-benevolence` apagado ✅.)
 
 ---
 
@@ -298,7 +298,7 @@ No hay "cierre de fase" (las 13 fases ya cerraron; sus planes viven en `backend-
 
 1. `ruff check src/sky/ tests/`
 2. `mypy src/sky/`
-3. `pytest tests/ -v` (598 tests; cobertura en el módulo tocado)
+3. `pytest tests/ -v` (713 tests; cobertura en el módulo tocado)
 4. Smoke contra Redis local si tocas ingestión/routing.
 5. `uvicorn` arranca + `/api/health` responde 200 si tocas la API.
 6. Si hay migración SQL: `audit_rls_policies.py` verde + aplicar en staging antes que prod.
@@ -376,6 +376,8 @@ No confundir con las 13 fases técnicas (ya cerradas).
 ---
 
 ## 📅 Última actualización
+
+`2026-06-24` · **Repliegue BCI a `pending` + sincronización de la documentación con la realidad.** (1) **BCI (B-2)**: el arco del rework cerró en local (tests #4 CORS `credentials:"omit"` → #5 headers del gateway IBM API Connect → #6 pseudo-headers HTTP/2 + normalización monto decimal / signo C-A). Se **activó `bci` el 2026-06-14** (`48be9b1`) y el **primer sync real en prod falló**: el worker recibió un **managed challenge de Cloudflare** (Turnstile) en el login (`/LoginJSFGenerico`). **Repliegue `active`→`pending` el 2026-06-24** (`4a65859`) + detector del challenge que reporta el fallo como **`SyncFailureKind.ANTIBOT`** legible (en vez del `jwt_timeout` opaco de 30s) + captura debug PII-safe. **Foco: hacer funcionar el scraper en prod; la causa raíz NO está determinada — diagnóstico como sprint propio (no asumir datacenter/IP).** Gates: ruff ✅ · mypy ✅ · pytest ✅ **713 passed, 1 skipped**. (2) **Doc resync**: `docs/ESTADO_DEL_ARTE.md`, `03_ECOSISTEMA.md`, `08_ESTADO_Y_DEUDA.md` y este `CLAUDE.md` al día (categorización 014/015 verificada en prod = fuera de pendientes; BCI al estado fáctico). **Corregido el mito del 'datacenter block' de BChile** en `03_ECOSISTEMA.md`: el blocker de BChile NO era anti-bot desde datacenter (B-1 obsoleto), era el `$` de la clave mal tecleado por `type()`; BChile corre **estable en prod** desde Railway. **Pendiente**: regenerar `docs/DOSSIER_INTEGRAL.md` (snapshot 2026-05-25, stale en bloque).
 
 `2026-06-13 (noche, 3)` · **BCI (B-2) — test #3: ROOT CAUSE del JWT encontrado y arreglado (`bearer` minúscula).** La instrumentación del test #2 pagó al primer intento. El **censo de red** (`bci_network_census`) mostró la línea de oro: `apilocal.bci.cl` se llama (GET + POST) con `has_auth=True` y **`auth_scheme='bearer'` en MINÚSCULA**, pero `_is_jwt_request` matcheaba `auth.startswith("Bearer ")` (B mayúscula) → `"bearer eyJ…".startswith("Bearer ")` = `False`: **el token estaba en CADA request a apilocal y lo dejábamos pasar por un check case-sensitive** (el frontend manda el esquema en minúscula). Las otras sondas cerraron las alternativas: storage todo `looks_like_jwt:False` (el token NO vive en local/sessionStorage — va en el header); `bci_body_captured` confirmó en vivo `por-rut {"rut":...}` y movs `{"numeroCuenta":...}`; `bci_frames` reveló que la app autenticada es un portal **JSF** (`www.bci.cl/cl/bci/aplicaciones/contenido.jsf` + `cartolaCuenta.jsf`), no `www.bci.cl/personas`. **Fix (Opus 4.8 — Fable caído a nivel mundial; solo `bci_scraper.py` + 1 test; quirúrgico; `bci` sigue `pending`)**: `_is_jwt_request` ahora case-insensitive (`auth[:7].lower()=="bearer "`, token con `.strip() or None`); comentarios del módulo (ESTRATEGIA/FLUJO + inline en `fetch`) corregidos (el JWT lo dispara la navegación a Saldos/Movimientos, no la home; esquema minúscula). Test `test_jwt_capture_case_insensitive_bearer`. Gates: ruff ✅ · mypy ✅ · pytest ✅ **696 passed, 1 skipped** (`test_bci_source.py` 45→46). **Próximo (usuario): test #4** local (mismo comando) → con el `bearer` capturado debería listar cuentas + movimientos + saldo end-to-end → sync real en prod (vigilar DetectCA easysol, tipo B-1) → activar `bci` → **dos bancos a la vez**. Plan: `backend-python/docs/SPRINT_BCI_SCRAPER_REWORK.md` (sección "Test #3 — ROOT CAUSE").
 
